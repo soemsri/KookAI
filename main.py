@@ -146,8 +146,13 @@ def save_authorized_devices():
 # Helper to verify device authorization
 def verify_authorization(request: Request):
     auth_header = request.headers.get("Authorization")
+    token = None
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ")[1]
+    else:
+        token = request.query_params.get("token")
+        
+    if token:
         for dev_uuid, dev_info in authorized_devices.items():
             if dev_info.get("token") == token:
                 return True
@@ -952,11 +957,21 @@ async def get_conversation_details(cid: str, request: Request):
                 project = c.get("project")
                 break
 
+    auth_header = request.headers.get("Authorization")
+    token = None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+    else:
+        token = request.query_params.get("token")
+
     processed_messages = []
     for m in messages:
         content = m["content"]
         if "file://" in content:
-            content = content.replace("file:///", "/api/media?path=/")
+            if token:
+                content = content.replace("file:///", f"/api/media?token={token}&path=/")
+            else:
+                content = content.replace("file:///", "/api/media?path=/")
         processed_messages.append({
             "role": m["role"],
             "content": content
@@ -966,9 +981,10 @@ async def get_conversation_details(cid: str, request: Request):
     actual_cid = convo_id_mapping.get(cid, cid)
     pending_list = pending_media.get(actual_cid, [])
     for p in pending_list:
+        token_part = f"token={token}&" if token else ""
         processed_messages.append({
             "role": "user",
-            "content": f"![Attached Image](/api/media?path={urllib.parse.quote(p)})"
+            "content": f"![Attached Image](/api/media?{token_part}path={urllib.parse.quote(p)})"
         })
 
     return JSONResponse(content={"messages": processed_messages, "project": project})

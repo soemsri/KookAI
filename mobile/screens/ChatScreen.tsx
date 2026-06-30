@@ -6,7 +6,24 @@ import * as SecureStore from 'expo-secure-store';
 import { apiCall, clearConnection, uploadMedia, loadConnection, getActiveBaseUrl } from '../utils/api';
 import Svg, { Circle } from 'react-native-svg';
 import * as DocumentPicker from 'expo-document-picker';
-import { Audio } from 'expo-av';
+// Mock Audio namespaces and classes to avoid importing deprecated expo-av
+namespace Audio {
+  export type Sound = any;
+  export type Recording = any;
+}
+const Audio = {
+  requestPermissionsAsync: async () => ({ granted: false }),
+  setAudioModeAsync: async (...args: any[]) => {},
+  Recording: {
+    createAsync: async (...args: any[]) => { throw new Error("Audio recording is not supported in this version."); }
+  },
+  RecordingOptionsPresets: {
+    HIGH_QUALITY: {}
+  },
+  Sound: {
+    createAsync: async (...args: any[]) => { throw new Error("Audio playback is not supported in this version."); }
+  }
+};
 
 interface Message {
   role: 'user' | 'assistant';
@@ -200,7 +217,21 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
 };
 
 const getMediaType = (url: string) => {
-  const ext = url.split('.').pop()?.toLowerCase();
+  if (url.includes('type=image')) return 'image';
+  if (url.includes('type=video')) return 'video';
+  if (url.includes('type=audio')) return 'audio';
+  if (url.includes('type=document')) return 'document';
+
+  // Parse path parameter if it exists to extract correct extension
+  let targetUrl = url;
+  if (url.includes('path=')) {
+    const match = url.match(/[?&]path=([^&]+)/);
+    if (match && match[1]) {
+      targetUrl = decodeURIComponent(match[1]);
+    }
+  }
+
+  const ext = targetUrl.split('.').pop()?.split('?')[0]?.split('&')[0]?.toLowerCase();
   if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'heic'].includes(ext || '')) {
     return 'image';
   }
@@ -447,7 +478,29 @@ export default function ChatScreen({ onDisconnect }: ChatScreenProps) {
   const promptKeyboardOffset = Platform.OS === 'android' && isKeyboardVisible ? keyboardHeight : 0;
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [localAttachments, setLocalAttachments] = useState<{ id: string; uri: string; name: string; type: 'image' | 'video' | 'document' | 'audio' }[]>([]);
   const [inputText, setInputText] = useState('');
+
+  const addLocalAttachment = (uri: string, name: string, type: 'image' | 'video' | 'document' | 'audio') => {
+    if (localAttachments.length >= 5) {
+      Alert.alert("Limit Reached", "You can attach a maximum of 5 files.");
+      return;
+    }
+    setLocalAttachments(current => [
+      ...current,
+      {
+        id: `local_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+        uri,
+        name,
+        type
+      }
+    ]);
+    showToast(`${type.charAt(0).toUpperCase() + type.slice(1)} attached`);
+  };
+
+  const removeLocalAttachment = (id: string) => {
+    setLocalAttachments(current => current.filter(item => item.id !== id));
+  };
 const [loading, setLoading] = useState(false);
 const [taskProgressText, setTaskProgressText] = useState('');
 const [activeConvoId, setActiveConvoId] = useState<string>('');
@@ -490,6 +543,7 @@ const [draftSettingsSpeechLang, setDraftSettingsSpeechLang] = useState(selectedS
 const [draftSettingsThemeMode, setDraftSettingsThemeMode] = useState<ThemeMode>(selectedThemeMode);
 const [uploadingMedia, setUploadingMedia] = useState(false);
 const [hostBaseUrl, setHostBaseUrl] = useState<string>('');
+const [authToken, setAuthToken] = useState<string>('');
 const [audioRecording, setAudioRecording] = useState<Audio.Recording | null>(null);
 const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [usageLimitData, setUsageLimitData] = useState<any>(DEFAULT_USAGE_LIMIT_DATA);
@@ -566,6 +620,13 @@ const callHostApi = async (endpoint: string, options: RequestInit = {}) => {
 try {
 const data = await apiCall(endpoint, options);
 setIsConnected(true);
+const conn = await loadConnection();
+if (conn) {
+const currentUrl = await getActiveBaseUrl(conn);
+if (currentUrl && currentUrl !== hostBaseUrl) {
+setHostBaseUrl(currentUrl);
+}
+}
 return data;
 } catch (err) {
 setIsConnected(!isConnectionError(err));
@@ -640,16 +701,19 @@ console.error("Error loading saved settings:", err);
       setIsInitializingChat(true);
       try {
         await loadSavedPreferences();
-        await loadProjects();
-        await loadConversations();
-        fetchUsageLimits();
         const conn = await loadConnection();
         if (conn) {
           const url = await getActiveBaseUrl(conn);
           if (url && isMounted) {
             setHostBaseUrl(url);
           }
+          if (conn.token && isMounted) {
+            setAuthToken(conn.token);
+          }
         }
+        await loadProjects();
+        await loadConversations();
+        fetchUsageLimits();
       } finally {
         if (isMounted) {
           setIsInitializingChat(false);
@@ -1157,7 +1221,7 @@ setPromptCursor(nextCursor);
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['images', 'videos'],
+        mediaTypes: ['images'],
         quality: 0.9,
       });
 
@@ -1166,22 +1230,10 @@ setPromptCursor(nextCursor);
       const asset = result.assets[0];
       const ext = asset.uri.split('.').pop() || 'jpg';
       const filename = `camera_${Date.now()}.${ext}`;
-      const conversationId = ensureActiveConversationForContext();
 
-      setUploadingMedia(true);
-      const response = await uploadMedia(asset.uri, filename, conversationId);
-      setIsConnected(true);
-      if (response.status === "success") {
-        showToast("Camera media attached");
-        loadConversations(false);
-      } else {
-        Alert.alert("Upload Failed", response.detail || "Could not upload the captured media.");
-      }
+      addLocalAttachment(asset.uri, filename, 'image');
     } catch (err: any) {
-      setIsConnected(!isConnectionError(err));
-      Alert.alert("Upload Failed", err?.message || "Could not upload the captured media.");
-    } finally {
-      setUploadingMedia(false);
+      Alert.alert("Error", err?.message || "Could not capture media.");
     }
   };
 
@@ -1195,7 +1247,7 @@ setPromptCursor(nextCursor);
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images', 'videos'],
+        mediaTypes: ['images'],
         quality: 0.9,
         allowsMultipleSelection: false,
       });
@@ -1205,22 +1257,10 @@ setPromptCursor(nextCursor);
       const asset = result.assets[0];
       const ext = asset.uri.split('.').pop() || 'jpg';
       const filename = asset.fileName || `gallery_${Date.now()}.${ext}`;
-      const conversationId = ensureActiveConversationForContext();
 
-      setUploadingMedia(true);
-      const response = await uploadMedia(asset.uri, filename, conversationId);
-      setIsConnected(true);
-      if (response.status === "success") {
-        showToast("Gallery media attached");
-        loadConversations(false);
-      } else {
-        Alert.alert("Upload Failed", response.detail || "Could not upload the selected media.");
-      }
+      addLocalAttachment(asset.uri, filename, 'image');
     } catch (err: any) {
-      setIsConnected(!isConnectionError(err));
-      Alert.alert("Upload Failed", err?.message || "Could not upload the selected media.");
-    } finally {
-      setUploadingMedia(false);
+      Alert.alert("Error", err?.message || "Could not select media.");
     }
   };
 
@@ -1236,22 +1276,10 @@ setPromptCursor(nextCursor);
 
       const asset = result.assets[0];
       const filename = asset.name || `doc_${Date.now()}`;
-      const conversationId = ensureActiveConversationForContext();
 
-      setUploadingMedia(true);
-      const response = await uploadMedia(asset.uri, filename, conversationId);
-      setIsConnected(true);
-      if (response.status === "success") {
-        showToast("Document attached");
-        loadConversations(false);
-      } else {
-        Alert.alert("Upload Failed", response.detail || "Could not upload the selected document.");
-      }
+      addLocalAttachment(asset.uri, filename, 'document');
     } catch (err: any) {
-      setIsConnected(!isConnectionError(err));
-      Alert.alert("Upload Failed", err?.message || "Could not upload the selected document.");
-    } finally {
-      setUploadingMedia(false);
+      Alert.alert("Error", err?.message || "Could not select document.");
     }
   };
 
@@ -1282,7 +1310,6 @@ setPromptCursor(nextCursor);
   const stopAudioRecording = async () => {
     if (!audioRecording) return;
     setIsRecordingAudio(false);
-    setUploadingMedia(true);
     try {
       await audioRecording.stopAndUnloadAsync();
       const uri = audioRecording.getURI();
@@ -1290,18 +1317,9 @@ setPromptCursor(nextCursor);
       if (!uri) throw new Error("No recording URI found");
 
       const filename = `voice_${Date.now()}.m4a`;
-      const conversationId = ensureActiveConversationForContext();
-      const response = await uploadMedia(uri, filename, conversationId);
-      if (response.status === "success") {
-        showToast("Audio note attached");
-        loadConversations(false);
-      } else {
-        Alert.alert("Upload Failed", response.detail || "Could not upload the audio.");
-      }
+      addLocalAttachment(uri, filename, 'audio');
     } catch (err: any) {
       Alert.alert("Recording Failed", err.message || "Failed to stop recording.");
-    } finally {
-      setUploadingMedia(false);
     }
   };
 
@@ -1363,7 +1381,8 @@ allowQueue: false,
     clearPrompt = false,
     options?: Partial<QueuedPrompt> & { allowQueue?: boolean }
   ) => {
-    if (!messageText.trim()) return;
+    const hasAttachments = localAttachments && localAttachments.length > 0;
+    if (!messageText.trim() && !hasAttachments) return;
 
     const userMsg = messageText.trim();
     if (clearPrompt) {
@@ -1379,81 +1398,108 @@ allowQueue: false,
     const requestTarget = options?.target || selectedTarget;
     const requestProject = options?.project || selectedProjectRef.current;
 
-    // Add user message to display instantly
-    const updatedMessages = [...baseMessages, { role: 'user', content: userMsg } as Message];
+    // Add user message to display instantly (including local preview)
+    const displayMsg = hasAttachments
+      ? (localAttachments.map(a => `![Attached Image](${a.uri}?type=${a.type})`).join('\n') + '\n\n' + userMsg).trim()
+      : userMsg;
+
+    const updatedMessages = [...baseMessages, { role: 'user', content: displayMsg } as Message];
     updateMessages(updatedMessages);
     setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
 
     setLoadingState(true);
+    // Keep local copy of attachments to upload, then clear the state
+    const attachmentsToUpload = [...localAttachments];
+    setLocalAttachments([]); // Clear from input bar instantly so it looks sent
+
     try {
-const shouldReuseConversation = activeConvoIdRef.current && activeConvoProjectRef.current === requestProject;
-const convoId = options?.conversationId || (shouldReuseConversation
-? activeConvoIdRef.current
-: `temp_${requestProject}_${Math.random().toString(36).substring(2, 11)}`);
-if (!shouldReuseConversation || activeConvoIdRef.current !== convoId) {
-updateActiveConversation(convoId, requestProject);
-}
+      const shouldReuseConversation = activeConvoIdRef.current && activeConvoProjectRef.current === requestProject;
+      const convoId = options?.conversationId || (shouldReuseConversation
+      ? activeConvoIdRef.current
+      : `temp_${requestProject}_${Math.random().toString(36).substring(2, 11)}`);
+      if (!shouldReuseConversation || activeConvoIdRef.current !== convoId) {
+        updateActiveConversation(convoId, requestProject);
+      }
+
+      // Upload local attachments if any right before posting task
+      if (attachmentsToUpload.length > 0) {
+        setUploadingMedia(true);
+        try {
+          for (const attachment of attachmentsToUpload) {
+            await uploadMedia(attachment.uri, attachment.name, convoId);
+          }
+        } catch (uploadErr: any) {
+          // Restore local attachments so they can try again on failure
+          setLocalAttachments(attachmentsToUpload);
+          throw uploadErr;
+        } finally {
+          setUploadingMedia(false);
+        }
+      }
 
       setTaskProgressText('');
- const startResponse = await callHostApi('/api/chat-tasks', {
- method: 'POST',
- body: JSON.stringify({
-message: userMsg,
-model: requestModel,
-workspace: requestProject,
-target: requestTarget,
-conversation_id: convoId
- })
- });
+      const startResponse = await callHostApi('/api/chat-tasks', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: userMsg,
+          model: requestModel,
+          workspace: requestProject,
+          target: requestTarget,
+          conversation_id: convoId
+        })
+      });
 
- if (!startResponse?.task_id) {
- throw new Error('Failed to start chat task');
- }
+      if (!startResponse?.task_id) {
+        throw new Error('Failed to start chat task');
+      }
 
- const progressEvents: ChatTaskEvent[] = [];
- let lastSeq = -1;
- let response: any = null;
+      const progressEvents: ChatTaskEvent[] = [];
+      let lastSeq = -1;
+      let response: any = null;
 
- while (true) {
- await wait(1500);
- const taskResponse = await callHostApi(`/api/chat-tasks/${startResponse.task_id}?after=${lastSeq}`);
+      while (true) {
+        await wait(1500);
+        const taskResponse = await callHostApi(`/api/chat-tasks/${startResponse.task_id}?after=${lastSeq}`);
 
- if (Array.isArray(taskResponse.events) && taskResponse.events.length > 0) {
- taskResponse.events.forEach((event: ChatTaskEvent) => {
- progressEvents.push(event);
- lastSeq = Math.max(lastSeq, event.seq);
- });
- setTaskProgressText(formatTaskProgress(progressEvents));
- setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
- }
+        if (Array.isArray(taskResponse.events) && taskResponse.events.length > 0) {
+          taskResponse.events.forEach((event: ChatTaskEvent) => {
+            progressEvents.push(event);
+            lastSeq = Math.max(lastSeq, event.seq);
+          });
+          setTaskProgressText(formatTaskProgress(progressEvents));
+          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+        }
 
- if (taskResponse.status === 'success' || taskResponse.status === 'error') {
- response = taskResponse.result;
- break;
- }
- }
+        if (taskResponse.status === 'success' || taskResponse.status === 'error') {
+          response = taskResponse.result;
+          break;
+        }
+      }
 
- if (response && response.reply) {
- updateMessages([...updatedMessages, { role: 'assistant', content: response.reply }]);
+      if (response && response.reply) {
+        updateMessages([...updatedMessages, { role: 'assistant', content: response.reply }]);
 
- // Refresh conversation history list without changing current project.
- loadConversations(false);
- fetchUsageLimits();
-if (response.conversation_id && response.conversation_id !== convoId) {
-updateActiveConversation(response.conversation_id, requestProject);
-replaceQueuedConversationId(convoId, response.conversation_id);
-} else {
-updateActiveConversation(convoId, requestProject);
-}
- }
-} catch (err: any) {
-Alert.alert("Failed to send", err.message || "Failed to submit message to host.");
-} finally {
-setTaskProgressText('');
-setLoadingState(false);
-setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
-setTimeout(processNextQueuedPrompt, 0);
-}
+        // Refresh conversation history list without changing current project.
+        loadConversations(false);
+        fetchUsageLimits();
+        if (response.conversation_id && response.conversation_id !== convoId) {
+          updateActiveConversation(response.conversation_id, requestProject);
+          replaceQueuedConversationId(convoId, response.conversation_id);
+        } else {
+          updateActiveConversation(convoId, requestProject);
+        }
+      }
+    } catch (err: any) {
+      Alert.alert("Failed to send", err.message || "Failed to submit message to host.");
+      if (clearPrompt) {
+        setInputText(userMsg); // Restore prompt text on failure
+      }
+    } finally {
+      setTaskProgressText('');
+      setLoadingState(false);
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+      setTimeout(processNextQueuedPrompt, 0);
+    }
   };
 
   const handleSend = async () => {
@@ -1595,14 +1641,26 @@ setTimeout(processNextQueuedPrompt, 0);
       <View style={{ gap: 8 }}>
         {matches.map((match, idx) => {
           const relativeUrl = match[1];
-          const absoluteUrl = relativeUrl.startsWith('http') ? relativeUrl : `${hostBaseUrl}${relativeUrl}`;
+          const isLocal = relativeUrl.startsWith('file://') || relativeUrl.startsWith('content://') || relativeUrl.startsWith('ph://');
+          let absoluteUrl = (relativeUrl.startsWith('http') || isLocal) ? relativeUrl : `${hostBaseUrl}${relativeUrl}`;
+
+          if (absoluteUrl.includes('/api/media') && authToken && !absoluteUrl.includes('token=')) {
+            const separator = absoluteUrl.includes('?') ? '&' : '?';
+            absoluteUrl = `${absoluteUrl}${separator}token=${encodeURIComponent(authToken)}`;
+          }
+
           const mediaType = getMediaType(absoluteUrl);
 
           if (mediaType === 'image') {
             return (
               <Image
                 key={idx}
-                source={{ uri: absoluteUrl }}
+                source={{
+                  uri: absoluteUrl,
+                  headers: (absoluteUrl.startsWith('http') && authToken) ? {
+                    Authorization: `Bearer ${authToken}`
+                  } : undefined
+                }}
                 style={styles.chatImage}
                 resizeMode="cover"
               />
@@ -1866,6 +1924,35 @@ toggleSidebar();
               </View>
             ) : (
               <>
+                {localAttachments.length > 0 && (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.attachmentPreviewContainer}
+                  >
+                    {localAttachments.map((item) => (
+                      <View key={item.id} style={styles.attachmentThumbnailWrapper}>
+                        {item.type === 'image' || item.type === 'video' ? (
+                          <Image source={{ uri: item.uri }} style={styles.attachmentThumbnail} />
+                        ) : (
+                          <View style={[styles.attachmentDocumentIcon, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}>
+                            <Text style={{ fontSize: 24 }}>{item.type === 'audio' ? '🎤' : '📄'}</Text>
+                            <Text style={[styles.attachmentDocumentText, { color: theme.textSecondary }]} numberOfLines={1}>
+                              {item.name}
+                            </Text>
+                          </View>
+                        )}
+                        <TouchableOpacity
+                          style={styles.attachmentDeleteBtn}
+                          activeOpacity={0.7}
+                          onPress={() => removeLocalAttachment(item.id)}
+                        >
+                          <Text style={styles.attachmentDeleteText}>×</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </ScrollView>
+                )}
                 <TextInput
                   ref={promptInputRef}
                   style={[styles.promptInputText, { color: theme.textPrimary }]}
@@ -2913,6 +3000,57 @@ queuedPromptBubble: {
   },
   promptInputCardDisabled: {
     opacity: 0.72,
+  },
+  attachmentPreviewContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingTop: 4,
+    paddingBottom: 12,
+  },
+  attachmentThumbnailWrapper: {
+    position: 'relative',
+    width: 64,
+    height: 64,
+  },
+  attachmentThumbnail: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+  },
+  attachmentDocumentIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 4,
+  },
+  attachmentDocumentText: {
+    fontSize: 8,
+    marginTop: 2,
+    width: '100%',
+    textAlign: 'center',
+  },
+  attachmentDeleteBtn: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#000000',
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+  },
+  attachmentDeleteText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+    lineHeight: 14,
+    textAlign: 'center',
   },
   promptInputText: {
     fontSize: 14,
