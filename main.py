@@ -248,7 +248,7 @@ chat_tasks_lock = threading.Lock()
 # Multi-step interview logic for /grill-me
 interview_states = {} # conversation_id -> current_question_index
 
-INTERVIEW_QUESTIONS = [
+DEFAULT_INTERVIEW_QUESTIONS = [
     {
         "type": "question",
         "question": "Should we add a manual Light/Dark mode toggle switch to the web app, or should it continue to strictly follow your macOS system settings?",
@@ -973,73 +973,111 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     msg_lower = message.strip().lower()
 
     if msg_lower.startswith("/grill-me"):
+        # Initialize the dynamic grill interview state
         interview_states[actual_cid] = {
-            "current_idx": 0,
-            "answers": []
+            "mode": "grill",
+            "step": 0
         }
-        reply = json.dumps(INTERVIEW_QUESTIONS[0])
-        resolved_cid = conversation_id
+        
+        grill_init_prompt = (
+            "[SYSTEM: INTERACTIVE GRILL-ME MODE INITIATED]\n"
+            "The user wants to align on design decisions and project requirements for this workspace. "
+            "Please analyze the workspace files and codebase. "
+            "Identify 2-3 important design choices, configuration options, or architectural trade-offs that need user alignment. "
+            "Generate the FIRST clarifying question and choices in the following JSON format so the UI can render it. "
+            "Output ONLY the JSON object, with no markdown code blocks or extra text outside the JSON.\n\n"
+            "JSON Format:\n"
+            "{\n"
+            '  "type": "question",\n'
+            '  "question": "The question text here?",\n'
+            '  "options": [\n'
+            '    "(Recommended) Choice A text",\n'
+            '    "Choice B text"\n'
+            "  ],\n"
+            '  "allow_other": true\n'
+            "}"
+        )
+        
+        reply, resolved_cid = run_agy_cli(
+            grill_init_prompt,
+            model,
+            conversation_id,
+            target,
+            workspace,
+            progress_callback=progress_callback
+        )
+        
+        # Ensure clean JSON format by stripping markdown formatting if present
+        reply_clean = reply.strip()
+        if reply_clean.startswith("```json"):
+            reply_clean = reply_clean[7:]
+        if reply_clean.startswith("```"):
+            reply_clean = reply_clean[3:]
+        if reply_clean.endswith("```"):
+            reply_clean = reply_clean[:-3]
+        reply_clean = reply_clean.strip()
+        
+        try:
+            parsed = json.loads(reply_clean)
+            if isinstance(parsed, dict) and "question" in parsed:
+                reply = json.dumps(parsed)
+        except Exception:
+            pass
+
     elif actual_cid in interview_states:
         state = interview_states[actual_cid]
-        current_idx = state["current_idx"]
+        state["step"] += 1
         
-        # Save the answer to the current question
-        answer = message.strip()
-        state["answers"].append({
-            "question": INTERVIEW_QUESTIONS[current_idx]["question"],
-            "answer": answer
-        })
+        grill_continue_prompt = (
+            f"[SYSTEM: GRILL-ME INTERVIEW STEP {state['step']}]\n"
+            f"The user selected/responded: \"{message.strip()}\"\n\n"
+            "If you need to clarify more design decisions (limit to 3 questions max overall), "
+            "please output the NEXT clarifying question in the exact same JSON format (ONLY the JSON object, no extra text, no markdown wrappers).\n\n"
+            "If you have enough alignment or have reached 3 questions, please finish the interview by outputting "
+            "a friendly markdown summary of all decisions, how you will save/apply them to the workspace, "
+            "and state that the alignment is complete. Do NOT use the JSON format for the final summary response."
+        )
         
-        next_idx = current_idx + 1
-        if next_idx < len(INTERVIEW_QUESTIONS):
-            state["current_idx"] = next_idx
-            reply = json.dumps(INTERVIEW_QUESTIONS[next_idx])
-            resolved_cid = conversation_id
-        else:
-            # Interview completed! Save preferences to file.
+        reply, resolved_cid = run_agy_cli(
+            grill_continue_prompt,
+            model,
+            conversation_id,
+            target,
+            workspace,
+            progress_callback=progress_callback
+        )
+        
+        reply_clean = reply.strip()
+        if reply_clean.startswith("```json"):
+            reply_clean = reply_clean[7:]
+        if reply_clean.startswith("```"):
+            reply_clean = reply_clean[3:]
+        if reply_clean.endswith("```"):
+            reply_clean = reply_clean[:-3]
+        reply_clean = reply_clean.strip()
+        
+        is_question = False
+        try:
+            parsed = json.loads(reply_clean)
+            if isinstance(parsed, dict) and "question" in parsed:
+                reply = json.dumps(parsed)
+                is_question = True
+        except Exception:
+            pass
+            
+        if not is_question:
+            # Interview completed! Close state and save report
             del interview_states[actual_cid]
             
             project_id = clean_project_name(os.path.basename(workspace or "agy"))
             cwd_path = resolve_project_directory(project_id)
             pref_file = os.path.join(cwd_path, "alignment_preferences.json")
-            
-            pref_data = {
-                "project_id": project_id,
-                "aligned_at": datetime.datetime.now().isoformat(),
-                "preferences": state["answers"]
-            }
             try:
                 os.makedirs(os.path.dirname(pref_file), exist_ok=True)
                 with open(pref_file, "w", encoding="utf-8") as f:
-                    json.dump(pref_data, f, indent=2, ensure_ascii=False)
-                pref_saved_msg = f"Saved preferences to `{pref_file}`"
+                    f.write(f"# Design Alignment Summary\n\nDate: {datetime.datetime.now().isoformat()}\n\n{reply}")
             except Exception as e:
-                pref_saved_msg = f"Failed to save preferences: {str(e)}"
-            
-            summary_lines = []
-            for idx, ans in enumerate(pref_data["preferences"]):
-                summary_lines.append(f"{idx+1}. **{ans['question']}**\n   - Choice: `{ans['answer']}`")
-                
-            summary_text = "\n".join(summary_lines)
-            
-            # Trigger agy CLI to process the alignment file and acknowledge preferences
-            import_message = (
-                "[SYSTEM: DESIGN ALIGNMENT COMPLETED]\n"
-                "The user has completed the /grill-me alignment interview. "
-                "Here is a summary of the choices they made:\n\n"
-                f"{summary_text}\n\n"
-                f"These choices have been successfully written to `{pref_file}`.\n\n"
-                "Please summarize these choices, confirm to the user how you will apply these "
-                "design decisions to their workspace, and congratulate them."
-            )
-            reply, resolved_cid = run_agy_cli(
-                import_message,
-                model,
-                conversation_id,
-                target,
-                workspace,
-                progress_callback=progress_callback
-            )
+                logging.error(f"Failed to save final alignment log: {e}")
     elif msg_lower.startswith("/goal"):
         goal_text = message[5:].strip()
         if not goal_text:
