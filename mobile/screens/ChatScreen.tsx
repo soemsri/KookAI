@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StatusBar, Animated, useColorScheme, Modal, Vibration, Easing, Keyboard } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StatusBar, Animated, useColorScheme, Modal, Vibration, Easing, Keyboard, Image, Linking } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
-import { apiCall, clearConnection, uploadMedia } from '../utils/api';
+import { apiCall, clearConnection, uploadMedia, loadConnection, getActiveBaseUrl } from '../utils/api';
 import Svg, { Circle } from 'react-native-svg';
+import * as DocumentPicker from 'expo-document-picker';
+import { Audio } from 'expo-av';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -197,6 +199,129 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
     : { text: 'AI', bg: '#e5e7eb', color: '#4b5563' };
 };
 
+const getMediaType = (url: string) => {
+  const ext = url.split('.').pop()?.toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'heic'].includes(ext || '')) {
+    return 'image';
+  }
+  if (['mp4', 'mov', 'm4v', '3gp', 'avi', 'mkv'].includes(ext || '')) {
+    return 'video';
+  }
+  if (['mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac'].includes(ext || '')) {
+    return 'audio';
+  }
+  return 'document';
+};
+
+const VideoPlayerView = ({ url }: { url: string }) => {
+  const filename = url.split('/').pop()?.split('?')[0] || 'video';
+  const cleanName = filename.replace('media__', '');
+  return (
+    <TouchableOpacity 
+      style={styles.videoContainer} 
+      onPress={() => Linking.openURL(url)}
+      activeOpacity={0.8}
+    >
+      <View style={styles.videoPlaceholder}>
+        <Text style={styles.playIcon}>▶</Text>
+        <Text style={styles.videoText} numberOfLines={1}>{cleanName}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
+const AudioPlayerView = ({ url, theme }: { url: string, theme: any }) => {
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    return () => {
+      if (sound) {
+        sound.unloadAsync();
+      }
+    };
+  }, [sound]);
+
+  const handlePlayPause = async () => {
+    if (sound) {
+      if (isPlaying) {
+        await sound.pauseAsync();
+        setIsPlaying(false);
+      } else {
+        await sound.playAsync();
+        setIsPlaying(true);
+      }
+    } else {
+      try {
+        const { sound: newSound } = await Audio.Sound.createAsync(
+          { uri: url },
+          { shouldPlay: true },
+          onPlaybackStatusUpdate
+        );
+        setSound(newSound);
+        setIsPlaying(true);
+      } catch (err) {
+        Alert.alert("Error", "Could not play audio.");
+      }
+    }
+  };
+
+  const onPlaybackStatusUpdate = (status: any) => {
+    if (status.isLoaded) {
+      setPosition(status.positionMillis);
+      setDuration(status.durationMillis || 0);
+      if (status.didJustFinish) {
+        setIsPlaying(false);
+        setPosition(0);
+      }
+    }
+  };
+
+  const formatTime = (millis: number) => {
+    const totalSecs = Math.floor(millis / 1000);
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  const progress = duration > 0 ? position / duration : 0;
+
+  return (
+    <View style={[styles.audioPlayer, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}>
+      <TouchableOpacity onPress={handlePlayPause} style={styles.audioPlayButton}>
+        <Text style={{ color: theme.accent, fontSize: 18 }}>{isPlaying ? '⏸' : '▶'}</Text>
+      </TouchableOpacity>
+      <View style={styles.audioInfo}>
+        <Text style={[styles.audioTitle, { color: theme.textPrimary }]}>Voice Recording</Text>
+        <View style={styles.progressBarBg}>
+          <View style={[styles.progressBarFill, { width: `${progress * 100}%`, backgroundColor: theme.accent }]} />
+        </View>
+        <Text style={[styles.audioTime, { color: theme.textSecondary }]}>
+          {formatTime(position)} / {formatTime(duration)}
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+const DocumentAttachmentView = ({ url, filename, theme }: { url: string, filename: string, theme: any }) => {
+  return (
+    <TouchableOpacity 
+      style={[styles.documentContainer, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]} 
+      onPress={() => Linking.openURL(url)}
+      activeOpacity={0.8}
+    >
+      <Text style={styles.documentIcon}>📄</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.documentName, { color: theme.textPrimary }]} numberOfLines={1}>{filename}</Text>
+        <Text style={[styles.documentActionText, { color: theme.accent }]}>Tap to open / download</Text>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 function QuestionCard({
   question,
   disabled,
@@ -364,6 +489,9 @@ const [draftSettingsTarget, setDraftSettingsTarget] = useState(selectedTarget);
 const [draftSettingsSpeechLang, setDraftSettingsSpeechLang] = useState(selectedSpeechLang);
 const [draftSettingsThemeMode, setDraftSettingsThemeMode] = useState<ThemeMode>(selectedThemeMode);
 const [uploadingMedia, setUploadingMedia] = useState(false);
+const [hostBaseUrl, setHostBaseUrl] = useState<string>('');
+const [audioRecording, setAudioRecording] = useState<Audio.Recording | null>(null);
+const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [usageLimitData, setUsageLimitData] = useState<any>(DEFAULT_USAGE_LIMIT_DATA);
   const [usageMode, setUsageMode] = useState<'usage' | 'remaining'>('usage');
   const [loadingUsage, setLoadingUsage] = useState(false);
@@ -505,30 +633,37 @@ console.error("Error loading saved settings:", err);
 }
 };
 
-useEffect(() => {
-let isMounted = true;
+  useEffect(() => {
+    let isMounted = true;
 
-const initializeChat = async () => {
-setIsInitializingChat(true);
-try {
-await loadSavedPreferences();
-await loadProjects();
-await loadConversations();
-fetchUsageLimits();
-} finally {
-if (isMounted) {
-setIsInitializingChat(false);
-}
-}
-};
+    const initializeChat = async () => {
+      setIsInitializingChat(true);
+      try {
+        await loadSavedPreferences();
+        await loadProjects();
+        await loadConversations();
+        fetchUsageLimits();
+        const conn = await loadConnection();
+        if (conn) {
+          const url = await getActiveBaseUrl(conn);
+          if (url && isMounted) {
+            setHostBaseUrl(url);
+          }
+        }
+      } finally {
+        if (isMounted) {
+          setIsInitializingChat(false);
+        }
+      }
+    };
 
-initializeChat();
+    initializeChat();
 
-return () => {
-isMounted = false;
-usageLimitControllerRef.current?.abort();
-if (toastTimeoutRef.current) {
-clearTimeout(toastTimeoutRef.current);
+    return () => {
+      isMounted = false;
+      usageLimitControllerRef.current?.abort();
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
       }
     };
   }, []);
@@ -1012,43 +1147,163 @@ setInputText(nextText);
 setPromptCursor(nextCursor);
 };
 
-const handleAddMediaContext = async () => {
-setIsPlusModalOpen(false);
-try {
-const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-if (!permission.granted) {
-Alert.alert("Photos Permission", "Please allow photo access to attach media context.");
-return;
-}
+  const handleCameraCapture = async () => {
+    setIsPlusModalOpen(false);
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("Camera Permission", "Please allow camera access to take photos/videos.");
+        return;
+      }
 
-const result = await ImagePicker.launchImageLibraryAsync({
-mediaTypes: ['images'],
-quality: 0.9,
-allowsMultipleSelection: false,
-});
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images', 'videos'],
+        quality: 0.9,
+      });
 
-if (result.canceled || result.assets.length === 0) return;
+      if (result.canceled || result.assets.length === 0) return;
 
-const asset = result.assets[0];
-const filename = asset.fileName || `image_${Date.now()}.${asset.uri.split('.').pop() || 'jpg'}`;
-const conversationId = ensureActiveConversationForContext();
+      const asset = result.assets[0];
+      const ext = asset.uri.split('.').pop() || 'jpg';
+      const filename = `camera_${Date.now()}.${ext}`;
+      const conversationId = ensureActiveConversationForContext();
 
-setUploadingMedia(true);
-const response = await uploadMedia(asset.uri, filename, conversationId);
-setIsConnected(true);
-if (response.status === "success") {
-showToast("Image attached");
-loadConversations(false);
-} else {
-Alert.alert("Upload Failed", response.detail || "Could not upload the selected image.");
-}
-} catch (err: any) {
-setIsConnected(!isConnectionError(err));
-Alert.alert("Upload Failed", err?.message || "Could not upload the selected image.");
-} finally {
-setUploadingMedia(false);
-}
-};
+      setUploadingMedia(true);
+      const response = await uploadMedia(asset.uri, filename, conversationId);
+      setIsConnected(true);
+      if (response.status === "success") {
+        showToast("Camera media attached");
+        loadConversations(false);
+      } else {
+        Alert.alert("Upload Failed", response.detail || "Could not upload the captured media.");
+      }
+    } catch (err: any) {
+      setIsConnected(!isConnectionError(err));
+      Alert.alert("Upload Failed", err?.message || "Could not upload the captured media.");
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
+
+  const handleGalleryPick = async () => {
+    setIsPlusModalOpen(false);
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("Photos Permission", "Please allow photo access to attach media context.");
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'],
+        quality: 0.9,
+        allowsMultipleSelection: false,
+      });
+
+      if (result.canceled || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      const ext = asset.uri.split('.').pop() || 'jpg';
+      const filename = asset.fileName || `gallery_${Date.now()}.${ext}`;
+      const conversationId = ensureActiveConversationForContext();
+
+      setUploadingMedia(true);
+      const response = await uploadMedia(asset.uri, filename, conversationId);
+      setIsConnected(true);
+      if (response.status === "success") {
+        showToast("Gallery media attached");
+        loadConversations(false);
+      } else {
+        Alert.alert("Upload Failed", response.detail || "Could not upload the selected media.");
+      }
+    } catch (err: any) {
+      setIsConnected(!isConnectionError(err));
+      Alert.alert("Upload Failed", err?.message || "Could not upload the selected media.");
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
+
+  const handleDocumentPick = async () => {
+    setIsPlusModalOpen(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      const filename = asset.name || `doc_${Date.now()}`;
+      const conversationId = ensureActiveConversationForContext();
+
+      setUploadingMedia(true);
+      const response = await uploadMedia(asset.uri, filename, conversationId);
+      setIsConnected(true);
+      if (response.status === "success") {
+        showToast("Document attached");
+        loadConversations(false);
+      } else {
+        Alert.alert("Upload Failed", response.detail || "Could not upload the selected document.");
+      }
+    } catch (err: any) {
+      setIsConnected(!isConnectionError(err));
+      Alert.alert("Upload Failed", err?.message || "Could not upload the selected document.");
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
+
+  const startAudioRecording = async () => {
+    setIsPlusModalOpen(false);
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("Permission Required", "Please allow microphone access to record audio.");
+        return;
+      }
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setAudioRecording(recording);
+      setIsRecordingAudio(true);
+      showToast("Recording started...");
+    } catch (err: any) {
+      Alert.alert("Recording Error", err.message || "Failed to start recording.");
+    }
+  };
+
+  const stopAudioRecording = async () => {
+    if (!audioRecording) return;
+    setIsRecordingAudio(false);
+    setUploadingMedia(true);
+    try {
+      await audioRecording.stopAndUnloadAsync();
+      const uri = audioRecording.getURI();
+      setAudioRecording(null);
+      if (!uri) throw new Error("No recording URI found");
+
+      const filename = `voice_${Date.now()}.m4a`;
+      const conversationId = ensureActiveConversationForContext();
+      const response = await uploadMedia(uri, filename, conversationId);
+      if (response.status === "success") {
+        showToast("Audio note attached");
+        loadConversations(false);
+      } else {
+        Alert.alert("Upload Failed", response.detail || "Could not upload the audio.");
+      }
+    } catch (err: any) {
+      Alert.alert("Recording Failed", err.message || "Failed to stop recording.");
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
 
 const enqueuePrompt = (messageText: string) => {
 const userMsg = messageText.trim();
@@ -1322,6 +1577,61 @@ setTimeout(processNextQueuedPrompt, 0);
   const headerConversationTitle = activeConversation?.title || "Untitled Conversation";
   const isPromptDisabled = isInitializingChat;
 
+  const renderMessageContent = (content: string, role: 'user' | 'assistant') => {
+    const imageRegex = /!\[.*?\]\((.*?)\)/g;
+    const matches = [...content.matchAll(imageRegex)];
+
+    if (matches.length === 0) {
+      return (
+        <Text style={role === 'user' ? styles.userText : [styles.assistantText, { color: theme.textPrimary }]}>
+          {content}
+        </Text>
+      );
+    }
+
+    const cleanText = content.replace(imageRegex, '').trim();
+
+    return (
+      <View style={{ gap: 8 }}>
+        {matches.map((match, idx) => {
+          const relativeUrl = match[1];
+          const absoluteUrl = relativeUrl.startsWith('http') ? relativeUrl : `${hostBaseUrl}${relativeUrl}`;
+          const mediaType = getMediaType(absoluteUrl);
+
+          if (mediaType === 'image') {
+            return (
+              <Image
+                key={idx}
+                source={{ uri: absoluteUrl }}
+                style={styles.chatImage}
+                resizeMode="cover"
+              />
+            );
+          } else if (mediaType === 'video') {
+            return (
+              <VideoPlayerView key={idx} url={absoluteUrl} />
+            );
+          } else if (mediaType === 'audio') {
+            return (
+              <AudioPlayerView key={idx} url={absoluteUrl} theme={theme} />
+            );
+          } else {
+            const filename = absoluteUrl.split('/').pop()?.split('?')[0] || 'attachment';
+            const cleanName = filename.replace('media__', '');
+            return (
+              <DocumentAttachmentView key={idx} url={absoluteUrl} filename={cleanName} theme={theme} />
+            );
+          }
+        })}
+        {cleanText ? (
+          <Text style={role === 'user' ? styles.userText : [styles.assistantText, { color: theme.textPrimary }]}>
+            {cleanText}
+          </Text>
+        ) : null}
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bgSecondary }]} edges={['top', 'left', 'right']}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={theme.bgPrimary} />
@@ -1474,9 +1784,7 @@ toggleSidebar();
                       : [styles.assistantBubble, { backgroundColor: theme.bgActive, borderColor: theme.borderColor }]
                   ]}
                 >
-                  <Text style={msg.role === 'user' ? styles.userText : [styles.assistantText, { color: theme.textPrimary }]}>
-                    {msg.content}
-                  </Text>
+                  {renderMessageContent(msg.content, msg.role)}
                 </TouchableOpacity>
               );
             })
@@ -1546,73 +1854,87 @@ toggleSidebar();
             </View>
           )}
           <View style={[styles.promptInputCard, isPromptDisabled && styles.promptInputCardDisabled, { backgroundColor: theme.bgInput, borderColor: theme.borderColor }]}>
-            <TextInput
-              ref={promptInputRef}
-              style={[styles.promptInputText, { color: theme.textPrimary }]}
-              editable={!isPromptDisabled}
-              placeholder={isPromptDisabled ? "Preparing workspace..." : "Ask anything, @ to mention, / for actions"}
-              placeholderTextColor={theme.textMuted}
-              value={inputText}
-              selection={inputSelection}
-              onChangeText={setInputText}
-              onSelectionChange={(event) => {
-                inputSelectionRef.current = event.nativeEvent.selection;
-                setInputSelection(event.nativeEvent.selection);
-              }}
-              multiline
-            />
-
-            {/* Tools Row inside prompt card */}
-            <View style={styles.promptToolRow}>
-              <View style={styles.toolRowLeft}>
-                <TouchableOpacity
-                  style={[styles.toolBtn, { backgroundColor: isPlusModalOpen ? theme.accent : theme.bgSecondary }]}
-                  onPress={() => setIsPlusModalOpen(true)}
-                  disabled={uploadingMedia || isPromptDisabled}
-                >
-                  {uploadingMedia ? (
-                    <ActivityIndicator size="small" color={theme.textSecondary} />
-                  ) : (
-                    <Text style={{ color: isPlusModalOpen ? '#ffffff' : theme.textSecondary, fontSize: 16 }}>＋</Text>
-                  )}
-                </TouchableOpacity>
-
-                {/* Model Selector Dropdown */}
-                <TouchableOpacity
-                  style={[styles.modelPickerBtn, { backgroundColor: theme.bgSecondary }]}
-                  onPress={() => setIsModelModalOpen(true)}
-                  disabled={isPromptDisabled}
-                >
-                  <Text style={[styles.modelPickerText, { color: theme.textPrimary }]}>{selectedModel}</Text>
-                  <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
+            {isRecordingAudio ? (
+              <View style={styles.recordingPanel}>
+                <View style={styles.recordingIndicatorContainer}>
+                  <View style={styles.recordingDot} />
+                  <Text style={[styles.recordingText, { color: theme.textPrimary }]}>Recording Voice Note...</Text>
+                </View>
+                <TouchableOpacity style={[styles.stopRecordBtn, { backgroundColor: '#ef4444' }]} onPress={stopAudioRecording}>
+                  <Text style={styles.stopRecordBtnText}>Stop & Attach</Text>
                 </TouchableOpacity>
               </View>
+            ) : (
+              <>
+                <TextInput
+                  ref={promptInputRef}
+                  style={[styles.promptInputText, { color: theme.textPrimary }]}
+                  editable={!isPromptDisabled}
+                  placeholder={isPromptDisabled ? "Preparing workspace..." : "Ask anything, @ to mention, / for actions"}
+                  placeholderTextColor={theme.textMuted}
+                  value={inputText}
+                  selection={inputSelection}
+                  onChangeText={setInputText}
+                  onSelectionChange={(event) => {
+                    inputSelectionRef.current = event.nativeEvent.selection;
+                    setInputSelection(event.nativeEvent.selection);
+                  }}
+                  multiline
+                />
 
-              <View style={styles.toolRowRight}>
-                <TouchableOpacity
-                  style={[
-                    styles.toolBtn,
-                    styles.voiceToolBtn,
-                    { backgroundColor: isVoiceRecording ? theme.accent : theme.bgSecondary },
-                  ]}
-                  onPress={handleToggleVoiceInput}
-                  disabled={isPromptDisabled}
-                >
-                  {isVoiceRecording ? (
-                    renderVoiceListeningIndicator()
-                  ) : (
-                    <Text style={{ color: theme.textSecondary, fontSize: 14 }}>🎤</Text>
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.sendBtnRound, isPromptDisabled && styles.sendBtnDisabled, { backgroundColor: theme.accent }]}
-                  onPress={handleSend}
-                  disabled={isPromptDisabled}
-                >
-                  <Text style={styles.sendIcon}>➤</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+                {/* Tools Row inside prompt card */}
+                <View style={styles.promptToolRow}>
+                  <View style={styles.toolRowLeft}>
+                    <TouchableOpacity
+                      style={[styles.toolBtn, { backgroundColor: isPlusModalOpen ? theme.accent : theme.bgSecondary }]}
+                      onPress={() => setIsPlusModalOpen(true)}
+                      disabled={uploadingMedia || isPromptDisabled}
+                    >
+                      {uploadingMedia ? (
+                        <ActivityIndicator size="small" color={theme.textSecondary} />
+                      ) : (
+                        <Text style={{ color: isPlusModalOpen ? '#ffffff' : theme.textSecondary, fontSize: 16 }}>＋</Text>
+                      )}
+                    </TouchableOpacity>
+
+                    {/* Model Selector Dropdown */}
+                    <TouchableOpacity
+                      style={[styles.modelPickerBtn, { backgroundColor: theme.bgSecondary }]}
+                      onPress={() => setIsModelModalOpen(true)}
+                      disabled={isPromptDisabled}
+                    >
+                      <Text style={[styles.modelPickerText, { color: theme.textPrimary }]}>{selectedModel}</Text>
+                      <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.toolRowRight}>
+                    <TouchableOpacity
+                      style={[
+                        styles.toolBtn,
+                        styles.voiceToolBtn,
+                        { backgroundColor: isVoiceRecording ? theme.accent : theme.bgSecondary },
+                      ]}
+                      onPress={handleToggleVoiceInput}
+                      disabled={isPromptDisabled}
+                    >
+                      {isVoiceRecording ? (
+                        renderVoiceListeningIndicator()
+                      ) : (
+                        <Text style={{ color: theme.textSecondary, fontSize: 14 }}>🎤</Text>
+                      )}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.sendBtnRound, isPromptDisabled && styles.sendBtnDisabled, { backgroundColor: theme.accent }]}
+                      onPress={handleSend}
+                      disabled={isPromptDisabled}
+                    >
+                      <Text style={styles.sendIcon}>➤</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </>
+            )}
           </View>
 
           {/* Bottom Row under Prompt Card */}
@@ -1691,11 +2013,35 @@ toggleSidebar();
               </TouchableOpacity>
             </View>
             <View style={styles.bottomSheetContent}>
-              <TouchableOpacity style={styles.contextMenuItem} onPress={handleAddMediaContext} disabled={uploadingMedia}>
-                <Text style={[styles.contextMenuIcon, { color: theme.textSecondary }]}>▧</Text>
+              <TouchableOpacity style={styles.contextMenuItem} onPress={handleCameraCapture} disabled={uploadingMedia}>
+                <Text style={[styles.contextMenuIcon, { color: theme.textSecondary }]}>📷</Text>
                 <View style={styles.contextMenuTextBlock}>
-                  <Text style={[styles.contextMenuTitle, { color: theme.textPrimary }]}>Media</Text>
-                  <Text style={[styles.contextMenuDesc, { color: theme.textSecondary }]}>Attach an image to this conversation</Text>
+                  <Text style={[styles.contextMenuTitle, { color: theme.textPrimary }]}>Camera</Text>
+                  <Text style={[styles.contextMenuDesc, { color: theme.textSecondary }]}>Take a photo or capture a video</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.contextMenuItem} onPress={handleGalleryPick} disabled={uploadingMedia}>
+                <Text style={[styles.contextMenuIcon, { color: theme.textSecondary }]}>🖼</Text>
+                <View style={styles.contextMenuTextBlock}>
+                  <Text style={[styles.contextMenuTitle, { color: theme.textPrimary }]}>Gallery</Text>
+                  <Text style={[styles.contextMenuDesc, { color: theme.textSecondary }]}>Choose images or videos from library</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.contextMenuItem} onPress={handleDocumentPick} disabled={uploadingMedia}>
+                <Text style={[styles.contextMenuIcon, { color: theme.textSecondary }]}>📄</Text>
+                <View style={styles.contextMenuTextBlock}>
+                  <Text style={[styles.contextMenuTitle, { color: theme.textPrimary }]}>Document</Text>
+                  <Text style={[styles.contextMenuDesc, { color: theme.textSecondary }]}>Attach a PDF, code, or other text file</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.contextMenuItem} onPress={startAudioRecording} disabled={uploadingMedia}>
+                <Text style={[styles.contextMenuIcon, { color: theme.textSecondary }]}>🎤</Text>
+                <View style={styles.contextMenuTextBlock}>
+                  <Text style={[styles.contextMenuTitle, { color: theme.textPrimary }]}>Voice Note</Text>
+                  <Text style={[styles.contextMenuDesc, { color: theme.textSecondary }]}>Record and attach audio message</Text>
                 </View>
               </TouchableOpacity>
 
@@ -2148,6 +2494,132 @@ toggleSidebar();
 }
 
 const styles = StyleSheet.create({
+  chatImage: {
+    width: '100%',
+    height: 180,
+    borderRadius: 8,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  videoContainer: {
+    width: '100%',
+    height: 120,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginTop: 4,
+    marginBottom: 4,
+    backgroundColor: '#000000',
+  },
+  videoPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 12,
+  },
+  playIcon: {
+    fontSize: 28,
+    color: '#ffffff',
+    marginBottom: 6,
+  },
+  videoText: {
+    fontSize: 12,
+    color: '#ffffff',
+    textAlign: 'center',
+  },
+  audioPlayer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 4,
+    marginBottom: 4,
+    gap: 12,
+  },
+  audioPlayButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  audioInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  audioTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  progressBarBg: {
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  audioTime: {
+    fontSize: 10,
+  },
+  documentContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 4,
+    marginBottom: 4,
+    gap: 12,
+  },
+  documentIcon: {
+    fontSize: 24,
+  },
+  documentName: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  documentActionText: {
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  recordingPanel: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    width: '100%',
+  },
+  recordingIndicatorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  recordingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#ef4444',
+  },
+  recordingText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  stopRecordBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  stopRecordBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   container: {
     flex: 1,
   },

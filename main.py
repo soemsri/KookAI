@@ -248,6 +248,9 @@ chat_tasks_lock = threading.Lock()
 # Multi-step interview logic for /grill-me
 interview_states = {} # conversation_id -> current_question_index
 
+# Pending media uploads for the next message (actual_cid -> list of absolute file paths)
+pending_media = {}
+
 DEFAULT_INTERVIEW_QUESTIONS = [
     {
         "type": "question",
@@ -782,8 +785,6 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
     logging.info(f"Executing agy CLI in {cwd_path}: {' '.join(cmd)}")
     
     try:
-        if progress_callback:
-            progress_callback("progress", f"Starting agy CLI in {cwd_path}.")
         result = run_agy_command(cmd, cwd_path, timeout=120, progress_callback=progress_callback)
         
         # Check stderr and stdout; agy can report conversation failures with exit code 0.
@@ -960,6 +961,16 @@ async def get_conversation_details(cid: str, request: Request):
             "role": m["role"],
             "content": content
         })
+
+    # Add virtual messages for pending media that have been uploaded but not yet sent in a prompt
+    actual_cid = convo_id_mapping.get(cid, cid)
+    pending_list = pending_media.get(actual_cid, [])
+    for p in pending_list:
+        processed_messages.append({
+            "role": "user",
+            "content": f"![Attached Image](/api/media?path={urllib.parse.quote(p)})"
+        })
+
     return JSONResponse(content={"messages": processed_messages, "project": project})
 
 def build_chat_response(request: ChatRequest, progress_callback=None):
@@ -970,6 +981,19 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     conversation_id = request.conversation_id
 
     actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
+    
+    # Prepend any pending media files to the message
+    attached_media = pending_media.pop(actual_cid, [])
+    if attached_media:
+        media_md = "\n".join([f"![Attached Image](file://{p})" for p in attached_media])
+        # User visible message in the chat
+        user_visible_message = media_md + "\n\n" + message
+        # Message sent to the CLI with instructions for agy
+        media_instrs = "\n".join([f"[Attached Media File: {p}]\nPlease use your view_file tool to view/analyze this media file if needed." for p in attached_media])
+        message = user_visible_message + "\n\n" + media_instrs
+    else:
+        user_visible_message = message
+
     msg_lower = message.strip().lower()
 
     if msg_lower.startswith("/grill-me"):
@@ -1167,7 +1191,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     if resolved_cid not in in_memory_chats:
         in_memory_chats[resolved_cid] = []
 
-    in_memory_chats[resolved_cid].append({"role": "user", "content": message})
+    in_memory_chats[resolved_cid].append({"role": "user", "content": user_visible_message})
     in_memory_chats[resolved_cid].append({"role": "assistant", "content": reply})
 
     processed_reply = reply.replace("file:///", "/api/media?path=/")
@@ -1291,7 +1315,13 @@ async def upload_media_endpoint(conversation_id: str, filename: str, request: Re
         with open(target_path, "wb") as f:
             f.write(content)
         logging.info(f"Successfully uploaded media file: {target_path}")
-        return JSONResponse(content={"status": "success", "filename": target_filename})
+        
+        # Add to pending media list
+        if actual_cid not in pending_media:
+            pending_media[actual_cid] = []
+        pending_media[actual_cid].append(target_path)
+        
+        return JSONResponse(content={"status": "success", "filename": target_filename, "path": target_path})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
