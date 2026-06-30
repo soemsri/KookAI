@@ -1,0 +1,7 @@
+name = "antigravity-pairing-broker"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "REGISTRY"
+id = "91afbd3fb1384b1f91f8855cb588e8c2"

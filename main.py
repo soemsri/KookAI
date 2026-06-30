@@ -1,0 +1,1260 @@
+import os
+import uvicorn
+import subprocess
+import logging
+import glob
+import re
+import json
+import uuid
+import queue
+import urllib.parse
+import datetime
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, FileResponse
+from pydantic import BaseModel
+from typing import List, Optional
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+
+app = FastAPI(title="AGY Workspace Chat Client")
+
+# Ensure static directory exists
+os.makedirs("static", exist_ok=True)
+
+import socket
+import threading
+import random
+
+# Persistent Host ID retrieval
+def get_or_create_host_id():
+    path = "/Users/kai/.gemini/antigravity/host_id.txt"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return f.read().strip()
+    host_id = f"host_kai_{uuid.uuid4().hex[:12]}"
+    with open(path, "w") as f:
+        f.write(host_id)
+    return host_id
+
+# Global state for dynamic URL
+public_url = ""
+local_ip_addr = ""
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+# Worker dynamic registry URL
+REGISTRY_WORKER_URL = os.environ.get("REGISTRY_WORKER_URL", "https://antigravity-pairing-broker.rangsarn.workers.dev")
+
+def start_localtunnel():
+    global public_url, local_ip_addr
+    local_ip_addr = get_local_ip()
+    host_id = get_or_create_host_id()
+    
+    cmd = ["npx", "localtunnel", "--port", "8080"]
+    logging.info("Starting localtunnel...")
+    
+    def run_tunnel():
+        global public_url
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            for line in iter(proc.stdout.readline, ''):
+                if "your url is:" in line.lower():
+                    url_match = re.search(r'https?://[^\s]+', line)
+                    if url_match:
+                        public_url = url_match.group(0).strip()
+                        logging.info(f"Localtunnel started successfully! Public URL: {public_url}")
+                        # Update Worker Registry
+                        update_registry(host_id, public_url, local_ip_addr)
+            proc.wait()
+        except Exception as e:
+            logging.error(f"Error running localtunnel: {e}")
+        
+    threading.Thread(target=run_tunnel, daemon=True).start()
+
+def update_registry(host_id, url, local_ip):
+    import urllib.request
+    import json
+    data = {
+        "host_id": host_id,
+        "url": url,
+        "local_ip": local_ip
+    }
+    req = urllib.request.Request(
+        f"{REGISTRY_WORKER_URL}/update-host",
+        data=json.dumps(data).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
+        method="POST"
+    )
+    import ssl
+    context = ssl._create_unverified_context()
+    try:
+        with urllib.request.urlopen(req, timeout=5, context=context) as res:
+            logging.info(f"Updated host URL on Worker Registry: {res.read().decode().strip()}")
+    except Exception as e:
+        logging.error(f"Failed to update registry: {e}")
+
+# Global active pairing pins mapping: pin -> expiry
+active_pins = {}
+
+# Authorized devices (device_uuid -> device_name)
+AUTHORIZED_DEVICES_FILE = "/Users/kai/.gemini/antigravity/authorized_devices.json"
+authorized_devices = {}
+
+if os.path.exists(AUTHORIZED_DEVICES_FILE):
+    try:
+        with open(AUTHORIZED_DEVICES_FILE, "r") as f:
+            authorized_devices = json.load(f)
+    except:
+        pass
+
+def save_authorized_devices():
+    with open(AUTHORIZED_DEVICES_FILE, "w") as f:
+        json.dump(authorized_devices, f)
+
+# Helper to verify device authorization
+def verify_authorization(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        for dev_uuid, dev_info in authorized_devices.items():
+            if dev_info.get("token") == token:
+                return True
+        raise HTTPException(status_code=401, detail="Unauthorized device token")
+    
+    # Allow localhost requests without token
+    client_host = request.client.host if request.client else ""
+    if client_host in ["127.0.0.1", "localhost", "::1"]:
+        return True
+    
+    raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+
+class PairRequest(BaseModel):
+    device_name: str
+    pin: str
+    device_uuid: str
+
+@app.on_event("startup")
+async def startup_event():
+    start_localtunnel()
+
+@app.get("/api/pairing-code")
+async def get_pairing_code():
+    host_id = get_or_create_host_id()
+    pin = f"{random.randint(100000, 999999)}"
+    expiry = int(datetime.datetime.now().timestamp()) + 120
+    active_pins[pin] = expiry
+    
+    # Register pin on worker KV
+    import urllib.request
+    import json
+    host_url = public_url or f"http://{local_ip_addr}:8080"
+    data = {
+        "pin": pin,
+        "host_id": host_id,
+        "url": host_url,
+        "local_ip": local_ip_addr
+    }
+    req = urllib.request.Request(
+        f"{REGISTRY_WORKER_URL}/register-pin",
+        data=json.dumps(data).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
+        method="POST"
+    )
+    import ssl
+    context = ssl._create_unverified_context()
+    try:
+        with urllib.request.urlopen(req, timeout=5, context=context) as res:
+            logging.info(f"Registered pairing PIN {pin} on Worker Registry.")
+    except Exception as e:
+        logging.error(f"Failed to register pairing PIN: {e}")
+        
+    return JSONResponse(content={"pin": pin, "host_id": host_id, "pairing_url": host_url})
+
+@app.post("/api/pair")
+async def pair_device(req: PairRequest):
+    pin = req.pin.strip()
+    now = int(datetime.datetime.now().timestamp())
+    if pin not in active_pins or active_pins[pin] < now:
+        raise HTTPException(status_code=403, detail="PIN expired or invalid")
+        
+    device_uuid = req.device_uuid
+    token = uuid.uuid4().hex
+    authorized_devices[device_uuid] = {
+        "name": req.device_name,
+        "paired_at": now,
+        "token": token
+    }
+    save_authorized_devices()
+    del active_pins[pin]
+    
+    return JSONResponse(content={
+        "status": "success",
+        "token": token,
+        "host_id": get_or_create_host_id()
+    })
+
+class ChatRequest(BaseModel):
+    message: str
+    model: str
+    workspace: str
+    target: str
+    conversation_id: str
+
+# Temp UUID to actual conversation ID mapping
+convo_id_mapping = {}
+
+# In-memory session message cache (stores active tab sessions)
+in_memory_chats = {}
+
+# Background chat task state for polling progress while agy is still running.
+chat_tasks = {}
+chat_tasks_lock = threading.Lock()
+
+# Multi-step interview logic for /grill-me
+interview_states = {} # conversation_id -> current_question_index
+
+INTERVIEW_QUESTIONS = [
+    {
+        "type": "question",
+        "question": "Should we add a manual Light/Dark mode toggle switch to the web app, or should it continue to strictly follow your macOS system settings?",
+        "options": [
+            "(Recommended) Add a manual Light/Dark mode toggle switch in the UI (e.g. next to Settings or Header) for full user control.",
+            "Keep the current behavior where the theme strictly follows the macOS system settings."
+        ],
+        "allow_other": True
+    },
+    {
+        "type": "question",
+        "question": "What type of transition animations would you prefer when navigation panels are switched or loaded?",
+        "options": [
+            "(Recommended) Smooth, premium slide-and-fade animations.",
+            "Instant switching (no animations) for maximum speed and simplicity."
+        ],
+        "allow_other": True
+    },
+    {
+        "type": "question",
+        "question": "How would you like the sidebar list to organize nested conversations under each project?",
+        "options": [
+            "(Recommended) Display only the 5 most recent conversations, with a \"See all\" button.",
+            "Show all conversations in a single scrollable list under each project folder."
+        ],
+        "allow_other": True
+    }
+]
+
+# Mock seed conversations to match user screenshot layout on startup
+SEED_CONVERSATIONS = [
+    {
+        "id": "mock-vo-1",
+        "title": "การใช้งาน Obsidian ร่วมกับโปรเจกต์",
+        "project": "VirtualOffice",
+        "timestamp": 1782631546.0,
+        "messages": [
+            {"role": "user", "content": "ขอตัวอย่างการใช้งาน Obsidian ในโปรเจกต์นี้หน่อย"},
+            {"role": "assistant", "content": "การใช้งาน Obsidian ร่วมกับโปรเจกต์มีขั้นตอนดังนี้ครับ:\n\n1. **ติดตั้ง Obsidian** และเปิดโฟลเดอร์คู่มือ\n2. **ใช้หน้าเทมเพลต** สำหรับบันทึกความคืบหน้างาน\n3. **สร้างลิงก์เชื่อมโยง** ไปยังไฟล์โครงสร้างในโครงการเพื่อความสะดวกรวดเร็ว"}
+        ]
+    },
+    {
+        "id": "mock-vo-2",
+        "title": "Fixing Camera Zoom Bug",
+        "project": "VirtualOffice",
+        "timestamp": 1782631536.0,
+        "messages": [
+            {"role": "user", "content": "Camera zoom is bugged on Android device."},
+            {"role": "assistant", "content": "Let's inspect the camera controller to fix the zoom bounds on Android."}
+        ]
+    },
+    {
+        "id": "mock-vo-3",
+        "title": "### เปรียบเทียบแนวทางลดต้นทุน AI Agent",
+        "project": "VirtualOffice",
+        "timestamp": 1782631526.0,
+        "messages": [
+            {"role": "user", "content": "เปรียบเทียบแนวทางประหยัดงบสำหรับรัน AI Agent"},
+            {"role": "assistant", "content": "แนวทางการลดต้นทุนรัน AI Agent:\n- **Caching**: เก็บผลการเรียกซ้ำ\n- **Model Routing**: เลือกใช้โมเดลเล็กสำหรับงานง่าย\n- **Token Truncation**: ควบคุมประวัติแชท"}
+        ]
+    },
+    {
+        "id": "mock-vo-4",
+        "title": "Analyzing Risk Agent DeepSeek Requests",
+        "project": "VirtualOffice",
+        "timestamp": 1782631516.0,
+        "messages": [
+            {"role": "user", "content": "Analyze risk parameters for DeepSeek API requests"},
+            {"role": "assistant", "content": "Analysis of DeepSeek API usage shows no token leaks. Recommended rate limits are set."}
+        ]
+    },
+    {
+        "id": "mock-vo-5",
+        "title": "Rebacktesting Failed Strategies",
+        "project": "VirtualOffice",
+        "timestamp": 1782631506.0,
+        "messages": []
+    },
+    {
+        "id": "mock-vo-6",
+        "title": "กด connect แล้วก็เงียบไปเลย",
+        "project": "VirtualOffice",
+        "timestamp": 1782631496.0,
+        "messages": []
+    },
+    {
+        "id": "mock-vo-7",
+        "title": "Debugging Production Remote Desktop",
+        "project": "VirtualOffice",
+        "timestamp": 1782631486.0,
+        "messages": []
+    }
+]
+
+# Helper: Get all database file names (conversation IDs) in antigravity folders
+def get_existing_db_ids():
+    db_paths = [
+        "/Users/kai/.gemini/antigravity-cli/conversations/*.db",
+        "/Users/kai/.gemini/antigravity/conversations/*.db"
+    ]
+    ids = set()
+    for pattern in db_paths:
+        for f in glob.glob(pattern):
+            ids.add(os.path.basename(f)[:-3])
+    return ids
+
+# Helper: Resolve display name for projects
+def clean_project_name(path_name: str) -> str:
+    if path_name == "GinRaiD":
+        return "GinRaiDee"
+    return path_name
+
+# Helper: Get list of projects on Desktop (Dynamic list of folders)
+def get_desktop_projects():
+    desktop_path = "/Users/kai/Desktop"
+    projects = ["agy", "VirtualOffice", "GinRaiDee", "HumanRelation"] # Default minimum set
+    if os.path.exists(desktop_path):
+        for entry in os.listdir(desktop_path):
+            full_path = os.path.join(desktop_path, entry)
+            if os.path.isdir(full_path) and not entry.startswith('.'):
+                cleaned = clean_project_name(entry)
+                if cleaned not in projects:
+                    projects.append(cleaned)
+    return projects
+
+def resolve_project_directory(project_id: str) -> str:
+    desktop_path = "/Users/kai/Desktop"
+    direct_path = os.path.join(desktop_path, project_id)
+    if os.path.exists(direct_path):
+        return direct_path
+    if os.path.exists(desktop_path):
+        for entry in os.listdir(desktop_path):
+            full_path = os.path.join(desktop_path, entry)
+            if os.path.isdir(full_path) and clean_project_name(entry) == project_id:
+                return full_path
+    return "/Users/kai/Desktop/agy"
+
+def get_conversation_project(conversation_id: str) -> Optional[str]:
+    hist_paths = [
+        "/Users/kai/.gemini/antigravity-cli/history.jsonl",
+        "/Users/kai/.gemini/antigravity/history.jsonl"
+    ]
+    for hist_path in hist_paths:
+        if not os.path.exists(hist_path):
+            continue
+        try:
+            with open(hist_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    try:
+                        data = json.loads(line.strip())
+                        if data.get("conversationId") == conversation_id:
+                            workspace_path = data.get("workspace", "")
+                            if workspace_path:
+                                return clean_project_name(os.path.basename(workspace_path))
+                    except:
+                        pass
+        except:
+            pass
+    return None
+
+def infer_project_from_conversation_artifacts(folder: str) -> Optional[str]:
+    desktop_prefix = "/Users/kai/Desktop/"
+    candidates = {}
+    artifact_patterns = [
+        os.path.join(folder, ".system_generated/tasks/*.log"),
+        os.path.join(folder, ".system_generated/messages/*.json"),
+    ]
+
+    for pattern in artifact_patterns:
+        for artifact_path in glob.glob(pattern):
+            try:
+                with open(artifact_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            for match in re.finditer(r"/Users/kai/Desktop/([A-Za-z0-9._ -]+)", content):
+                raw_name = match.group(1).split("/")[0].strip()
+                if not raw_name or raw_name.startswith("."):
+                    continue
+                project = clean_project_name(raw_name)
+                candidates[project] = candidates.get(project, 0) + 1
+
+    if not candidates:
+        return None
+    return max(candidates.items(), key=lambda item: item[1])[0]
+
+# Helper: Parse local conversation transcripts from brain folders
+def get_real_conversations():
+    brain_paths = [
+        "/Users/kai/.gemini/antigravity-cli/brain/*",
+        "/Users/kai/.gemini/antigravity/brain/*"
+    ]
+    
+    # Map conversationId -> project using history.jsonl if possible
+    cid_to_project = {}
+    hist_paths = [
+        "/Users/kai/.gemini/antigravity-cli/history.jsonl",
+        "/Users/kai/.gemini/antigravity/history.jsonl"
+    ]
+    for hist_path in hist_paths:
+        if os.path.exists(hist_path):
+            with open(hist_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    try:
+                        data = json.loads(line.strip())
+                        cid = data.get("conversationId")
+                        workspace = data.get("workspace", "")
+                        if cid and workspace:
+                            pname = os.path.basename(workspace)
+                            cid_to_project[cid] = clean_project_name(pname)
+                    except:
+                        pass
+
+    conversations = []
+    
+    for path_pattern in brain_paths:
+        for folder in glob.glob(path_pattern):
+            cid = os.path.basename(folder)
+            transcript_path = os.path.join(folder, ".system_generated/logs/transcript_full.jsonl")
+            if not os.path.exists(transcript_path):
+                transcript_path = os.path.join(folder, ".system_generated/logs/transcript.jsonl")
+            if not os.path.exists(transcript_path):
+                continue
+                
+            # Scan media folder artifacts for this conversation
+            media_files = []
+            transcript_project = None
+            for fpath in glob.glob(os.path.join(folder, "media__*")):
+                try:
+                    ts_part = os.path.basename(fpath).split("__")[1].split(".")[0]
+                    media_files.append((fpath, float(ts_part) / 1000.0))
+                except:
+                    pass
+            media_files.sort(key=lambda x: x[1])
+
+            messages = []
+            try:
+                mtime = os.path.getmtime(transcript_path)
+                prev_user_ts = 0.0
+                with open(transcript_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            step = json.loads(line.strip())
+                            stype = step.get("type")
+                            scontent = step.get("content", "")
+                            
+                            if stype == "USER_INPUT" and scontent:
+                                created_str = step.get("created_at")
+                                try:
+                                    dt = datetime.datetime.strptime(created_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+                                    ts = dt.timestamp()
+                                except:
+                                    ts = mtime
+                                
+                                # Match media files by timestamp correlation
+                                step_media = []
+                                for mpath, mts in media_files:
+                                    if prev_user_ts < mts <= (ts + 10.0):
+                                        step_media.append(mpath)
+                                
+                                match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", scontent, re.DOTALL)
+                                prompt = match.group(1).strip() if match else scontent.strip()
+                                context_match = re.match(
+                                    r"Selected Antigravity project/workspace:\s*(.*?)\n"
+                                    r"Workspace directory:\s*(.*?)\n\n"
+                                    r"User message:\n(.*)\Z",
+                                    prompt,
+                                    re.DOTALL
+                                )
+                                if context_match:
+                                    transcript_project = clean_project_name(context_match.group(1).strip())
+                                    prompt = context_match.group(3).strip()
+                                
+                                media_md = ""
+                                if step_media:
+                                    media_md = "\n".join([f"![Attached Image](file://{p})" for p in step_media]) + "\n\n"
+                                    
+                                messages.append({
+                                    "role": "user", 
+                                    "content": media_md + prompt
+                                })
+                                prev_user_ts = ts
+                            elif stype == "PLANNER_RESPONSE" and scontent:
+                                messages.append({"role": "assistant", "content": scontent.strip()})
+                        except:
+                            pass
+                
+                if messages:
+                    # Strip markdown tags to form title if needed
+                    raw_title = messages[0]["content"]
+                    # If it starts with images, strip them for the sidebar title preview
+                    clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", raw_title).strip()
+                    if not clean_title:
+                        clean_title = "Image Attachment"
+                    if len(clean_title) > 40:
+                        clean_title = clean_title[:40] + "..."
+                        
+                    project = (
+                        transcript_project
+                        or infer_project_from_conversation_artifacts(folder)
+                        or cid_to_project.get(cid, "agy")
+                    )
+                    
+                    conversations.append({
+                        "id": cid,
+                        "title": clean_title,
+                        "project": project,
+                        "timestamp": mtime,
+                        "messages": messages
+                    })
+            except Exception as e:
+                logging.error(f"Error parsing conversation {cid}: {e}")
+                
+    conversations.sort(key=lambda x: x["timestamp"], reverse=True)
+    return conversations
+
+# Map model string to agy supported string
+def map_model_name(model_ui_name: str) -> str:
+    # agy CLI accepts exact model names (e.g. "Gemini 3.5 Flash (High)", "Claude Sonnet 4.6 (Thinking)")
+    return model_ui_name
+
+# Helper: Kill processes locking the sqlite database or executing agy for this conversation
+def kill_processes_locking_db(conversation_id: str):
+    db_files = [
+        f"/Users/kai/.gemini/antigravity/conversations/{conversation_id}.db",
+        f"/Users/kai/.gemini/antigravity-cli/conversations/{conversation_id}.db"
+    ]
+    for db_path in db_files:
+        if not os.path.exists(db_path):
+            continue
+        try:
+            # 1. Kill via lsof
+            res = subprocess.run(["lsof", "-t", db_path], capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                pids = res.stdout.strip().split()
+                for pid_str in pids:
+                    try:
+                        pid = int(pid_str)
+                        if pid != os.getpid():
+                            logging.info(f"Killing process {pid} locking database {db_path}")
+                            os.kill(pid, 9)
+                    except Exception as e:
+                        logging.error(f"Failed to kill locking process {pid_str}: {e}")
+        except Exception as e:
+            logging.error(f"Error running lsof for DB {db_path}: {e}")
+            
+    # 2. Kill via ps scan for agy CLI processes containing conversation ID
+    try:
+        ps_res = subprocess.run(["ps", "-ef"], capture_output=True, text=True, timeout=5)
+        if ps_res.returncode == 0:
+            for line in ps_res.stdout.splitlines():
+                if "agy" in line and conversation_id in line:
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        try:
+                            pid = int(parts[1])
+                            if pid != os.getpid():
+                                logging.info(f"Killing matching agy process {pid} from ps output: {line}")
+                                os.kill(pid, 9)
+                        except Exception as e:
+                            pass
+    except Exception as e:
+        logging.error(f"Error running ps to scan for agy processes: {e}")
+
+# Helper: Run agy with conversation ID
+def classify_cli_progress_line(source: str, line: str):
+    clean = (line or "").strip()
+    if not clean:
+        return None
+
+    lower = clean.lower()
+    error_terms = (
+        "error", "failed", "failure", "exception", "traceback", "timeout",
+        "denied", "unauthorized", "forbidden", "not found", "locked",
+        "invalid", "cannot", "could not", "warning", "warn"
+    )
+    progress_terms = (
+        "running", "executing", "starting", "started", "retry", "fallback",
+        "planning", "thinking", "analyzing", "processing", "reading",
+        "writing", "editing", "patch", "tool", "command", "install",
+        "download", "build", "test", "lint", "complete", "completed",
+        "finished", "done", "created", "updated", "saved", "%"
+    )
+    progress_prefixes = (
+        "running", "executing", "starting", "started", "retrying",
+        "planning", "thinking", "analyzing", "processing", "reading",
+        "writing", "editing", "installing", "downloading", "building",
+        "testing", "linting", "completed", "finished"
+    )
+
+    if any(term in lower for term in error_terms):
+        return {"type": "error", "message": clean}
+    if source == "stderr" and any(term in lower for term in progress_terms):
+        return {"type": "progress", "message": clean}
+    if any(lower.startswith(prefix) for prefix in progress_prefixes):
+        return {"type": "progress", "message": clean}
+    if "%" in lower and any(char.isdigit() for char in lower):
+        return {"type": "progress", "message": clean}
+    if source == "stderr" and len(clean) <= 180:
+        return {"type": "progress", "message": clean}
+    return None
+
+def run_agy_command(cmd, cwd_path, timeout=120, progress_callback=None):
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        cwd=cwd_path
+    )
+    output_queue = queue.Queue()
+    stdout_lines = []
+    stderr_lines = []
+
+    def reader(pipe, source, sink):
+        try:
+            for line in iter(pipe.readline, ""):
+                sink.append(line)
+                output_queue.put((source, line.rstrip("\n")))
+        finally:
+            pipe.close()
+
+    stdout_thread = threading.Thread(target=reader, args=(proc.stdout, "stdout", stdout_lines), daemon=True)
+    stderr_thread = threading.Thread(target=reader, args=(proc.stderr, "stderr", stderr_lines), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
+    start_time = datetime.datetime.now().timestamp()
+    while proc.poll() is None or not output_queue.empty():
+        try:
+            source, line = output_queue.get(timeout=0.2)
+            event = classify_cli_progress_line(source, line)
+            if event and progress_callback:
+                progress_callback(event["type"], event["message"])
+        except queue.Empty:
+            pass
+
+        if proc.poll() is None and datetime.datetime.now().timestamp() - start_time > timeout:
+            proc.kill()
+            stdout_thread.join(timeout=1)
+            stderr_thread.join(timeout=1)
+            raise subprocess.TimeoutExpired(
+                cmd,
+                timeout,
+                output="".join(stdout_lines),
+                stderr="".join(stderr_lines)
+            )
+
+    stdout_thread.join(timeout=1)
+    stderr_thread.join(timeout=1)
+
+    while not output_queue.empty():
+        source, line = output_queue.get()
+        event = classify_cli_progress_line(source, line)
+        if event and progress_callback:
+            progress_callback(event["type"], event["message"])
+
+    return subprocess.CompletedProcess(
+        cmd,
+        proc.returncode,
+        stdout="".join(stdout_lines),
+        stderr="".join(stderr_lines)
+    )
+
+def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: str = "Sandbox", workspace: str = "agy", progress_callback=None):
+    mapped_model = map_model_name(model_ui_name)
+    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    cwd_path = resolve_project_directory(project_id)
+    message_with_context = (
+        f"Selected Antigravity project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+
+    def command_output(result):
+        return "\n".join(part for part in [
+            (result.stderr or "").strip(),
+            (result.stdout or "").strip()
+        ] if part)
+
+    def is_recoverable_conversation_error(result):
+        output = command_output(result).lower()
+        return (
+            "trajectory not found" in output
+            or "failed to send message" in output
+            or "conversation not found" in output
+            or "database is locked" in output
+            or "locked" in output
+        )
+    
+    # Resolve temporary frontend ID if mapped
+    mapping_key = f"{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+    
+    # Get current DB list before running command
+    before_dbs = get_existing_db_ids()
+    
+    # Decide if we continue an existing conversation
+    use_continue = actual_cid in before_dbs
+    if use_continue:
+        existing_project = get_conversation_project(actual_cid)
+        if existing_project and existing_project != project_id:
+            logging.info(f"Conversation {actual_cid} belongs to {existing_project}; starting new conversation in {project_id}.")
+            use_continue = False
+
+    cmd = [
+        "agy", "--print", message_with_context,
+        "--dangerously-skip-permissions",
+        "--model", mapped_model,
+        "--project", project_id,
+        "--add-dir", cwd_path
+    ]
+    
+    # Apply local sandbox constraint
+    if target.lower() in ["local", "local sandbox", "sandbox"]:
+        cmd.append("--sandbox")
+        
+    if use_continue:
+        cmd += ["--conversation", actual_cid, "--continue"]
+    else:
+        # If frontend sent an ID but it is not in the db, let agy generate one
+        pass
+        
+    logging.info(f"Executing agy CLI in {cwd_path}: {' '.join(cmd)}")
+    
+    try:
+        if progress_callback:
+            progress_callback("progress", f"Starting agy CLI in {cwd_path}.")
+        result = run_agy_command(cmd, cwd_path, timeout=120, progress_callback=progress_callback)
+        
+        # Check stderr and stdout; agy can report conversation failures with exit code 0.
+        if result.returncode != 0 or is_recoverable_conversation_error(result):
+            err_msg = command_output(result) or "Unknown error"
+            if is_recoverable_conversation_error(result):
+                logging.info(f"Trajectory {actual_cid} locked or not found. Attempting to kill locking processes...")
+                kill_processes_locking_db(actual_cid)
+                
+                # Wait 500ms for lock to clear
+                import time
+                time.sleep(0.5)
+                
+                logging.info(f"Retrying command after killing locking processes: {' '.join(cmd)}")
+                if progress_callback:
+                    progress_callback("progress", "Retrying after clearing conversation lock.")
+                result = run_agy_command(cmd, cwd_path, timeout=120, progress_callback=progress_callback)
+
+                # If it STILL fails after killing, do fallback to a new conversation
+                if result.returncode != 0 or is_recoverable_conversation_error(result):
+                    err_msg = command_output(result) or "Unknown error"
+                    logging.info(f"Retry failed: {err_msg}. Falling back to a new conversation.")
+                    fallback_cmd = []
+                    skip_next = False
+                    for token in cmd:
+                        if skip_next:
+                            skip_next = False
+                            continue
+                        if token == "--conversation":
+                            skip_next = True
+                            continue
+                        if token == "--continue" or token == "-c":
+                            continue
+                        fallback_cmd.append(token)
+
+                    logging.info(f"Executing fallback agy CLI in {cwd_path}: {' '.join(fallback_cmd)}")
+                    if progress_callback:
+                        progress_callback("progress", "Starting a fresh conversation after retry failed.")
+                    result = run_agy_command(fallback_cmd, cwd_path, timeout=120, progress_callback=progress_callback)
+                    use_continue = False # We've started a new conversation
+        
+        # Scan for new DB ID if we started a new conversation
+        resolved_cid = actual_cid if use_continue else conversation_id
+        if not use_continue:
+            after_dbs = get_existing_db_ids()
+            new_ids = after_dbs - before_dbs
+            if new_ids:
+                resolved_cid = list(new_ids)[0]
+                convo_id_mapping[mapping_key] = resolved_cid
+                logging.info(f"Resolved new conversation ID mapping: {mapping_key} -> {resolved_cid}")
+        
+        if result.returncode == 0 and not is_recoverable_conversation_error(result):
+            return result.stdout.strip(), resolved_cid
+        else:
+            err_msg = command_output(result) or "Unknown error"
+            return f"⚠️ **agy CLI Error (Exit Code {result.returncode})**\n\n```\n{err_msg}\n```", resolved_cid
+            
+    except subprocess.TimeoutExpired:
+        return "⏱️ **Timeout Error**: The request to `agy` CLI exceeded the 120-second limit.", actual_cid
+    except Exception as e:
+        return f"❌ **Execution Error**: Failed to run `agy` CLI. Details: `{str(e)}`", actual_cid
+
+# --- Endpoints ---
+
+@app.get("/api/files")
+async def get_files(request: Request):
+    verify_authorization(request)
+    files = []
+    workspace_path = "/Users/kai/Desktop/agy"
+    if os.path.exists(workspace_path):
+        for root, dirs, filenames in os.walk(workspace_path):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for f in filenames:
+                if f.startswith('.'):
+                    continue
+                full_path = os.path.join(root, f)
+                rel_path = os.path.relpath(full_path, workspace_path)
+                try:
+                    size_bytes = os.path.getsize(full_path)
+                    size_label = f"{size_bytes} B"
+                    if size_bytes > 1024 * 1024:
+                        size_label = f"{size_bytes / (1024*1024):.1f} MB"
+                    elif size_bytes > 1024:
+                        size_label = f"{size_bytes / 1024:.1f} KB"
+                except:
+                    size_label = "0 B"
+                ext = os.path.splitext(f)[1]
+                files.append({
+                    "name": rel_path,
+                    "type": ext.upper()[1:] if ext else "FILE",
+                    "size": size_label
+                })
+    return JSONResponse(content={"files": files})
+
+@app.get("/api/projects")
+async def get_projects(request: Request):
+    verify_authorization(request)
+    projects = get_desktop_projects()
+    return JSONResponse(content={"projects": projects})
+
+@app.get("/api/conversations")
+async def get_conversations(request: Request, project: Optional[str] = None):
+    verify_authorization(request)
+    # Retrieve real conversations + seeds
+    real_convos = get_real_conversations()
+    
+    # Merge with seed conversations (avoiding duplicates)
+    seen_titles = {c["title"] for c in real_convos}
+    merged = list(real_convos)
+    
+    for c in SEED_CONVERSATIONS:
+        if c["title"] not in seen_titles:
+            merged.append(c)
+            
+    # Filter by project if supplied
+    if project:
+        merged = [c for c in merged if c["project"] == project]
+        
+    # Sort all by last modified time to match /api/chat-history
+    merged.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+    return JSONResponse(content={"conversations": merged})
+
+@app.get("/api/chat-history")
+async def get_chat_history(request: Request):
+    verify_authorization(request)
+    real_convos = get_real_conversations()
+    seen_titles = {c["title"] for c in real_convos}
+    merged = list(real_convos)
+    for c in SEED_CONVERSATIONS:
+        if c["title"] not in seen_titles:
+            merged.append(c)
+            
+    # Sort all by last modified time
+    merged.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+    return JSONResponse(content={"conversations": merged})
+
+@app.get("/api/conversation/{cid}")
+async def get_conversation_details(cid: str, request: Request):
+    verify_authorization(request)
+    messages = []
+    project = None
+    # First check memory cache
+    if cid in in_memory_chats:
+        messages = in_memory_chats[cid]
+    else:
+        # Check seed conversations
+        for c in SEED_CONVERSATIONS:
+            if c["id"] == cid:
+                messages = c["messages"]
+                project = c.get("project")
+                break
+        else:
+            # Parse actual transcript from folder
+            real_convos = get_real_conversations()
+            for c in real_convos:
+                if c["id"] == cid:
+                    in_memory_chats[cid] = c["messages"]
+                    messages = c["messages"]
+                    project = c.get("project")
+                    break
+
+    if not project:
+        for c in get_real_conversations():
+            if c["id"] == cid:
+                project = c.get("project")
+                break
+
+    processed_messages = []
+    for m in messages:
+        content = m["content"]
+        if "file://" in content:
+            content = content.replace("file:///", "/api/media?path=/")
+        processed_messages.append({
+            "role": m["role"],
+            "content": content
+        })
+    return JSONResponse(content={"messages": processed_messages, "project": project})
+
+def build_chat_response(request: ChatRequest, progress_callback=None):
+    message = request.message
+    model = request.model
+    workspace = request.workspace
+    target = request.target
+    conversation_id = request.conversation_id
+
+    actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
+    msg_lower = message.strip().lower()
+
+    if msg_lower.startswith("/grill-me"):
+        interview_states[actual_cid] = 0
+        reply = json.dumps(INTERVIEW_QUESTIONS[0])
+        resolved_cid = conversation_id
+    elif actual_cid in interview_states:
+        current_idx = interview_states[actual_cid]
+        next_idx = current_idx + 1
+        if next_idx < len(INTERVIEW_QUESTIONS):
+            interview_states[actual_cid] = next_idx
+            reply = json.dumps(INTERVIEW_QUESTIONS[next_idx])
+        else:
+            del interview_states[actual_cid]
+            reply = (
+                "🎉 **Interview Completed!**\n\n"
+                "Thank you for aligning on requirements! I've saved these preferences and will apply them to our design system:\n"
+                f"- **Final Preference**: `{message}`\n"
+                "I will execute the specifications cleanly."
+            )
+            resolved_cid = conversation_id
+    elif msg_lower.startswith("/goal"):
+        reply = (
+            "🎯 **Goal Mode Initiated**\n\n"
+            "I've analyzed your request and set up a target-oriented development plan:\n"
+            "1. **Analyze Requirements**: Deep-dive into user guidelines.\n"
+            "2. **Implement**: Write modular, clean code blocks.\n"
+            "3. **Verify**: Run tests and check edge cases.\n\n"
+            "Let's work together to complete this step-by-step!"
+        )
+        resolved_cid = conversation_id
+    elif msg_lower.startswith("/help"):
+        reply = (
+            "💡 **Available Commands & Help Guide**\n\n"
+            "- `/goal`: Start an extra-thorough, goal-oriented workflow.\n"
+            "- `/browser`: Command browser subagent for web tasks.\n"
+            "- `/grill-me`: Start an interactive design/requirement alignment session.\n"
+            "- `/learn`: Instruct me to remember a specific rule or config.\n"
+            "- `@<filename>`: Reference file context in your message.\n\n"
+            "Using model: **" + model + "** on target **" + target + "** inside workspace **" + workspace + "**."
+        )
+        resolved_cid = conversation_id
+    else:
+        reply, resolved_cid = run_agy_cli(
+            message,
+            model,
+            conversation_id,
+            target,
+            workspace,
+            progress_callback=progress_callback
+        )
+
+    if resolved_cid not in in_memory_chats:
+        in_memory_chats[resolved_cid] = []
+
+    in_memory_chats[resolved_cid].append({"role": "user", "content": message})
+    in_memory_chats[resolved_cid].append({"role": "assistant", "content": reply})
+
+    processed_reply = reply.replace("file:///", "/api/media?path=/")
+    return {
+        "status": "success",
+        "reply": processed_reply,
+        "conversation_id": resolved_cid
+    }
+
+
+def append_chat_task_event(task_id: str, event_type: str, message: str):
+    clean = (message or "").strip()
+    if not clean:
+        return
+    if len(clean) > 500:
+        clean = clean[:497] + "..."
+
+    with chat_tasks_lock:
+        task = chat_tasks.get(task_id)
+        if not task:
+            return
+        events = task["events"]
+        if events and events[-1]["type"] == event_type and events[-1]["message"] == clean:
+            return
+        seq = task["next_seq"]
+        task["next_seq"] += 1
+        events.append({
+            "seq": seq,
+            "type": event_type,
+            "message": clean,
+            "timestamp": datetime.datetime.now().timestamp()
+        })
+        if len(events) > 200:
+            del events[:-200]
+
+
+def finish_chat_task(task_id: str, status: str, result: dict):
+    with chat_tasks_lock:
+        task = chat_tasks.get(task_id)
+        if not task:
+            return
+        task["status"] = status
+        task["result"] = result
+        task["completed_at"] = datetime.datetime.now().timestamp()
+
+
+def run_chat_task(task_id: str, request_data: dict):
+    try:
+        chat_request = ChatRequest(**request_data)
+        result = build_chat_response(
+            chat_request,
+            progress_callback=lambda event_type, message: append_chat_task_event(task_id, event_type, message)
+        )
+        finish_chat_task(task_id, "success", result)
+    except Exception as e:
+        logging.error(f"Chat task {task_id} failed: {e}")
+        append_chat_task_event(task_id, "error", f"Task failed: {e}")
+        finish_chat_task(task_id, "error", {
+            "status": "error",
+            "reply": f"❌ **Execution Error**: {str(e)}",
+            "conversation_id": request_data.get("conversation_id")
+        })
+
+
+@app.post("/api/chat")
+async def chat_endpoint(request: ChatRequest, req_raw: Request):
+    verify_authorization(req_raw)
+    return JSONResponse(content=build_chat_response(request))
+
+
+@app.post("/api/chat-tasks")
+async def start_chat_task_endpoint(request: ChatRequest, req_raw: Request):
+    verify_authorization(req_raw)
+    task_id = uuid.uuid4().hex
+    with chat_tasks_lock:
+        chat_tasks[task_id] = {
+            "status": "running",
+            "events": [],
+            "next_seq": 0,
+            "result": None,
+            "created_at": datetime.datetime.now().timestamp(),
+            "completed_at": None
+        }
+    thread = threading.Thread(target=run_chat_task, args=(task_id, request.dict()), daemon=True)
+    thread.start()
+    return JSONResponse(content={"status": "running", "task_id": task_id})
+
+
+@app.get("/api/chat-tasks/{task_id}")
+async def get_chat_task_endpoint(task_id: str, request: Request, after: int = -1):
+    verify_authorization(request)
+    with chat_tasks_lock:
+        task = chat_tasks.get(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        events = [event for event in task["events"] if event["seq"] > after]
+        return JSONResponse(content={
+            "status": task["status"],
+            "events": events,
+            "result": task["result"]
+        })
+
+@app.post("/api/upload-media")
+async def upload_media_endpoint(conversation_id: str, filename: str, request: Request):
+    actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
+    # Default to antigravity brain folder, fallback to antigravity-cli
+    folder = f"/Users/kai/.gemini/antigravity/brain/{actual_cid}"
+    if not os.path.exists(folder):
+        folder = f"/Users/kai/.gemini/antigravity-cli/brain/{actual_cid}"
+        if not os.path.exists(folder):
+            os.makedirs(folder, exist_ok=True)
+            
+    # Save the file as media__<current_timestamp_millis>.<ext>
+    ext = os.path.splitext(filename)[1] or ".png"
+    millis = int(datetime.datetime.now().timestamp() * 1000)
+    target_filename = f"media__{millis}{ext}"
+    target_path = os.path.join(folder, target_filename)
+    
+    try:
+        content = await request.body()
+        with open(target_path, "wb") as f:
+            f.write(content)
+        logging.info(f"Successfully uploaded media file: {target_path}")
+        return JSONResponse(content={"status": "success", "filename": target_filename})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
+
+@app.get("/api/usage-limits")
+async def get_usage_limits(request: Request):
+    verify_authorization(request)
+    result_data = {
+        "geminiWeeklyPercent": 1.2,
+        "geminiHourlyPercent": 0.5,
+        "claudeWeeklyPercent": 2.5,
+        "claudeHourlyPercent": 1.8,
+        
+        "geminiWeeklyUsed": 120000,
+        "geminiWeeklyLimit": 10000000,
+        "geminiHourlyUsed": 5000,
+        "geminiHourlyLimit": 1000000,
+        
+        "claudeWeeklyUsed": 2500000,
+        "claudeWeeklyLimit": 100000000,
+        "claudeHourlyUsed": 180000,
+        "claudeHourlyLimit": 10000000
+    }
+    
+    try:
+        res = subprocess.run(
+            ["npx", "ccusage", "session", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            now = datetime.datetime.now(datetime.timezone.utc)
+            
+            gemini_weekly = 0
+            gemini_hourly = 0
+            claude_weekly = 0
+            claude_hourly = 0
+            
+            def parse_timestamp(la_str, period_str):
+                if la_str:
+                    try:
+                        return datetime.datetime.fromisoformat(la_str.replace('Z', '+00:00'))
+                    except:
+                        pass
+                match = re.search(r'(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})', period_str)
+                if match:
+                    try:
+                        parts = [int(p) for p in match.groups()]
+                        return datetime.datetime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], tzinfo=datetime.timezone.utc)
+                    except:
+                        pass
+                match_date = re.search(r'(\d{4})-(\d{2})-(\d{2})', period_str)
+                if match_date:
+                    try:
+                        parts = [int(p) for p in match_date.groups()]
+                        return datetime.datetime(parts[0], parts[1], parts[2], tzinfo=datetime.timezone.utc)
+                    except:
+                        pass
+                return None
+                
+            for item in data.get('session', []):
+                la = item.get('metadata', {}).get('lastActivity')
+                period = item.get('period', '')
+                dt = parse_timestamp(la, period)
+                if not dt:
+                    continue
+                
+                hours_ago = (now - dt).total_seconds() / 3600.0
+                # Subtract cacheReadTokens (prompt cache read hits) as they do not count against rate limits
+                tokens = item.get('totalTokens', 0) - item.get('cacheReadTokens', 0)
+                
+                models = item.get('modelsUsed', [])
+                is_gemini = any('gemini' in m.lower() for m in models)
+                is_claude = any('claude' in m.lower() for m in models)
+                
+                if is_gemini:
+                    if hours_ago <= 168:
+                        gemini_weekly += tokens
+                    if hours_ago <= 5:
+                        gemini_hourly += tokens
+                if is_claude:
+                    if hours_ago <= 168:
+                        claude_weekly += tokens
+                    if hours_ago <= 5:
+                        claude_hourly += tokens
+                        
+            # Limits
+            gw_limit = 10000000
+            gh_limit = 1000000
+            cw_limit = 100000000
+            ch_limit = 10000000
+            
+            result_data["geminiWeeklyUsed"] = gemini_weekly
+            result_data["geminiHourlyUsed"] = gemini_hourly
+            result_data["claudeWeeklyUsed"] = claude_weekly
+            result_data["claudeHourlyUsed"] = claude_hourly
+            
+            result_data["geminiWeeklyPercent"] = round((gemini_weekly / gw_limit) * 100, 1) if gemini_weekly > 0 else 1.2
+            result_data["geminiHourlyPercent"] = round((gemini_hourly / gh_limit) * 100, 1) if gemini_hourly > 0 else 0.5
+            result_data["claudeWeeklyPercent"] = round((claude_weekly / cw_limit) * 100, 1) if claude_weekly > 0 else 2.5
+            result_data["claudeHourlyPercent"] = round((claude_hourly / ch_limit) * 100, 1) if claude_hourly > 0 else 1.8
+            
+    except Exception as e:
+        logging.error(f"Failed to fetch usage limits from ccusage: {e}")
+        
+    return JSONResponse(content=result_data)
+
+@app.get("/api/media")
+async def get_media(path: str, request: Request):
+    verify_authorization(request)
+    decoded_path = urllib.parse.unquote(path)
+    if decoded_path.startswith("file://"):
+        decoded_path = decoded_path[7:]
+    # Check if path exists and is absolute/relative resolved
+    if not os.path.exists(decoded_path):
+        raise HTTPException(status_code=404, detail="Media file not found")
+    return FileResponse(decoded_path)
+
+# Serve static files
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)

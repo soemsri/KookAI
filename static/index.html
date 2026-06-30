@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AGY Workspace Client</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <script>
+    (() => {
+      const themeMode = localStorage.getItem("antigravity_theme") || "system";
+      if (themeMode === "light" || themeMode === "dark") {
+        document.documentElement.dataset.theme = themeMode;
+      }
+    })();
+  </script>
+  <!-- Google Fonts for premium typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- Left-hand Sidebar Panel -->
+    <aside class="sidebar">
+      <!-- Sidebar Header / App Branding -->
+      <div class="sidebar-brand">
+        <img src="favicon.png" alt="Antigravity Icon" class="brand-logo">
+        <span class="brand-name">Antigravity</span>
+      </div>
+
+      <!-- New Conversation Button -->
+      <button class="new-convo-btn" id="newConvoBtn">
+        <svg viewBox="0 0 24 24" class="icon-plus">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span>New Conversation</span>
+      </button>
+
+      <!-- Sidebar Tabs Menu -->
+      <nav class="sidebar-menu">
+        <div class="menu-item" id="historyMenuBtn">
+          <svg viewBox="0 0 24 24" class="icon-clock" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <span>Conversation History</span>
+        </div>
+      </nav>
+
+      <!-- Projects Section -->
+      <div class="projects-section">
+        <div class="projects-header">
+          <span>Projects</span>
+        </div>
+
+        <!-- Dynamic Projects Tree -->
+        <div class="projects-tree" id="projectsTree">
+          <!-- Loaded dynamically via script.js -->
+        </div>
+      </div>
+
+      <!-- Settings Menu at Bottom -->
+      <div class="sidebar-bottom">
+        <div class="menu-item" id="linkMobileBtn" style="margin-bottom: 8px;">
+          <svg viewBox="0 0 24 24" class="icon-mobile" fill="none" stroke="currentColor" stroke-width="2" style="width: 18px; height: 18px; margin-right: 12px; opacity: 0.7;">
+            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+            <line x1="12" y1="18" x2="12.01" y2="18"></line>
+          </svg>
+          <span>Link Mobile App</span>
+        </div>
+        <div class="menu-item" id="settingsBtn">
+          <svg viewBox="0 0 24 24" class="icon-settings" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>Settings</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <div class="main-content">
+
+      <!-- Panel 1: Chat Workspace (Default view, stretches to fit window) -->
+      <section class="content-panel chat-panel" id="chatPanel">
+        <!-- Top row with current active Project & Workspace indicator -->
+        <header class="chat-header">
+          <div class="header-caption" id="headerCaption">
+            <div class="project-picker-dropdown" id="projectPickerBtn" tabindex="0">
+              <svg viewBox="0 0 24 24" class="icon-folder">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span class="header-project" id="headerProject">agy</span>
+              <svg viewBox="0 0 24 24" class="icon-chevron">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </div>
+            <span class="header-separator">/</span>
+            <span class="header-convo" id="headerConvo">Building Python Web App</span>
+          </div>
+        </header>
+
+        <!-- Messages scroll zone -->
+        <div class="chat-scroll-container" id="chatScroll">
+          <!-- Welcome Screen (Visible on empty chat) -->
+          <div class="welcome-screen" id="welcomeScreen">
+            <h1>What should we build today?</h1>
+            <p>Interact with your local files, run tasks, or outline goals. Try typing <kbd>/</kbd> for commands or <kbd>@</kbd> for file context.</p>
+          </div>
+
+          <!-- Chat logs container -->
+          <div class="messages-container" id="messagesContainer"></div>
+        </div>
+
+        <!-- Prompt card fixed at bottom -->
+        <div class="prompt-section">
+          <div class="prompt-outer-container">
+
+            <!-- Input text area wrapper -->
+            <div class="prompt-input-card">
+              <div class="autocomplete-popup hidden" id="autocompletePopup"></div>
+
+              <textarea
+                id="promptTextarea"
+                placeholder="Ask anything, @ to mention, / for actions"
+                rows="1"
+              ></textarea>
+
+              <!-- Bottom action row inside input box -->
+              <div class="prompt-tool-row">
+                 <div class="tool-row-left">
+                   <div style="position: relative;">
+                     <button class="tool-btn add-btn" id="plusBtn" title="Add context or file">
+                       <svg viewBox="0 0 24 24" class="icon-plus">
+                         <line x1="12" y1="5" x2="12" y2="19"></line>
+                         <line x1="5" y1="12" x2="19" y2="12"></line>
+                       </svg>
+                     </button>
+                     <!-- Plus Popup Menu -->
+                     <div class="plus-popup-menu hidden" id="plusMenu">
+                       <div class="plus-popup-header">Add Context</div>
+                       <div class="plus-popup-item" id="plusItemMedia">
+                         <svg viewBox="0 0 24 24" class="plus-icon"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                         <span>Media</span>
+                       </div>
+                       <div class="plus-popup-item" id="plusItemMentions">
+                         <svg viewBox="0 0 24 24" class="plus-icon"><circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"></path></svg>
+                         <span>Mentions</span>
+                       </div>
+                       <div class="plus-popup-item" id="plusItemActions">
+                         <svg viewBox="0 0 24 24" class="plus-icon"><line x1="18" y1="2" x2="22" y2="6"></line><path d="M7.5 20.5 19 9l-4-4L3.5 16.5 2 22z"></path></svg>
+                         <span>Actions</span>
+                       </div>
+                       <div class="plus-popup-item" id="plusItemBrowser">
+                         <svg viewBox="0 0 24 24" class="plus-icon"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="2" x2="12" y2="8"></line><line x1="4.93" y1="19.07" x2="9.17" y2="14.83"></line><line x1="19.07" y1="19.07" x2="14.83" y2="14.83"></line></svg>
+                         <span>Browser</span>
+                       </div>
+                     </div>
+                   </div>
+                   <input type="file" id="mediaFileInput" accept="image/*" style="display: none;">
+
+                  <div class="model-picker-dropdown" id="modelBtn" tabindex="0">
+                    <span id="currentModelText">Gemini 3.5 Flash (High)</span>
+                    <svg viewBox="0 0 24 24" class="icon-chevron">
+                      <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                  </div>
+                </div>
+
+                <div class="tool-row-right">
+                  <button class="tool-btn mic-btn" id="micBtn" title="Voice Typing">
+                    <svg viewBox="0 0 24 24" class="icon-mic">
+                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                      <path d="M19 10v1a7 7 0 0 1-14 0v-1"></path>
+                      <line x1="12" y1="19" x2="12" y2="23"></line>
+                      <line x1="8" y1="23" x2="16" y2="23"></line>
+                    </svg>
+                  </button>
+
+                  <button class="send-btn" id="sendBtn" title="Send message">
+                    <svg viewBox="0 0 24 24" class="icon-send">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+             <!-- Gray target selection bar at the very bottom -->
+             <div class="prompt-bottom-bar">
+               <div class="target-picker-dropdown" id="targetBtn" tabindex="0">
+                 <svg viewBox="0 0 24 24" class="icon-desktop">
+                   <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                   <line x1="8" y1="21" x2="16" y2="21"></line>
+                   <line x1="12" y1="17" x2="12" y2="21"></line>
+                 </svg>
+                 <span id="currentTargetText">Sandbox</span>
+                 <svg viewBox="0 0 24 24" class="icon-chevron">
+                   <polyline points="6 9 12 15 18 9"></polyline>
+                 </svg>
+               </div>
+
+               <div style="display: flex; align-items: center; gap: 12px; position: relative;">
+                 <!-- Circular Chart Button next to green dot -->
+                 <div class="usage-meter-btn" id="usageBtn" title="View usage limits">
+                   <svg viewBox="0 0 36 36" class="circular-chart blue">
+                     <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                     <path class="circle" id="mainUsageBtnChartCircle" stroke-dasharray="86, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                   </svg>
+                 </div>
+
+                 <!-- Usage Limits Popup -->
+                 <div class="usage-popup hidden" id="usagePopup">
+                   <div class="usage-header">
+                     <span>Resource Usage Limits</span>
+                      <div class="usage-toggle-switch" id="usageToggleSwitch">
+                        <button class="toggle-mode-btn active" data-mode="usage">Usage</button>
+                        <button class="toggle-mode-btn" data-mode="remain">Remaining</button>
+                      </div>
+                   </div>
+
+                   <div class="usage-body">
+                     <!-- Gemini section -->
+                     <div class="usage-section">
+                        <div class="usage-sec-title">
+                          <span>Gemini Models <span class="info-icon" title="Rate limits applied to Gemini models">ⓘ</span></span>
+                          <span class="usage-plan-badge">Your Plan: Google AI Ultra</span>
+                        </div>
+
+                       <div class="usage-row-item">
+                         <div class="usage-row-left">
+                           <div class="usage-label">Weekly Limit</div>
+                           <div class="usage-desc" id="geminiWeeklyDesc">You have used some of your weekly limit, it will fully refresh in 5 days, 17 hours.</div>
+                         </div>
+                         <div class="usage-row-right">
+                           <span class="usage-percent-text" id="geminiWeeklyPercent">99%</span>
+                           <svg viewBox="0 0 36 36" class="chart-small green-chart">
+                             <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                             <path class="circle" id="geminiWeeklyChart" stroke-dasharray="99, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                           </svg>
+                         </div>
+                       </div>
+
+                       <div class="usage-row-item">
+                         <div class="usage-row-left">
+                           <div class="usage-label">Five Hour Limit</div>
+                           <div class="usage-desc" id="geminiHourlyDesc">You have used some of your 5-hour limit, it will fully refresh in 1 hour, 15 minutes.</div>
+                         </div>
+                         <div class="usage-row-right">
+                           <span class="usage-percent-text" id="geminiHourlyPercent">86%</span>
+                           <svg viewBox="0 0 36 36" class="chart-small green-chart">
+                             <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                             <path class="circle" id="geminiHourlyChart" stroke-dasharray="86, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                           </svg>
+                         </div>
+                       </div>
+                     </div>
+
+                     <!-- Claude section -->
+                     <div class="usage-section">
+                        <div class="usage-sec-title">
+                          <span>Claude and GPT models <span class="info-icon" title="Rate limits applied to Anthropic and OpenAI models">ⓘ</span></span>
+                          <span class="usage-plan-badge secondary">Your Plan: Claude Pro</span>
+                        </div>
+
+                       <div class="usage-row-item">
+                         <div class="usage-row-left">
+                           <div class="usage-label">Weekly Limit</div>
+                           <div class="usage-desc" id="claudeWeeklyDesc">You have used some of your weekly limit, it will fully refresh in 6 days, 23 hours.</div>
+                         </div>
+                         <div class="usage-row-right">
+                           <span class="usage-percent-text" id="claudeWeeklyPercent">99%</span>
+                           <svg viewBox="0 0 36 36" class="chart-small green-chart">
+                             <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                             <path class="circle" id="claudeWeeklyChart" stroke-dasharray="99, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                           </svg>
+                         </div>
+                       </div>
+
+                       <div class="usage-row-item">
+                         <div class="usage-row-left">
+                           <div class="usage-label">Five Hour Limit</div>
+                           <div class="usage-desc" id="claudeHourlyDesc">You have used some of your 5-hour limit, it will fully refresh in 4 hours, 30 minutes.</div>
+                         </div>
+                         <div class="usage-row-right">
+                           <span class="usage-percent-text" id="claudeHourlyPercent">98%</span>
+                           <svg viewBox="0 0 36 36" class="chart-small green-chart">
+                             <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                             <path class="circle" id="claudeHourlyChart" stroke-dasharray="98, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                           </svg>
+                         </div>
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+
+                 <div class="connection-status-dot green" title="Local server connected"></div>
+               </div>
+             </div>
+
+          </div>
+        </div>
+      </section>
+
+      <!-- Panel 2: Conversation History View (Match user screenshot 2) -->
+      <section class="content-panel history-panel hidden" id="historyPanel">
+        <h1 class="history-title">Conversation History</h1>
+
+        <div class="history-filter-row">
+          <div class="search-box-wrapper">
+            <svg viewBox="0 0 24 24" class="icon-search" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="historySearchInput" placeholder="Search conversations...">
+          </div>
+          <button class="filter-btn" id="filterBtn">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="4" y1="21" x2="4" y2="14"></line>
+              <line x1="4" y1="10" x2="4" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12" y2="3"></line>
+              <line x1="20" y1="21" x2="20" y2="16"></line>
+              <line x1="20" y1="12" x2="20" y2="3"></line>
+              <line x1="1" y1="14" x2="7" y2="14"></line>
+              <line x1="9" y1="8" x2="15" y2="8"></line>
+              <line x1="17" y1="16" x2="23" y2="16"></line>
+            </svg>
+            <span>Filter</span>
+          </button>
+        </div>
+
+        <div class="history-section-header">ALL CONVERSATIONS</div>
+
+        <!-- Conversations List Grid matching Screenshot 2 -->
+        <div class="history-list" id="historyList">
+          <!-- Loaded dynamically via script.js -->
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- Custom Dropdowns elements -->
+  <!-- 1. Workspace Dropdown Menu -->
+  <div class="dropdown-menu hidden" id="workspaceDropdown">
+    <div class="dropdown-header">Workspaces</div>
+    <!-- Dynamically loaded -->
+  </div>
+
+  <!-- 2. Model Dropdown Menu -->
+  <div class="dropdown-menu hidden" id="modelDropdown">
+    <div class="dropdown-header">Available Models</div>
+
+    <div class="dropdown-item" data-value="Gemini 3.5 Flash (Low)">
+      <span class="model-badge flash">Flash</span>
+      <div class="model-info">
+        <span class="model-name">Gemini 3.5 Flash (Low)</span>
+        <span class="model-desc">Fast, low resource usage</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="Gemini 3.5 Flash (Medium)">
+      <span class="model-badge flash">Flash</span>
+      <div class="model-info">
+        <span class="model-name">Gemini 3.5 Flash (Medium)</span>
+        <span class="model-desc">Balanced speed and performance</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item active" data-value="Gemini 3.5 Flash (High)">
+      <span class="model-badge flash">Flash</span>
+      <div class="model-info">
+        <span class="model-name">Gemini 3.5 Flash (High)</span>
+        <span class="model-desc">Fastest response, ideal for coding tasks</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="Gemini 3.1 Pro (Low)">
+      <span class="model-badge pro">Pro</span>
+      <div class="model-info">
+        <span class="model-name">Gemini 3.1 Pro (Low)</span>
+        <span class="model-desc">Enhanced logic reasoning</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="Gemini 3.1 Pro (High)">
+      <span class="model-badge pro">Pro</span>
+      <div class="model-info">
+        <span class="model-name">Gemini 3.1 Pro (High)</span>
+        <span class="model-desc">Deep reasoning, complex tasks</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="Claude Sonnet 4.6 (Thinking)">
+      <span class="model-badge claude">Claude</span>
+      <div class="model-info">
+        <span class="model-name">Claude Sonnet 4.6 (Thinking)</span>
+        <span class="model-desc">Advanced reasoning with thinking trace</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="Claude Opus 4.6 (Thinking)">
+      <span class="model-badge claude">Claude</span>
+      <div class="model-info">
+        <span class="model-name">Claude Opus 4.6 (Thinking)</span>
+        <span class="model-desc">Highest reasoning capacity model</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="GPT-OSS 120B (Medium)">
+      <span class="model-badge gpt">GPT</span>
+      <div class="model-info">
+        <span class="model-name">GPT-OSS 120B (Medium)</span>
+        <span class="model-desc">Open-source large scale LLM</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Target Dropdown Menu -->
+  <div class="dropdown-menu hidden" id="targetDropdown">
+    <div class="dropdown-header">Execution Target</div>
+    <div class="dropdown-item active" data-value="Sandbox">
+      <svg viewBox="0 0 24 24" class="icon-desktop"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+      <span>Sandbox</span>
+    </div>
+    <div class="dropdown-item" data-value="Real">
+      <svg viewBox="0 0 24 24" class="icon-cloud" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>
+      <span>Real</span>
+    </div>
+  </div>
+
+  <!-- Settings Modal Overlay -->
+  <div class="modal-overlay hidden" id="settingsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button class="modal-close-btn" id="settingsCloseBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Tab Navigation inside settings -->
+        <div class="settings-tabs">
+          <div class="settings-tab active" data-target="settingsGeneral">General</div>
+          <div class="settings-tab" data-target="settingsSystem">Diagnostics</div>
+        </div>
+
+        <!-- Tab Content 1: General -->
+        <div class="settings-tab-content" id="settingsGeneral">
+          <div class="settings-group">
+            <label>Default AI Model</label>
+            <select id="settingsDefaultModel">
+              <option value="Gemini 3.5 Flash (Low)">Gemini 3.5 Flash (Low)</option>
+              <option value="Gemini 3.5 Flash (Medium)">Gemini 3.5 Flash (Medium)</option>
+              <option value="Gemini 3.5 Flash (High)">Gemini 3.5 Flash (High)</option>
+              <option value="Gemini 3.1 Pro (Low)">Gemini 3.1 Pro (Low)</option>
+              <option value="Gemini 3.1 Pro (High)">Gemini 3.1 Pro (High)</option>
+              <option value="Claude Sonnet 4.6 (Thinking)">Claude Sonnet 4.6 (Thinking)</option>
+              <option value="Claude Opus 4.6 (Thinking)">Claude Opus 4.6 (Thinking)</option>
+              <option value="GPT-OSS 120B (Medium)">GPT-OSS 120B (Medium)</option>
+            </select>
+          </div>
+          <div class="settings-group">
+            <label>Execution Target</label>
+            <select id="settingsDefaultTarget">
+              <option value="Sandbox">Sandbox</option>
+              <option value="Real">Real</option>
+            </select>
+          </div>
+          <div class="settings-group">
+            <label>Speech Recognition Language</label>
+            <select id="settingsSpeechLang">
+              <option value="th-TH">Thai (th-TH)</option>
+              <option value="en-US">English (en-US)</option>
+            </select>
+          </div>
+          <div class="settings-group">
+            <label>Theme</label>
+            <div class="theme-segmented" id="settingsThemeMode" role="radiogroup" aria-label="Theme">
+              <button type="button" class="theme-segment" data-theme-mode="system" role="radio">System</button>
+              <button type="button" class="theme-segment" data-theme-mode="light" role="radio">Light</button>
+              <button type="button" class="theme-segment" data-theme-mode="dark" role="radio">Dark</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab Content 2: System Info & Diagnostics -->
+        <div class="settings-tab-content hidden" id="settingsSystem">
+          <div class="diagnostic-row">
+            <span class="diagnostic-label">CLI Version:</span>
+            <span class="diagnostic-value" id="diagCliVersion">rtk 1.0.4 (Antigravity CLI Proxy)</span>
+          </div>
+          <div class="diagnostic-row">
+            <span class="diagnostic-label">Workspace Folder:</span>
+            <span class="diagnostic-value" id="diagWorkspace">/Users/kai/Desktop/agy</span>
+          </div>
+          <div class="diagnostic-row">
+            <span class="diagnostic-label">Server Status:</span>
+            <span class="diagnostic-value green" style="font-weight: 600;">ACTIVE (127.0.0.1:8080)</span>
+          </div>
+          <div class="diagnostic-row">
+            <span class="diagnostic-label">Database Path:</span>
+            <span class="diagnostic-value" style="font-size:11px;">~/.gemini/antigravity/conversations/</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="settings-save-btn" id="settingsSaveBtn">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pairing Modal -->
+  <div class="modal-overlay hidden" id="pairingModal">
+    <div class="modal-card" style="max-width: 400px;">
+      <div class="modal-header">
+        <h3>Link Mobile Companion</h3>
+        <button class="close-modal-btn" id="closePairingModalBtn">&times;</button>
+      </div>
+      <div class="modal-body" style="text-align: center; padding: 20px;">
+        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px; line-height: 20px;">Scan this QR code from your Antigravity mobile app or enter the 6-digit PIN code to establish pairing.</p>
+
+  <style>
+    @keyframes qr-spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+
+        <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 20px;">
+          <div id="qrContainer" style="width: 230px; height: 230px; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); display: flex; justify-content: center; align-items: center; position: relative;">
+            <!-- Spinner -->
+            <div id="qrLoader" style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;">
+              <div style="width: 32px; height: 32px; border: 3px solid #e2e8f0; border-top-color: #3b82f6; border-radius: 50%; animation: qr-spin 0.8s linear infinite;"></div>
+              <span style="font-size: 12px; color: #64748b; font-weight: 500;">Generating QR...</span>
+            </div>
+            <!-- QR Code Image -->
+            <img id="pairingQrImg" src="" alt="Pairing QR Code" style="width: 200px; height: 200px; display: none; opacity: 0; transition: opacity 0.3s ease; margin: 0;" />
+          </div>
+        </div>
+
+        <div style="margin-top: 10px;">
+          <span style="font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 8px;">Pairing PIN Code</span>
+          <span id="pairingPinText" style="font-size: 36px; font-weight: 700; color: #3b82f6; letter-spacing: 4px;">------</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Markdown parser library -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="script.js?v=3"></script>
+</body>
+</html>
