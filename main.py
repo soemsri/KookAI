@@ -18,6 +18,18 @@ from typing import List, Optional
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
+import getpass
+# Get system username and home directory dynamically
+SYSTEM_USER = getpass.getuser()
+HOME_DIR = os.path.expanduser("~")
+
+# Base data directory for Antigravity settings & pairing configs
+GEMINI_DATA_DIR = os.path.join(HOME_DIR, ".gemini")
+ANTIGRAVITY_DATA_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity")
+ANTIGRAVITY_CLI_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity-cli")
+DESKTOP_DIR = os.path.join(HOME_DIR, "Desktop")
+WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 app = FastAPI(title="AGY Workspace Chat Client")
 
 # Ensure static directory exists
@@ -29,12 +41,12 @@ import random
 
 # Persistent Host ID retrieval
 def get_or_create_host_id():
-    path = "/Users/kai/.gemini/antigravity/host_id.txt"
+    path = os.path.join(ANTIGRAVITY_DATA_DIR, "host_id.txt")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path):
         with open(path, "r") as f:
             return f.read().strip()
-    host_id = f"host_kai_{uuid.uuid4().hex[:12]}"
+    host_id = f"host_{SYSTEM_USER}_{uuid.uuid4().hex[:12]}"
     with open(path, "w") as f:
         f.write(host_id)
     return host_id
@@ -117,7 +129,7 @@ def update_registry(host_id, url, local_ip):
 active_pins = {}
 
 # Authorized devices (device_uuid -> device_name)
-AUTHORIZED_DEVICES_FILE = "/Users/kai/.gemini/antigravity/authorized_devices.json"
+AUTHORIZED_DEVICES_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "authorized_devices.json")
 authorized_devices = {}
 
 if os.path.exists(AUTHORIZED_DEVICES_FILE):
@@ -334,8 +346,8 @@ SEED_CONVERSATIONS = [
 # Helper: Get all database file names (conversation IDs) in antigravity folders
 def get_existing_db_ids():
     db_paths = [
-        "/Users/kai/.gemini/antigravity-cli/conversations/*.db",
-        "/Users/kai/.gemini/antigravity/conversations/*.db"
+        os.path.join(ANTIGRAVITY_CLI_DIR, "conversations/*.db"),
+        os.path.join(ANTIGRAVITY_DATA_DIR, "conversations/*.db")
     ]
     ids = set()
     for pattern in db_paths:
@@ -351,7 +363,7 @@ def clean_project_name(path_name: str) -> str:
 
 # Helper: Get list of projects on Desktop (Dynamic list of folders)
 def get_desktop_projects():
-    desktop_path = "/Users/kai/Desktop"
+    desktop_path = DESKTOP_DIR
     projects = ["agy", "VirtualOffice", "GinRaiDee", "HumanRelation"] # Default minimum set
     if os.path.exists(desktop_path):
         for entry in os.listdir(desktop_path):
@@ -363,7 +375,7 @@ def get_desktop_projects():
     return projects
 
 def resolve_project_directory(project_id: str) -> str:
-    desktop_path = "/Users/kai/Desktop"
+    desktop_path = DESKTOP_DIR
     direct_path = os.path.join(desktop_path, project_id)
     if os.path.exists(direct_path):
         return direct_path
@@ -372,12 +384,12 @@ def resolve_project_directory(project_id: str) -> str:
             full_path = os.path.join(desktop_path, entry)
             if os.path.isdir(full_path) and clean_project_name(entry) == project_id:
                 return full_path
-    return "/Users/kai/Desktop/agy"
+    return WORKSPACE_DIR
 
 def get_conversation_project(conversation_id: str) -> Optional[str]:
     hist_paths = [
-        "/Users/kai/.gemini/antigravity-cli/history.jsonl",
-        "/Users/kai/.gemini/antigravity/history.jsonl"
+        os.path.join(ANTIGRAVITY_CLI_DIR, "history.jsonl"),
+        os.path.join(ANTIGRAVITY_DATA_DIR, "history.jsonl")
     ]
     for hist_path in hist_paths:
         if not os.path.exists(hist_path):
@@ -398,7 +410,7 @@ def get_conversation_project(conversation_id: str) -> Optional[str]:
     return None
 
 def infer_project_from_conversation_artifacts(folder: str) -> Optional[str]:
-    desktop_prefix = "/Users/kai/Desktop/"
+    desktop_prefix = DESKTOP_DIR + os.sep
     candidates = {}
     artifact_patterns = [
         os.path.join(folder, ".system_generated/tasks/*.log"),
@@ -413,7 +425,8 @@ def infer_project_from_conversation_artifacts(folder: str) -> Optional[str]:
             except Exception:
                 continue
 
-            for match in re.finditer(r"/Users/kai/Desktop/([A-Za-z0-9._ -]+)", content):
+            pattern = rf"(?:/Users/[^/]+/Desktop/|{re.escape(DESKTOP_DIR)}/)([A-Za-z0-9._ -]+)"
+            for match in re.finditer(pattern, content):
                 raw_name = match.group(1).split("/")[0].strip()
                 if not raw_name or raw_name.startswith("."):
                     continue
@@ -427,15 +440,15 @@ def infer_project_from_conversation_artifacts(folder: str) -> Optional[str]:
 # Helper: Parse local conversation transcripts from brain folders
 def get_real_conversations():
     brain_paths = [
-        "/Users/kai/.gemini/antigravity-cli/brain/*",
-        "/Users/kai/.gemini/antigravity/brain/*"
+        os.path.join(ANTIGRAVITY_CLI_DIR, "brain/*"),
+        os.path.join(ANTIGRAVITY_DATA_DIR, "brain/*")
     ]
     
     # Map conversationId -> project using history.jsonl if possible
     cid_to_project = {}
     hist_paths = [
-        "/Users/kai/.gemini/antigravity-cli/history.jsonl",
-        "/Users/kai/.gemini/antigravity/history.jsonl"
+        os.path.join(ANTIGRAVITY_CLI_DIR, "history.jsonl"),
+        os.path.join(ANTIGRAVITY_DATA_DIR, "history.jsonl")
     ]
     for hist_path in hist_paths:
         if os.path.exists(hist_path):
@@ -562,8 +575,8 @@ def map_model_name(model_ui_name: str) -> str:
 # Helper: Kill processes locking the sqlite database or executing agy for this conversation
 def kill_processes_locking_db(conversation_id: str):
     db_files = [
-        f"/Users/kai/.gemini/antigravity/conversations/{conversation_id}.db",
-        f"/Users/kai/.gemini/antigravity-cli/conversations/{conversation_id}.db"
+        os.path.join(ANTIGRAVITY_DATA_DIR, f"conversations/{conversation_id}.db"),
+        os.path.join(ANTIGRAVITY_CLI_DIR, f"conversations/{conversation_id}.db")
     ]
     for db_path in db_files:
         if not os.path.exists(db_path):
@@ -745,8 +758,11 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
             logging.info(f"Conversation {actual_cid} belongs to {existing_project}; starting new conversation in {project_id}.")
             use_continue = False
 
+    import shutil
+    agy_path = shutil.which("agy") or os.path.expanduser("~/.local/bin/agy")
+
     cmd = [
-        "agy", "--print", message_with_context,
+        agy_path, "--print", message_with_context,
         "--dangerously-skip-permissions",
         "--model", mapped_model,
         "--project", project_id,
@@ -836,7 +852,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
 async def get_files(request: Request):
     verify_authorization(request)
     files = []
-    workspace_path = "/Users/kai/Desktop/agy"
+    workspace_path = WORKSPACE_DIR
     if os.path.exists(workspace_path):
         for root, dirs, filenames in os.walk(workspace_path):
             dirs[:] = [d for d in dirs if not d.startswith('.')]
@@ -866,7 +882,7 @@ async def get_files(request: Request):
 async def get_projects(request: Request):
     verify_authorization(request)
     projects = get_desktop_projects()
-    return JSONResponse(content={"projects": projects})
+    return JSONResponse(content={"projects": projects, "workspace_dir": WORKSPACE_DIR})
 
 @app.get("/api/conversations")
 async def get_conversations(request: Request, project: Optional[str] = None):
@@ -957,41 +973,145 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     msg_lower = message.strip().lower()
 
     if msg_lower.startswith("/grill-me"):
-        interview_states[actual_cid] = 0
+        interview_states[actual_cid] = {
+            "current_idx": 0,
+            "answers": []
+        }
         reply = json.dumps(INTERVIEW_QUESTIONS[0])
         resolved_cid = conversation_id
     elif actual_cid in interview_states:
-        current_idx = interview_states[actual_cid]
+        state = interview_states[actual_cid]
+        current_idx = state["current_idx"]
+        
+        # Save the answer to the current question
+        answer = message.strip()
+        state["answers"].append({
+            "question": INTERVIEW_QUESTIONS[current_idx]["question"],
+            "answer": answer
+        })
+        
         next_idx = current_idx + 1
         if next_idx < len(INTERVIEW_QUESTIONS):
-            interview_states[actual_cid] = next_idx
+            state["current_idx"] = next_idx
             reply = json.dumps(INTERVIEW_QUESTIONS[next_idx])
+            resolved_cid = conversation_id
         else:
+            # Interview completed! Save preferences to file.
             del interview_states[actual_cid]
+            
+            project_id = clean_project_name(os.path.basename(workspace or "agy"))
+            cwd_path = resolve_project_directory(project_id)
+            pref_file = os.path.join(cwd_path, "alignment_preferences.json")
+            
+            pref_data = {
+                "project_id": project_id,
+                "aligned_at": datetime.datetime.now().isoformat(),
+                "preferences": state["answers"]
+            }
+            try:
+                os.makedirs(os.path.dirname(pref_file), exist_ok=True)
+                with open(pref_file, "w", encoding="utf-8") as f:
+                    json.dump(pref_data, f, indent=2, ensure_ascii=False)
+                pref_saved_msg = f"Saved preferences to `{pref_file}`"
+            except Exception as e:
+                pref_saved_msg = f"Failed to save preferences: {str(e)}"
+            
+            summary_lines = []
+            for idx, ans in enumerate(pref_data["preferences"]):
+                summary_lines.append(f"{idx+1}. **{ans['question']}**\n   - Choice: `{ans['answer']}`")
+                
+            summary_text = "\n".join(summary_lines)
+            
+            # Trigger agy CLI to process the alignment file and acknowledge preferences
+            import_message = (
+                "[SYSTEM: DESIGN ALIGNMENT COMPLETED]\n"
+                "The user has completed the /grill-me alignment interview. "
+                "Here is a summary of the choices they made:\n\n"
+                f"{summary_text}\n\n"
+                f"These choices have been successfully written to `{pref_file}`.\n\n"
+                "Please summarize these choices, confirm to the user how you will apply these "
+                "design decisions to their workspace, and congratulate them."
+            )
+            reply, resolved_cid = run_agy_cli(
+                import_message,
+                model,
+                conversation_id,
+                target,
+                workspace,
+                progress_callback=progress_callback
+            )
+    elif msg_lower.startswith("/goal"):
+        goal_text = message[5:].strip()
+        if not goal_text:
             reply = (
-                "🎉 **Interview Completed!**\n\n"
-                "Thank you for aligning on requirements! I've saved these preferences and will apply them to our design system:\n"
-                f"- **Final Preference**: `{message}`\n"
-                "I will execute the specifications cleanly."
+                "🎯 **Goal Mode**: Please specify a goal after the command.\n\n"
+                "Example:\n"
+                "`/goal build a login page with validation`"
             )
             resolved_cid = conversation_id
-    elif msg_lower.startswith("/goal"):
+        else:
+            wrapped_message = (
+                "[SYSTEM: GOAL MODE INITIATED]\n"
+                "The user has requested you to run in extra-thorough, goal-oriented mode to achieve the following objective. "
+                "Do not stop until the objective is fully completed, verified, and all tests pass.\n\n"
+                f"Objective:\n{goal_text}"
+            )
+            reply, resolved_cid = run_agy_cli(
+                wrapped_message,
+                model,
+                conversation_id,
+                target,
+                workspace,
+                progress_callback=progress_callback
+            )
+    elif msg_lower.startswith("/learn"):
+        rule_text = message[6:].strip()
+        if not rule_text:
+            reply = (
+                "💡 **Learn Mode**: Please specify a rule or instruction you want me to remember.\n\n"
+                "Example:\n"
+                "`/learn always use double quotes for React components`"
+            )
+            resolved_cid = conversation_id
+        else:
+            project_id = clean_project_name(os.path.basename(workspace or "agy"))
+            cwd_path = resolve_project_directory(project_id)
+            agents_dir = os.path.join(cwd_path, ".agents")
+            agents_file = os.path.join(agents_dir, "AGENTS.md")
+            
+            try:
+                os.makedirs(agents_dir, exist_ok=True)
+                file_existed = os.path.exists(agents_file)
+                with open(agents_file, "a", encoding="utf-8") as f:
+                    if not file_existed:
+                        f.write("# Workspace Rules & Customizations\n\n")
+                    f.write(f"- {rule_text}\n")
+                
+                reply = (
+                    "💾 **Rule Learned & Persisted!**\n\n"
+                    f"I have added the following rule to your workspace rules file:\n"
+                    f"📁 `{agents_file}`\n\n"
+                    f"**Learned Rule**:\n"
+                    f"> {rule_text}\n\n"
+                    "All future Antigravity agent interactions in this workspace will now respect this rule."
+                )
+            except Exception as e:
+                reply = f"❌ **Error saving rule**: {str(e)}"
+            resolved_cid = conversation_id
+    elif msg_lower.startswith("/browser") and not message[8:].strip():
         reply = (
-            "🎯 **Goal Mode Initiated**\n\n"
-            "I've analyzed your request and set up a target-oriented development plan:\n"
-            "1. **Analyze Requirements**: Deep-dive into user guidelines.\n"
-            "2. **Implement**: Write modular, clean code blocks.\n"
-            "3. **Verify**: Run tests and check edge cases.\n\n"
-            "Let's work together to complete this step-by-step!"
+            "🌐 **Browser Mode**: Please specify a web task or URL after the command.\n\n"
+            "Example:\n"
+            "`/browser search npm package info for lodash`"
         )
         resolved_cid = conversation_id
     elif msg_lower.startswith("/help"):
         reply = (
             "💡 **Available Commands & Help Guide**\n\n"
-            "- `/goal`: Start an extra-thorough, goal-oriented workflow.\n"
-            "- `/browser`: Command browser subagent for web tasks.\n"
-            "- `/grill-me`: Start an interactive design/requirement alignment session.\n"
-            "- `/learn`: Instruct me to remember a specific rule or config.\n"
+            "- `/goal <task>`: Start an extra-thorough, goal-oriented workflow on the workspace.\n"
+            "- `/browser <task>`: Command browser subagent for web tasks.\n"
+            "- `/grill-me`: Start an interactive design/requirement alignment session and save preferences.\n"
+            "- `/learn <instruction>`: Instruct me to remember a specific rule or config for this workspace.\n"
             "- `@<filename>`: Reference file context in your message.\n\n"
             "Using model: **" + model + "** on target **" + target + "** inside workspace **" + workspace + "**."
         )
@@ -1116,9 +1236,9 @@ async def get_chat_task_endpoint(task_id: str, request: Request, after: int = -1
 async def upload_media_endpoint(conversation_id: str, filename: str, request: Request):
     actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
     # Default to antigravity brain folder, fallback to antigravity-cli
-    folder = f"/Users/kai/.gemini/antigravity/brain/{actual_cid}"
+    folder = os.path.join(ANTIGRAVITY_DATA_DIR, f"brain/{actual_cid}")
     if not os.path.exists(folder):
-        folder = f"/Users/kai/.gemini/antigravity-cli/brain/{actual_cid}"
+        folder = os.path.join(ANTIGRAVITY_CLI_DIR, f"brain/{actual_cid}")
         if not os.path.exists(folder):
             os.makedirs(folder, exist_ok=True)
             

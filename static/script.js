@@ -150,6 +150,12 @@ document.addEventListener("DOMContentLoaded", () => {
       .then(res => res.json())
       .then(projData => {
         projectsList = projData.projects;
+        if (projData.workspace_dir) {
+          const diagWorkspace = document.getElementById("diagWorkspace");
+          if (diagWorkspace) {
+            diagWorkspace.textContent = projData.workspace_dir;
+          }
+        }
 
         // 2. Load Conversations List
         return fetch("/api/conversations");
