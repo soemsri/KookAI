@@ -60,3 +60,12 @@ The mobile app is built with React Native and Expo.
    - Open the app on your mobile device.
    - Enter the 6-digit pairing PIN.
 4. **Start Chatting**: Once successfully paired, you can now interact with your local AGY workspace directly from your mobile phone!
+
+---
+
+## 📞 การสนับสนุนและสัญญาอนุญาต (Support & License)
+
+- **สัญญาอนุญาต (License)**: MIT License
+- **ข้อมูลติดต่อผู้พัฒนา (Developer Contact)**: rangsarn@gmail.com
+- **สนับสนุนผู้พัฒนา (Donations)**: `0xcCAe4BDA3F9A92dd14D4193680535128f7DEE842` (ERC-20 / EVM Address)
+
