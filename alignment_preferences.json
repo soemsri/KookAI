@@ -1,0 +1,26 @@
+# Design Alignment Summary
+
+Date: 2026-06-30T19:59:23.571968
+
+## 🤝 Alignment Interview Complete
+
+Thank you for aligning on the design and architectural direction for the **AGY** workspace! Here is a summary of the decisions made during the alignment session:
+
+### 📋 Decisions Summary
+
+1. **Connection Resolution Strategy**
+   - *Status*: Skipped (Defaulting to the existing robust hybrid resolution that attempts direct local network IP first and falls back to the LocalTunnel public URL).
+   
+2. **Session Persistence & Startup Behavior**
+   - *Decision*: **Persist connection details securely & auto-reconnect silently.**
+   - *Details*: The app will securely persist the last successful connection details. Upon launching, it will attempt a silent reconnect using a brief loading overlay to keep the startup flow seamless and low-friction.
+
+3. **Real-time Feedback & Streaming (Inferred/Defaulted)**
+   - *Details*: Real-time stream responses will scroll smoothly, adhering to standard viewport logic (auto-scrolling only if the user is already near the bottom, so as not to interrupt reading history).
+
+---
+
+### 💾 Saving and Applying Decisions
+These preferences have been documented and will guide our development pattern. The connection persistence and auto-reconnection logic are fully aligned with the active codebase under `mobile/screens/PairingScreen.tsx` and `mobile/utils/api.ts`. 
+
+We are fully aligned and ready to proceed! Let me know what you would like to build or modify next.
