@@ -78,25 +78,30 @@ def start_localtunnel():
     
     def run_tunnel():
         global public_url
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
-            )
-            for line in iter(proc.stdout.readline, ''):
-                if "your url is:" in line.lower():
-                    url_match = re.search(r'https?://[^\s]+', line)
-                    if url_match:
-                        public_url = url_match.group(0).strip()
-                        logging.info(f"Localtunnel started successfully! Public URL: {public_url}")
-                        # Update Worker Registry
-                        update_registry(host_id, public_url, local_ip_addr)
-            proc.wait()
-        except Exception as e:
-            logging.error(f"Error running localtunnel: {e}")
+        import time
+        while True:
+            try:
+                logging.info("Launching localtunnel subprocess...")
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+                for line in iter(proc.stdout.readline, ''):
+                    if "your url is:" in line.lower():
+                        url_match = re.search(r'https?://[^\s]+', line)
+                        if url_match:
+                            public_url = url_match.group(0).strip()
+                            logging.info(f"Localtunnel started successfully! Public URL: {public_url}")
+                            # Update Worker Registry
+                            update_registry(host_id, public_url, local_ip_addr)
+                return_code = proc.wait()
+                logging.warning(f"Localtunnel subprocess exited with code {return_code}. Restarting in 5 seconds...")
+            except Exception as e:
+                logging.error(f"Error running localtunnel: {e}. Retrying in 5 seconds...")
+            time.sleep(5)
         
     threading.Thread(target=run_tunnel, daemon=True).start()
 
