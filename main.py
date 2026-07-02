@@ -131,7 +131,23 @@ def update_registry(host_id, url, local_ip):
         logging.error(f"Failed to update registry: {e}")
 
 # Global active pairing pins mapping: pin -> expiry
-active_pins = {}
+ACTIVE_PINS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "active_pins.json")
+
+def load_active_pins() -> dict:
+    if os.path.exists(ACTIVE_PINS_FILE):
+        try:
+            with open(ACTIVE_PINS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def save_active_pins(pins: dict):
+    try:
+        with open(ACTIVE_PINS_FILE, "w") as f:
+            json.dump(pins, f)
+    except Exception as e:
+        logging.error(f"Failed to save active pins: {e}")
 
 # Authorized devices (device_uuid -> device_name)
 AUTHORIZED_DEVICES_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "authorized_devices.json")
@@ -184,7 +200,9 @@ async def get_pairing_code():
     host_id = get_or_create_host_id()
     pin = f"{random.randint(100000, 999999)}"
     expiry = int(datetime.datetime.now().timestamp()) + 120
+    active_pins = load_active_pins()
     active_pins[pin] = expiry
+    save_active_pins(active_pins)
     
     # Register pin on worker KV
     import urllib.request
@@ -219,6 +237,7 @@ async def get_pairing_code():
 async def pair_device(req: PairRequest):
     pin = req.pin.strip()
     now = int(datetime.datetime.now().timestamp())
+    active_pins = load_active_pins()
     if pin not in active_pins or active_pins[pin] < now:
         raise HTTPException(status_code=403, detail="PIN expired or invalid")
         
@@ -230,7 +249,9 @@ async def pair_device(req: PairRequest):
         "token": token
     }
     save_authorized_devices()
-    del active_pins[pin]
+    if pin in active_pins:
+        del active_pins[pin]
+    save_active_pins(active_pins)
     
     return JSONResponse(content={
         "status": "success",
