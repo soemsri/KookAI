@@ -30,6 +30,9 @@ ANTIGRAVITY_CLI_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity-cli")
 DESKTOP_DIR = os.path.join(HOME_DIR, "Desktop")
 WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Default execution timeout for the agy CLI (seconds)
+AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "300"))
+
 app = FastAPI(title="AGY Workspace Chat Client")
 
 # Ensure static directory exists
@@ -588,6 +591,11 @@ def get_real_conversations():
                         or cid_to_project.get(cid, "agy")
                     )
                     
+                    # Only show user-initiated conversations in the sidebar (filter out subagent runs)
+                    is_user_convo = (transcript_project is not None) or (cid in cid_to_project)
+                    if not is_user_convo:
+                        continue
+                    
                     conversations.append({
                         "id": cid,
                         "title": clean_title,
@@ -687,7 +695,7 @@ def classify_cli_progress_line(source: str, line: str):
         return {"type": "progress", "message": clean}
     return None
 
-def run_agy_command(cmd, cwd_path, timeout=120, progress_callback=None):
+def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=None):
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.DEVNULL,
@@ -816,7 +824,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
     logging.info(f"Executing agy CLI in {cwd_path}: {' '.join(cmd)}")
     
     try:
-        result = run_agy_command(cmd, cwd_path, timeout=120, progress_callback=progress_callback)
+        result = run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
         
         # Check stderr and stdout; agy can report conversation failures with exit code 0.
         if result.returncode != 0 or is_recoverable_conversation_error(result):
@@ -832,7 +840,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
                 logging.info(f"Retrying command after killing locking processes: {' '.join(cmd)}")
                 if progress_callback:
                     progress_callback("progress", "Retrying after clearing conversation lock.")
-                result = run_agy_command(cmd, cwd_path, timeout=120, progress_callback=progress_callback)
+                result = run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
 
                 # If it STILL fails after killing, do fallback to a new conversation
                 if result.returncode != 0 or is_recoverable_conversation_error(result):
@@ -854,7 +862,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
                     logging.info(f"Executing fallback agy CLI in {cwd_path}: {' '.join(fallback_cmd)}")
                     if progress_callback:
                         progress_callback("progress", "Starting a fresh conversation after retry failed.")
-                    result = run_agy_command(fallback_cmd, cwd_path, timeout=120, progress_callback=progress_callback)
+                    result = run_agy_command(fallback_cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
                     use_continue = False # We've started a new conversation
         
         # Scan for new DB ID if we started a new conversation
@@ -874,7 +882,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
             return f"⚠️ **agy CLI Error (Exit Code {result.returncode})**\n\n```\n{err_msg}\n```", resolved_cid
             
     except subprocess.TimeoutExpired:
-        return "⏱️ **Timeout Error**: The request to `agy` CLI exceeded the 120-second limit.", actual_cid
+        return f"⏱️ **Timeout Error**: The request to `agy` CLI exceeded the {AGY_CLI_TIMEOUT}-second limit.", actual_cid
     except Exception as e:
         return f"❌ **Execution Error**: Failed to run `agy` CLI. Details: `{str(e)}`", actual_cid
 
