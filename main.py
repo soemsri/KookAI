@@ -659,7 +659,9 @@ def kill_processes_locking_db(conversation_id: str):
 
 # Helper: Run agy with conversation ID
 def classify_cli_progress_line(source: str, line: str):
-    clean = (line or "").strip()
+    # Strip ANSI escape sequences (like colors and cursor movements)
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    clean = ansi_escape.sub('', line or "").strip()
     if not clean:
         return None
 
