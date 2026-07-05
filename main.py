@@ -656,7 +656,6 @@ def kill_processes_locking_db(conversation_id: str):
                             pass
     except Exception as e:
         logging.error(f"Error running ps to scan for agy processes: {e}")
-
 # Helper: Run agy with conversation ID
 def classify_cli_progress_line(source: str, line: str):
     # Strip ANSI escape sequences (like colors and cursor movements)
@@ -665,37 +664,22 @@ def classify_cli_progress_line(source: str, line: str):
     if not clean:
         return None
 
+    # Limit line length to keep UI clean and prevent payload bloat
+    if len(clean) > 150:
+        clean = clean[:147] + "..."
+
     lower = clean.lower()
     error_terms = (
         "error", "failed", "failure", "exception", "traceback", "timeout",
         "denied", "unauthorized", "forbidden", "not found", "locked",
         "invalid", "cannot", "could not", "warning", "warn"
     )
-    progress_terms = (
-        "running", "executing", "starting", "started", "retry", "fallback",
-        "planning", "thinking", "analyzing", "processing", "reading",
-        "writing", "editing", "patch", "tool", "command", "install",
-        "download", "build", "test", "lint", "complete", "completed",
-        "finished", "done", "created", "updated", "saved", "%"
-    )
-    progress_prefixes = (
-        "running", "executing", "starting", "started", "retrying",
-        "planning", "thinking", "analyzing", "processing", "reading",
-        "writing", "editing", "installing", "downloading", "building",
-        "testing", "linting", "completed", "finished"
-    )
 
     if any(term in lower for term in error_terms):
         return {"type": "error", "message": clean}
-    if source == "stderr" and any(term in lower for term in progress_terms):
-        return {"type": "progress", "message": clean}
-    if any(lower.startswith(prefix) for prefix in progress_prefixes):
-        return {"type": "progress", "message": clean}
-    if "%" in lower and any(char.isdigit() for char in lower):
-        return {"type": "progress", "message": clean}
-    if source == "stderr" and len(clean) <= 180:
-        return {"type": "progress", "message": clean}
-    return None
+        
+    return {"type": "progress", "message": clean}
+
 
 def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=None):
     proc = subprocess.Popen(
@@ -1293,6 +1277,7 @@ def finish_chat_task(task_id: str, status: str, result: dict):
 def run_chat_task(task_id: str, request_data: dict):
     try:
         chat_request = ChatRequest(**request_data)
+        append_chat_task_event(task_id, "progress", "Thinking...")
         result = build_chat_response(
             chat_request,
             progress_callback=lambda event_type, message: append_chat_task_event(task_id, event_type, message)

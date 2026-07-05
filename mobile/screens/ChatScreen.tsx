@@ -465,6 +465,85 @@ function QuestionCard({
   );
 }
 
+interface MessageSegment {
+  type: 'text' | 'details';
+  summary?: string;
+  body?: string;
+  text?: string;
+}
+
+const parseMessageSegments = (content: string): MessageSegment[] => {
+  const segments: MessageSegment[] = [];
+  let remaining = content;
+  
+  while (remaining.length > 0) {
+    const detailsStartIdx = remaining.indexOf('<details>');
+    if (detailsStartIdx === -1) {
+      segments.push({ type: 'text', text: remaining });
+      break;
+    }
+    
+    if (detailsStartIdx > 0) {
+      segments.push({ type: 'text', text: remaining.substring(0, detailsStartIdx) });
+    }
+    
+    const detailsEndIdx = remaining.indexOf('</details>', detailsStartIdx);
+    if (detailsEndIdx === -1) {
+      segments.push({ type: 'text', text: remaining.substring(detailsStartIdx) });
+      break;
+    }
+    
+    const detailsBlock = remaining.substring(detailsStartIdx + 9, detailsEndIdx);
+    let summaryText = 'Details';
+    let bodyText = detailsBlock;
+    
+    const summaryStartIdx = detailsBlock.indexOf('<summary>');
+    const summaryEndIdx = detailsBlock.indexOf('</summary>');
+    if (summaryStartIdx !== -1 && summaryEndIdx !== -1 && summaryEndIdx > summaryStartIdx) {
+      summaryText = detailsBlock.substring(summaryStartIdx + 9, summaryEndIdx);
+      bodyText = detailsBlock.substring(0, summaryStartIdx) + detailsBlock.substring(summaryEndIdx + 10);
+    }
+    
+    segments.push({
+      type: 'details',
+      summary: summaryText.trim(),
+      body: bodyText.trim()
+    });
+    
+    remaining = remaining.substring(detailsEndIdx + 10);
+  }
+  
+  return segments;
+};
+
+const CollapsibleDetailsCard = ({ summary, body, theme }: { summary: string; body: string; theme: any }) => {
+  const [expanded, setExpanded] = useState(false);
+  
+  return (
+    <View style={[styles.collapsibleCard, { borderColor: theme.borderColor }]}>
+      <TouchableOpacity 
+        style={[styles.collapsibleHeader, { backgroundColor: theme.bgSecondary }]} 
+        onPress={() => setExpanded(!expanded)}
+      >
+        <Text style={[styles.collapsibleTitle, { color: theme.textPrimary }]}>
+          {summary}
+        </Text>
+        <Text style={{ color: theme.textSecondary, fontSize: 12 }}>
+          {expanded ? '▼' : '►'}
+        </Text>
+      </TouchableOpacity>
+      
+      {expanded && (
+        <View style={[styles.collapsibleBody, { backgroundColor: theme.bgActive }]}>
+          <Text style={[styles.collapsibleBodyText, { color: theme.textPrimary }]}>
+            {body}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+};
+
 export default function ChatScreen({ onDisconnect }: ChatScreenProps) {
   const scheme = useColorScheme();
   const insets = useSafeAreaInsets();
@@ -502,7 +581,7 @@ export default function ChatScreen({ onDisconnect }: ChatScreenProps) {
     setLocalAttachments(current => current.filter(item => item.id !== id));
   };
 const [loading, setLoading] = useState(false);
-const [taskProgressText, setTaskProgressText] = useState('');
+const [taskProgressEvents, setTaskProgressEvents] = useState<ChatTaskEvent[]>([]);
 const [activeConvoId, setActiveConvoId] = useState<string>('');
 const [activeConvoProject, setActiveConvoProject] = useState<string>('agy');
 const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -587,12 +666,28 @@ setLoading(nextLoading);
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const formatTaskProgress = (events: ChatTaskEvent[]) => (
-events
-.slice(-6)
-.map((event) => `${event.type === 'error' ? 'Error' : 'Progress'}: ${event.message}`)
-.join('\n')
-);
+const getEventIconAndCleanMessage = (message: string) => {
+  const lower = message.toLowerCase();
+  let icon = '⚙️';
+  let cleanMessage = message;
+
+  if (lower.includes('thinking') || lower.includes('planning') || lower.includes('brainstorming')) {
+    icon = '💭';
+  } else if (lower.includes('read_file') || lower.includes('reading') || lower.includes('view_file')) {
+    icon = '📄';
+  } else if (lower.includes('write_file') || lower.includes('writing') || lower.includes('editing') || lower.includes('replace_file')) {
+    icon = '✏️';
+  } else if (lower.includes('tool') || lower.includes('executing')) {
+    icon = '🛠️';
+  } else if (lower.includes('command') || lower.includes('running') || lower.includes('executing command')) {
+    icon = '💻';
+  } else if (lower.includes('complete') || lower.includes('finished') || lower.includes('done')) {
+    icon = '✓';
+  }
+
+  cleanMessage = message.replace(/^(progress|error):\s*/i, '').trim();
+  return { icon, cleanMessage };
+};
 
 const setPromptCursor = (cursor: number) => {
 const nextSelection = { start: cursor, end: cursor };
@@ -1437,7 +1532,7 @@ allowQueue: false,
         }
       }
 
-      setTaskProgressText('');
+      setTaskProgressEvents([{ seq: -1, type: 'progress', message: 'Preparing workspace...' }]);
       const startResponse = await callHostApi('/api/chat-tasks', {
         method: 'POST',
         body: JSON.stringify({
@@ -1466,7 +1561,7 @@ allowQueue: false,
             progressEvents.push(event);
             lastSeq = Math.max(lastSeq, event.seq);
           });
-          setTaskProgressText(formatTaskProgress(progressEvents));
+          setTaskProgressEvents([...progressEvents]);
           setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
         }
 
@@ -1495,7 +1590,7 @@ allowQueue: false,
         setInputText(userMsg); // Restore prompt text on failure
       }
     } finally {
-      setTaskProgressText('');
+      setTaskProgressEvents([]);
       setLoadingState(false);
       setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
       setTimeout(processNextQueuedPrompt, 0);
@@ -1626,16 +1721,37 @@ allowQueue: false,
   const renderMessageContent = (content: string, role: 'user' | 'assistant') => {
     const imageRegex = /!\[.*?\]\((.*?)\)/g;
     const matches = [...content.matchAll(imageRegex)];
+    const cleanText = content.replace(imageRegex, '').trim();
+
+    const renderTextContent = (text: string) => {
+      const segments = parseMessageSegments(text);
+      return segments.map((segment, idx) => {
+        if (segment.type === 'details') {
+          return (
+            <CollapsibleDetailsCard
+              key={idx}
+              summary={segment.summary || 'Details'}
+              body={segment.body || ''}
+              theme={theme}
+            />
+          );
+        } else {
+          return segment.text?.trim() ? (
+            <Text key={idx} style={role === 'user' ? styles.userText : [styles.assistantText, { color: theme.textPrimary }]}>
+              {segment.text}
+            </Text>
+          ) : null;
+        }
+      });
+    };
 
     if (matches.length === 0) {
       return (
-        <Text style={role === 'user' ? styles.userText : [styles.assistantText, { color: theme.textPrimary }]}>
-          {content}
-        </Text>
+        <View style={{ gap: 8 }}>
+          {renderTextContent(content)}
+        </View>
       );
     }
-
-    const cleanText = content.replace(imageRegex, '').trim();
 
     return (
       <View style={{ gap: 8 }}>
@@ -1681,11 +1797,7 @@ allowQueue: false,
             );
           }
         })}
-        {cleanText ? (
-          <Text style={role === 'user' ? styles.userText : [styles.assistantText, { color: theme.textPrimary }]}>
-            {cleanText}
-          </Text>
-        ) : null}
+        {cleanText ? renderTextContent(cleanText) : null}
       </View>
     );
   };
@@ -1848,15 +1960,54 @@ toggleSidebar();
             })
           )}
 {loading && !isInitializingChat && (
-<View style={[styles.loadingBubble, { backgroundColor: theme.bgActive }]}>
-              <ActivityIndicator size="small" color={theme.textSecondary} />
-              {taskProgressText ? (
-                <Text style={[styles.loadingProgressText, { color: theme.textSecondary }]}>
-                  {taskProgressText}
+            <View style={[styles.stepperCard, { backgroundColor: theme.bgActive, borderColor: theme.borderColor }]}>
+              <View style={styles.stepperHeader}>
+                <ActivityIndicator size="small" color={theme.accent} style={styles.stepperSpinner} />
+                <Text style={[styles.stepperTitle, { color: theme.textPrimary }]}>
+                  Antigravity is working...
                 </Text>
-              ) : null}
+              </View>
+
+              {taskProgressEvents.length > 0 && (
+                <View style={styles.stepperList}>
+                  {taskProgressEvents.slice(-5).map((event, idx, arr) => {
+                    const isLast = idx === arr.length - 1;
+                    const { icon, cleanMessage } = getEventIconAndCleanMessage(event.message);
+
+                    return (
+                      <View key={event.seq !== undefined && event.seq !== null ? event.seq : idx} style={styles.stepItem}>
+                        <View style={styles.stepIndicatorContainer}>
+                          {isLast ? (
+                            <View style={[styles.activeDot, { backgroundColor: theme.accent }]} />
+                          ) : (
+                            <View style={[styles.completedCheck, { backgroundColor: theme.statusGreen }]}>
+                              <Text style={styles.checkMarkText}>✓</Text>
+                            </View>
+                          )}
+                          {!isLast && <View style={[styles.stepLine, { backgroundColor: theme.borderColor }]} />}
+                        </View>
+
+                        <View style={styles.stepContent}>
+                          <Text style={styles.stepIcon}>{icon}</Text>
+                          <Text
+                            style={[
+                              styles.stepText,
+                              isLast
+                                ? [styles.activeStepText, { color: theme.textPrimary }]
+                                : [styles.completedStepText, { color: theme.textSecondary }]
+                            ]}
+                            numberOfLines={2}
+                          >
+                            {cleanMessage}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
             </View>
-)}
+          )}
           {queuedPrompts.map((item, index) => (
             <View
               key={item.id}
@@ -2808,17 +2959,122 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
-loadingBubble: {
-alignSelf: 'flex-start',
-padding: 12,
-borderRadius: 16,
-gap: 8,
-},
-loadingProgressText: {
-fontSize: 12,
-lineHeight: 17,
-maxWidth: 280,
-},
+  stepperCard: {
+    alignSelf: 'flex-start',
+    maxWidth: '85%',
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginVertical: 8,
+    width: 290,
+  },
+  stepperHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  stepperSpinner: {
+    marginRight: 4,
+  },
+  stepperTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  stepperList: {
+    marginTop: 6,
+    gap: 12,
+  },
+  stepItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    minHeight: 36,
+  },
+  stepIndicatorContainer: {
+    width: 20,
+    alignItems: 'center',
+    marginRight: 10,
+    position: 'relative',
+    height: '100%',
+  },
+  completedCheck: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+  },
+  checkMarkText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  activeDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    zIndex: 1,
+  },
+  stepLine: {
+    position: 'absolute',
+    top: 16,
+    bottom: -16,
+    width: 2,
+    left: 9,
+  },
+  stepContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  stepIcon: {
+    fontSize: 14,
+    marginRight: 4,
+  },
+  stepText: {
+    fontSize: 13,
+    lineHeight: 18,
+    flex: 1,
+  },
+  activeStepText: {
+    fontWeight: '600',
+  },
+  completedStepText: {
+    fontWeight: '400',
+  },
+  collapsibleCard: {
+    borderWidth: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginVertical: 4,
+    width: '100%',
+  },
+  collapsibleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 10,
+    gap: 8,
+  },
+  collapsibleTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
+  collapsibleBody: {
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.05)',
+  },
+  collapsibleBodyText: {
+    fontSize: 12,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    lineHeight: 18,
+  },
 queuedPromptBubble: {
     alignSelf: 'flex-end',
     maxWidth: '85%',
