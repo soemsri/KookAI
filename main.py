@@ -141,14 +141,18 @@ def periodic_registry_update():
     global public_url
     last_registered_ip = ""
     last_registered_url = ""
+    last_update_time = 0.0
     while True:
         try:
             current_ip = get_local_ip()
-            if public_url and (current_ip != last_registered_ip or public_url != last_registered_url):
+            now = time.time()
+            # Force update registry if URL/IP changed, or at least once every 10 minutes (600s) to refresh TTL
+            if public_url and (current_ip != last_registered_ip or public_url != last_registered_url or (now - last_update_time) > 600):
                 host_id = get_or_create_host_id()
                 update_registry(host_id, public_url, current_ip)
                 last_registered_ip = current_ip
                 last_registered_url = public_url
+                last_update_time = now
         except Exception as e:
             logging.error(f"Error in periodic registry update: {e}")
         time.sleep(30)

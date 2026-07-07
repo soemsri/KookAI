@@ -133,6 +133,7 @@ const PREFERENCE_KEYS = {
   target: 'settings_default_target',
   speechLang: 'settings_speech_lang',
   themeMode: 'settings_theme_mode',
+  fontSize: 'settings_font_size',
 };
 
 const slashCommands: PromptSuggestion[] = [
@@ -516,7 +517,7 @@ const parseMessageSegments = (content: string): MessageSegment[] => {
   return segments;
 };
 
-const CollapsibleDetailsCard = ({ summary, body, theme }: { summary: string; body: string; theme: any }) => {
+const CollapsibleDetailsCard = ({ summary, body, theme, fontSize = 14 }: { summary: string; body: string; theme: any; fontSize?: number }) => {
   const [expanded, setExpanded] = useState(false);
   
   return (
@@ -535,11 +536,72 @@ const CollapsibleDetailsCard = ({ summary, body, theme }: { summary: string; bod
       
       {expanded && (
         <View style={[styles.collapsibleBody, { backgroundColor: theme.bgActive }]}>
-          <Text style={[styles.collapsibleBodyText, { color: theme.textPrimary }]}>
+          <Text style={[styles.collapsibleBodyText, { color: theme.textPrimary, fontSize: fontSize - 2, lineHeight: (fontSize - 2) * 1.4 }]}>
             {body}
           </Text>
         </View>
       )}
+    </View>
+  );
+};
+
+const FontSizeSlider = ({
+  value,
+  onChange,
+  theme,
+}: {
+  value: number;
+  onChange: (val: number) => void;
+  theme: any;
+}) => {
+  const min = 10;
+  const max = 22;
+  const trackWidth = 250;
+
+  const handleTouch = (evt: any) => {
+    const touchX = evt.nativeEvent.locationX;
+    const ratio = Math.max(0, Math.min(1, touchX / trackWidth));
+    const calculatedValue = Math.round(min + ratio * (max - min));
+    onChange(calculatedValue);
+  };
+
+  const percentage = ((value - min) / (max - min)) * 100;
+
+  return (
+    <View style={styles.customSliderContainer}>
+      <Text style={[styles.customSliderValueText, { color: theme.textPrimary }]}>
+        {value}px
+      </Text>
+      <View
+        style={[styles.customSliderTrack, { width: trackWidth, backgroundColor: theme.borderColor }]}
+        onStartShouldSetResponder={() => true}
+        onResponderGrant={handleTouch}
+        onResponderMove={handleTouch}
+      >
+        <View
+          style={[
+            styles.customSliderActiveTrack,
+            {
+              width: `${percentage}%`,
+              backgroundColor: theme.accent,
+            },
+          ]}
+        />
+        <View
+          style={[
+            styles.customSliderKnob,
+            {
+              left: `${percentage}%`,
+              backgroundColor: '#ffffff',
+              borderColor: theme.accent,
+            },
+          ]}
+        />
+      </View>
+      <View style={[styles.customSliderLabels, { width: trackWidth }]}>
+        <Text style={[styles.customSliderLabelText, { color: theme.textMuted }]}>{min}px</Text>
+        <Text style={[styles.customSliderLabelText, { color: theme.textMuted }]}>{max}px</Text>
+      </View>
     </View>
   );
 };
@@ -604,6 +666,7 @@ const [selectedModel, setSelectedModel] = useState("Gemini 3.5 Flash (High)");
 const [selectedTarget, setSelectedTarget] = useState("Sandbox");
 const [selectedSpeechLang, setSelectedSpeechLang] = useState("th-TH");
 const [selectedThemeMode, setSelectedThemeMode] = useState<ThemeMode>("system");
+const [selectedFontSize, setSelectedFontSize] = useState<number>(14);
 const [selectedProject, setSelectedProject] = useState("agy");
 const [projects, setProjects] = useState<string[]>(["agy"]);
 const [loadingProjects, setLoadingProjects] = useState(false);
@@ -620,6 +683,7 @@ const [draftSettingsModel, setDraftSettingsModel] = useState(selectedModel);
 const [draftSettingsTarget, setDraftSettingsTarget] = useState(selectedTarget);
 const [draftSettingsSpeechLang, setDraftSettingsSpeechLang] = useState(selectedSpeechLang);
 const [draftSettingsThemeMode, setDraftSettingsThemeMode] = useState<ThemeMode>(selectedThemeMode);
+const [draftSettingsFontSize, setDraftSettingsFontSize] = useState<number>(selectedFontSize);
 const [uploadingMedia, setUploadingMedia] = useState(false);
 const [hostBaseUrl, setHostBaseUrl] = useState<string>('');
 const [authToken, setAuthToken] = useState<string>('');
@@ -763,31 +827,38 @@ useEffect(() => {
 selectedProjectRef.current = selectedProject;
 }, [selectedProject]);
 
-const loadSavedPreferences = async () => {
-try {
-const [savedModel, savedTarget, savedSpeechLang, savedThemeMode] = await Promise.all([
-SecureStore.getItemAsync(PREFERENCE_KEYS.model),
-SecureStore.getItemAsync(PREFERENCE_KEYS.target),
-SecureStore.getItemAsync(PREFERENCE_KEYS.speechLang),
-SecureStore.getItemAsync(PREFERENCE_KEYS.themeMode),
-]);
+  const loadSavedPreferences = async () => {
+    try {
+      const [savedModel, savedTarget, savedSpeechLang, savedThemeMode, savedFontSize] = await Promise.all([
+        SecureStore.getItemAsync(PREFERENCE_KEYS.model),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.target),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.speechLang),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.themeMode),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.fontSize),
+      ]);
 
-if (savedModel && modelsList.some((model) => model.value === savedModel)) {
-setSelectedModel(savedModel);
-}
-if (savedTarget && targetsList.some((target) => target.value === savedTarget)) {
-setSelectedTarget(savedTarget);
-}
-if (savedSpeechLang && speechLanguageList.some((language) => language.value === savedSpeechLang)) {
-setSelectedSpeechLang(savedSpeechLang);
-}
-if (savedThemeMode && themeModeList.some((mode) => mode.value === savedThemeMode)) {
-setSelectedThemeMode(savedThemeMode as ThemeMode);
-}
-} catch (err) {
-console.error("Error loading saved settings:", err);
-}
-};
+      if (savedModel && modelsList.some((model) => model.value === savedModel)) {
+        setSelectedModel(savedModel);
+      }
+      if (savedTarget && targetsList.some((target) => target.value === savedTarget)) {
+        setSelectedTarget(savedTarget);
+      }
+      if (savedSpeechLang && speechLanguageList.some((language) => language.value === savedSpeechLang)) {
+        setSelectedSpeechLang(savedSpeechLang);
+      }
+      if (savedThemeMode && themeModeList.some((mode) => mode.value === savedThemeMode)) {
+        setSelectedThemeMode(savedThemeMode as ThemeMode);
+      }
+      if (savedFontSize) {
+        const size = parseInt(savedFontSize, 10);
+        if (!isNaN(size) && size >= 10 && size <= 22) {
+          setSelectedFontSize(size);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading saved settings:", err);
+    }
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -843,6 +914,40 @@ console.error("Error loading saved settings:", err);
     };
   }, []);
 
+  // Periodic auto-reconnect effect when disconnected
+  useEffect(() => {
+    if (isConnected) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const conn = await loadConnection();
+        if (conn && conn.token) {
+          const baseUrl = await getActiveBaseUrl(conn, true); // forceRefresh IP/URL from registry
+          if (baseUrl) {
+            // Ping projects to confirm connection
+            const response = await fetch(`${baseUrl}/api/projects`, {
+              headers: { 
+                'Authorization': `Bearer ${conn.token}`,
+                'Bypass-Tunnel-Reminder': 'true'
+              }
+            });
+            if (response.status === 200) {
+              console.log("Auto-reconnected successfully to base URL:", baseUrl);
+              setIsConnected(true);
+              // Reload projects and conversations list
+              loadConversations(true);
+              fetchUsageLimits();
+            }
+          }
+        }
+      } catch (err) {
+        console.log("Auto-reconnect attempt failed:", err);
+      }
+    }, 10000); // Try every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [isConnected]);
+
   const showToast = (message: string) => {
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
@@ -891,6 +996,7 @@ setDraftSettingsModel(selectedModel);
 setDraftSettingsTarget(selectedTarget);
 setDraftSettingsSpeechLang(selectedSpeechLang);
 setDraftSettingsThemeMode(selectedThemeMode);
+setDraftSettingsFontSize(selectedFontSize);
 setSettingsTab('general');
 setIsSettingsModalOpen(true);
 };
@@ -900,6 +1006,7 @@ setSelectedModel(draftSettingsModel);
 setSelectedTarget(draftSettingsTarget);
 setSelectedSpeechLang(draftSettingsSpeechLang);
 setSelectedThemeMode(draftSettingsThemeMode);
+setSelectedFontSize(draftSettingsFontSize);
 
 try {
 await Promise.all([
@@ -907,6 +1014,7 @@ SecureStore.setItemAsync(PREFERENCE_KEYS.model, draftSettingsModel),
 SecureStore.setItemAsync(PREFERENCE_KEYS.target, draftSettingsTarget),
 SecureStore.setItemAsync(PREFERENCE_KEYS.speechLang, draftSettingsSpeechLang),
 SecureStore.setItemAsync(PREFERENCE_KEYS.themeMode, draftSettingsThemeMode),
+SecureStore.setItemAsync(PREFERENCE_KEYS.fontSize, String(draftSettingsFontSize)),
 ]);
 showToast("Settings saved");
 } catch (err) {
@@ -1733,11 +1841,19 @@ allowQueue: false,
               summary={segment.summary || 'Details'}
               body={segment.body || ''}
               theme={theme}
+              fontSize={selectedFontSize}
             />
           );
         } else {
           return segment.text?.trim() ? (
-            <Text key={idx} style={role === 'user' ? styles.userText : [styles.assistantText, { color: theme.textPrimary }]}>
+            <Text
+              key={idx}
+              style={
+                role === 'user'
+                  ? [styles.userText, { fontSize: selectedFontSize, lineHeight: selectedFontSize * 1.4 }]
+                  : [styles.assistantText, { color: theme.textPrimary, fontSize: selectedFontSize, lineHeight: selectedFontSize * 1.4 }]
+              }
+            >
               {segment.text}
             </Text>
           ) : null;
@@ -1959,54 +2075,73 @@ toggleSidebar();
               );
             })
           )}
-{loading && !isInitializingChat && (
-            <View style={[styles.stepperCard, { backgroundColor: theme.bgActive, borderColor: theme.borderColor }]}>
-              <View style={styles.stepperHeader}>
-                <ActivityIndicator size="small" color={theme.accent} style={styles.stepperSpinner} />
-                <Text style={[styles.stepperTitle, { color: theme.textPrimary }]}>
-                  Antigravity is working...
+          {loading && !isInitializingChat && (
+            taskProgressEvents.length === 0 ? (
+              <View 
+                style={[
+                  styles.messageBubble, 
+                  styles.assistantBubble, 
+                  { 
+                    backgroundColor: theme.bgActive, 
+                    borderColor: theme.borderColor,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8,
+                    alignSelf: 'flex-start',
+                    marginVertical: 4
+                  }
+                ]}
+              >
+                <ActivityIndicator size="small" color={theme.accent} />
+                <Text style={[styles.assistantText, { color: theme.textSecondary, fontSize: selectedFontSize }]}>
+                  Thinking...
                 </Text>
               </View>
-
-              {taskProgressEvents.length > 0 && (
-                <View style={styles.stepperList}>
-                  {taskProgressEvents.slice(-5).map((event, idx, arr) => {
-                    const isLast = idx === arr.length - 1;
-                    const { icon, cleanMessage } = getEventIconAndCleanMessage(event.message);
-
-                    return (
-                      <View key={event.seq !== undefined && event.seq !== null ? event.seq : idx} style={styles.stepItem}>
-                        <View style={styles.stepIndicatorContainer}>
-                          {isLast ? (
-                            <View style={[styles.activeDot, { backgroundColor: theme.accent }]} />
-                          ) : (
-                            <View style={[styles.completedCheck, { backgroundColor: theme.statusGreen }]}>
-                              <Text style={styles.checkMarkText}>✓</Text>
-                            </View>
-                          )}
-                          {!isLast && <View style={[styles.stepLine, { backgroundColor: theme.borderColor }]} />}
-                        </View>
-
-                        <View style={styles.stepContent}>
-                          <Text style={styles.stepIcon}>{icon}</Text>
-                          <Text
-                            style={[
-                              styles.stepText,
-                              isLast
-                                ? [styles.activeStepText, { color: theme.textPrimary }]
-                                : [styles.completedStepText, { color: theme.textSecondary }]
-                            ]}
-                            numberOfLines={2}
-                          >
-                            {cleanMessage}
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  })}
+            ) : (
+              <View 
+                style={[
+                  styles.messageBubble, 
+                  styles.assistantBubble, 
+                  { 
+                    backgroundColor: theme.bgActive, 
+                    borderColor: theme.borderColor,
+                    alignSelf: 'flex-start',
+                    marginVertical: 4,
+                    width: '85%'
+                  }
+                ]}
+              >
+                <View style={{ gap: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <ActivityIndicator size="small" color={theme.accent} />
+                    <Text style={[styles.runningTaskTitle, { color: theme.textPrimary, fontSize: selectedFontSize, fontWeight: '700' }]}>
+                      Running task...
+                    </Text>
+                  </View>
+                  <View style={{ gap: 6, marginTop: 4 }}>
+                    {taskProgressEvents.slice(-8).map((event, idx) => {
+                      const { icon, cleanMessage } = getEventIconAndCleanMessage(event.message);
+                      return (
+                        <Text 
+                          key={event.seq !== undefined && event.seq !== null ? event.seq : idx}
+                          style={[
+                            styles.progressLogLine, 
+                            { 
+                              color: event.type === 'error' ? theme.statusRed : theme.textSecondary, 
+                              fontSize: Math.max(11, selectedFontSize - 1),
+                              lineHeight: Math.max(11, selectedFontSize - 1) * 1.4
+                            }
+                          ]}
+                          numberOfLines={2}
+                        >
+                          • {icon} {cleanMessage}
+                        </Text>
+                      );
+                    })}
+                  </View>
                 </View>
-              )}
-            </View>
+              </View>
+            )
           )}
           {queuedPrompts.map((item, index) => (
             <View
@@ -2106,7 +2241,7 @@ toggleSidebar();
                 )}
                 <TextInput
                   ref={promptInputRef}
-                  style={[styles.promptInputText, { color: theme.textPrimary }]}
+                  style={[styles.promptInputText, { color: theme.textPrimary, fontSize: selectedFontSize, lineHeight: selectedFontSize * 1.4 }]}
                   editable={!isPromptDisabled}
                   placeholder={isPromptDisabled ? "Preparing workspace..." : "Ask anything, @ to mention, / for actions"}
                   placeholderTextColor={theme.textMuted}
@@ -2532,6 +2667,15 @@ toggleSidebar();
                     </TouchableOpacity>
                   );
                 })}
+
+                <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>Chat Font Size</Text>
+                <View style={[styles.settingsSliderCard, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}>
+                  <FontSizeSlider
+                    value={draftSettingsFontSize}
+                    onChange={(val) => setDraftSettingsFontSize(val)}
+                    theme={theme}
+                  />
+                </View>
               </ScrollView>
             ) : (
               <View style={styles.settingsContent}>
@@ -3073,6 +3217,65 @@ const styles = StyleSheet.create({
   collapsibleBodyText: {
     fontSize: 12,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  customSliderContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    width: '100%',
+  },
+  customSliderValueText: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  customSliderTrack: {
+    height: 6,
+    borderRadius: 3,
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  customSliderActiveTrack: {
+    height: '100%',
+    borderRadius: 3,
+    position: 'absolute',
+    left: 0,
+    top: 0,
+  },
+  customSliderKnob: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    position: 'absolute',
+    top: -8,
+    marginLeft: -11,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2.5,
+    elevation: 3,
+  },
+  customSliderLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  customSliderLabelText: {
+    fontSize: 11,
+  },
+  settingsSliderCard: {
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    marginBottom: 16,
+    width: '100%',
+  },
+  runningTaskTitle: {
+    marginLeft: 4,
+  },
+  progressLogLine: {
     lineHeight: 18,
   },
 queuedPromptBubble: {
