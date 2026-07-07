@@ -9,6 +9,7 @@ import uuid
 import queue
 import urllib.parse
 import datetime
+from collections import deque
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
@@ -32,6 +33,8 @@ WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Default execution timeout for the agy CLI (seconds)
 AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "300"))
+AGY_CLI_MAX_CAPTURE_CHARS = int(os.environ.get("AGY_CLI_MAX_CAPTURE_CHARS", "200000"))
+AGY_RELOAD = os.environ.get("AGY_RELOAD", "0").lower() in ("1", "true", "yes", "on")
 
 app = FastAPI(title="AGY Workspace Chat Client")
 
@@ -98,8 +101,8 @@ def start_localtunnel():
                         if url_match:
                             public_url = url_match.group(0).strip()
                             logging.info(f"Localtunnel started successfully! Public URL: {public_url}")
-                            # Update Worker Registry
-                            update_registry(host_id, public_url, local_ip_addr)
+                            # Update Worker Registry with current local IP dynamically
+                            update_registry(host_id, public_url, get_local_ip())
                 return_code = proc.wait()
                 logging.warning(f"Localtunnel subprocess exited with code {return_code}. Restarting in 5 seconds...")
             except Exception as e:
@@ -132,6 +135,23 @@ def update_registry(host_id, url, local_ip):
             logging.info(f"Updated host URL on Worker Registry: {res.read().decode().strip()}")
     except Exception as e:
         logging.error(f"Failed to update registry: {e}")
+
+def periodic_registry_update():
+    import time
+    global public_url
+    last_registered_ip = ""
+    last_registered_url = ""
+    while True:
+        try:
+            current_ip = get_local_ip()
+            if public_url and (current_ip != last_registered_ip or public_url != last_registered_url):
+                host_id = get_or_create_host_id()
+                update_registry(host_id, public_url, current_ip)
+                last_registered_ip = current_ip
+                last_registered_url = public_url
+        except Exception as e:
+            logging.error(f"Error in periodic registry update: {e}")
+        time.sleep(30)
 
 # Global active pairing pins mapping: pin -> expiry
 ACTIVE_PINS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "active_pins.json")
@@ -197,6 +217,7 @@ class PairRequest(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     start_localtunnel()
+    threading.Thread(target=periodic_registry_update, daemon=True).start()
 
 @app.get("/api/pairing-code")
 async def get_pairing_code():
@@ -692,19 +713,41 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
         cwd=cwd_path
     )
     output_queue = queue.Queue()
-    stdout_lines = []
-    stderr_lines = []
+    stdout_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
+    stderr_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
 
-    def reader(pipe, source, sink):
+    def append_capture(capture, line):
+        original_len = len(line)
+        if original_len > AGY_CLI_MAX_CAPTURE_CHARS:
+            line = line[-AGY_CLI_MAX_CAPTURE_CHARS:]
+            capture["truncated"] = True
+        capture["chunks"].append(line)
+        capture["chars"] += len(line)
+        capture["total"] += original_len
+        while capture["chars"] > AGY_CLI_MAX_CAPTURE_CHARS and capture["chunks"]:
+            removed = capture["chunks"].popleft()
+            capture["chars"] -= len(removed)
+            capture["truncated"] = True
+
+    def capture_text(capture):
+        text = "".join(capture["chunks"])
+        if capture["truncated"]:
+            return (
+                f"[... output truncated to last {AGY_CLI_MAX_CAPTURE_CHARS} chars "
+                f"from {capture['total']} chars ...]\n{text}"
+            )
+        return text
+
+    def reader(pipe, source, capture):
         try:
             for line in iter(pipe.readline, ""):
-                sink.append(line)
+                append_capture(capture, line)
                 output_queue.put((source, line.rstrip("\n")))
         finally:
             pipe.close()
 
-    stdout_thread = threading.Thread(target=reader, args=(proc.stdout, "stdout", stdout_lines), daemon=True)
-    stderr_thread = threading.Thread(target=reader, args=(proc.stderr, "stderr", stderr_lines), daemon=True)
+    stdout_thread = threading.Thread(target=reader, args=(proc.stdout, "stdout", stdout_capture), daemon=True)
+    stderr_thread = threading.Thread(target=reader, args=(proc.stderr, "stderr", stderr_capture), daemon=True)
     stdout_thread.start()
     stderr_thread.start()
 
@@ -725,8 +768,8 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
             raise subprocess.TimeoutExpired(
                 cmd,
                 timeout,
-                output="".join(stdout_lines),
-                stderr="".join(stderr_lines)
+                output=capture_text(stdout_capture),
+                stderr=capture_text(stderr_capture)
             )
 
     stdout_thread.join(timeout=1)
@@ -741,8 +784,8 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
     return subprocess.CompletedProcess(
         cmd,
         proc.returncode,
-        stdout="".join(stdout_lines),
-        stderr="".join(stderr_lines)
+        stdout=capture_text(stdout_capture),
+        stderr=capture_text(stderr_capture)
     )
 
 def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: str = "Sandbox", workspace: str = "agy", progress_callback=None):
@@ -1482,4 +1525,4 @@ async def get_media(path: str, request: Request):
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=AGY_RELOAD)

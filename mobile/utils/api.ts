@@ -48,10 +48,10 @@ export async function clearConnection() {
 }
 
 // Test connectivity to a specific URL (Pinging `/api/projects`)
-async function testUrl(baseUrl: string, token: string): Promise<boolean> {
+async function testUrl(baseUrl: string, token: string, timeoutMs = 2000): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs); // configurable timeout
     const response = await fetch(`${baseUrl}/api/projects`, {
       headers: { 
         'Authorization': `Bearer ${token}`,
@@ -77,7 +77,7 @@ export async function getActiveBaseUrl(info: ConnectionInfo, forceRefresh = fals
 
   // 1. Try local LAN IP
   const localBase = `http://${info.localIp}:8080`;
-  const isLocalOk = await testUrl(localBase, info.token);
+  const isLocalOk = await testUrl(localBase, info.token, 2000); // 2s timeout is fine for LAN
   if (isLocalOk) {
     console.log("Routing via Local LAN:", localBase);
     cachedActiveBaseUrl = localBase;
@@ -85,7 +85,7 @@ export async function getActiveBaseUrl(info: ConnectionInfo, forceRefresh = fals
   }
 
   // 2. Try stored WAN / Cloudflare Tunnel URL
-  const isWanOk = await testUrl(info.url, info.token);
+  const isWanOk = await testUrl(info.url, info.token, 5000); // 5s timeout for public WAN
   if (isWanOk) {
     console.log("Routing via public WAN:", info.url);
     cachedActiveBaseUrl = info.url;
@@ -106,7 +106,7 @@ export async function getActiveBaseUrl(info: ConnectionInfo, forceRefresh = fals
       await saveConnection(updatedInfo);
       
       // Test the newly resolved URL
-      const isFreshWanOk = await testUrl(freshUrl, info.token);
+      const isFreshWanOk = await testUrl(freshUrl, info.token, 5000); // 5s timeout for public WAN
       if (isFreshWanOk) {
         console.log("Successfully resolved and routed via public WAN:", freshUrl);
         cachedActiveBaseUrl = freshUrl;
