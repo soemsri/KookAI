@@ -32,7 +32,7 @@ DESKTOP_DIR = os.path.join(HOME_DIR, "Desktop")
 WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Default execution timeout for the agy CLI (seconds)
-AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "300"))
+AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "600"))
 AGY_CLI_MAX_CAPTURE_CHARS = int(os.environ.get("AGY_CLI_MAX_CAPTURE_CHARS", "200000"))
 AGY_RELOAD = os.environ.get("AGY_RELOAD", "0").lower() in ("1", "true", "yes", "on")
 
