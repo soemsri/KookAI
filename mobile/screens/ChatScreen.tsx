@@ -670,6 +670,42 @@ const [selectedFontSize, setSelectedFontSize] = useState<number>(14);
 const [selectedProject, setSelectedProject] = useState("agy");
 const [projects, setProjects] = useState<string[]>(["agy"]);
 const [loadingProjects, setLoadingProjects] = useState(false);
+const [expandedProjects, setExpandedProjects] = useState<{ [key: string]: boolean }>({});
+
+const chatFadeAnim = useRef(new Animated.Value(1)).current;
+const chatTranslateY = useRef(new Animated.Value(0)).current;
+
+const animateChatTransition = () => {
+  chatFadeAnim.setValue(0);
+  chatTranslateY.setValue(15);
+  Animated.parallel([
+    Animated.timing(chatFadeAnim, {
+      toValue: 1,
+      duration: 350,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }),
+    Animated.timing(chatTranslateY, {
+      toValue: 0,
+      duration: 350,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }),
+  ]).start();
+};
+
+const toggleThemeMode = async () => {
+  const nextMode = effectiveScheme === 'light' ? 'dark' : 'light';
+  setSelectedThemeMode(nextMode);
+  setDraftSettingsThemeMode(nextMode);
+  try {
+    await SecureStore.setItemAsync(PREFERENCE_KEYS.themeMode, nextMode);
+    showToast(`Switched to ${nextMode} theme`);
+  } catch (err) {
+    console.error("Error saving toggled theme:", err);
+  }
+};
+
 
 // Modal Overlays
 const [isModelModalOpen, setIsModelModalOpen] = useState(false);
@@ -817,6 +853,7 @@ loadingRef.current = loading;
 
 useEffect(() => {
 activeConvoIdRef.current = activeConvoId;
+animateChatTransition();
 }, [activeConvoId]);
 
 useEffect(() => {
@@ -1956,30 +1993,55 @@ allowQueue: false,
               <View key={projName} style={styles.projectGroup}>
                 <Text style={[styles.projectHeader, { color: theme.textSecondary }]}>{projName.toUpperCase()}</Text>
                 <View style={styles.projectItems}>
-                  {groupedConversations[projName].map((convo) => (
-                    <TouchableOpacity
-                      key={convo.id}
-                      style={[
-                        styles.sidebarConvoItem,
-                        activeConvoId === convo.id && { backgroundColor: theme.bgActive }
-                      ]}
-onPress={() => {
-selectConversation(convo.id, convo.project);
-toggleSidebar();
-}}
-                    >
-                      <Text
-                        style={[
-                          styles.sidebarConvoText,
-                          { color: activeConvoId === convo.id ? theme.textPrimary : theme.textSecondary },
-                          activeConvoId === convo.id && { fontWeight: '700' }
-                        ]}
-                        numberOfLines={1}
-                      >
-                        💬 {convo.title || "Untitled Conversation"}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                  {(() => {
+                    const allItems = groupedConversations[projName];
+                    const displayedItems = expandedProjects[projName] ? allItems : allItems.slice(0, 5);
+                    const hasMore = allItems.length > 5;
+                    return (
+                      <>
+                        {displayedItems.map((convo) => (
+                          <TouchableOpacity
+                            key={convo.id}
+                            style={[
+                              styles.sidebarConvoItem,
+                              activeConvoId === convo.id && { backgroundColor: theme.bgActive }
+                            ]}
+                            onPress={() => {
+                              selectConversation(convo.id, convo.project);
+                              toggleSidebar();
+                            }}
+                          >
+                            <Text
+                              style={[
+                                styles.sidebarConvoText,
+                                { color: activeConvoId === convo.id ? theme.textPrimary : theme.textSecondary },
+                                activeConvoId === convo.id && { fontWeight: '700' }
+                              ]}
+                              numberOfLines={1}
+                            >
+                              💬 {convo.title || "Untitled Conversation"}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                        {hasMore && !expandedProjects[projName] && (
+                          <TouchableOpacity
+                            style={styles.seeAllBtn}
+                            onPress={() => setExpandedProjects(prev => ({ ...prev, [projName]: true }))}
+                          >
+                            <Text style={[styles.seeAllText, { color: theme.accent }]}>See all ({allItems.length - 5} more)</Text>
+                          </TouchableOpacity>
+                        )}
+                        {hasMore && expandedProjects[projName] && (
+                          <TouchableOpacity
+                            style={styles.seeAllBtn}
+                            onPress={() => setExpandedProjects(prev => ({ ...prev, [projName]: false }))}
+                          >
+                            <Text style={[styles.seeAllText, { color: theme.accent }]}>Show less</Text>
+                          </TouchableOpacity>
+                        )}
+                      </>
+                    );
+                  })()}
                 </View>
               </View>
             ))
@@ -1999,7 +2061,7 @@ toggleSidebar();
       </Animated.View>
 
       {/* Main Chat Area */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.bgPrimary, borderBottomWidth: 1, borderBottomColor: theme.borderColor }]}>
         <View style={styles.headerLeft}>
           <TouchableOpacity style={styles.menuBtn} onPress={toggleSidebar}>
             <Text style={{ color: theme.textPrimary, fontSize: 24 }}>☰</Text>
@@ -2010,6 +2072,9 @@ toggleSidebar();
             </Text>
           </View>
         </View>
+        <TouchableOpacity style={styles.themeToggleBtn} onPress={toggleThemeMode}>
+          <Text style={{ fontSize: 20 }}>{selectedThemeMode === 'light' ? '🌙' : '☀️'}</Text>
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
@@ -2018,17 +2083,18 @@ toggleSidebar();
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        <ScrollView
-          ref={scrollViewRef}
-          style={styles.messageScroll}
-          contentContainerStyle={styles.messageContent}
-          onContentSizeChange={() => {
-            if (pendingConversationScrollRef.current) {
-              pendingConversationScrollRef.current = false;
-              scrollMessagesToBottom(false);
-            }
-          }}
-        >
+        <Animated.View style={{ opacity: chatFadeAnim, transform: [{ translateY: chatTranslateY }], flex: 1 }}>
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.messageScroll}
+            contentContainerStyle={styles.messageContent}
+            onContentSizeChange={() => {
+              if (pendingConversationScrollRef.current) {
+                pendingConversationScrollRef.current = false;
+                scrollMessagesToBottom(false);
+              }
+            }}
+          >
           {isInitializingChat ? (
             <View style={styles.initializingView}>
               <ActivityIndicator size="small" color={theme.accent} />
@@ -2171,7 +2237,8 @@ toggleSidebar();
               </Text>
             </View>
           ))}
-        </ScrollView>
+          </ScrollView>
+        </Animated.View>
 
         {/* Web-matching Input Bar Area */}
         <View style={[styles.promptSection, { backgroundColor: theme.bgSecondary, paddingBottom: promptBottomPadding, marginBottom: promptKeyboardOffset }]}>
@@ -4122,6 +4189,22 @@ gap: 12,
   },
   toastText: {
     fontSize: 13,
+    fontWeight: '600',
+  },
+  themeToggleBtn: {
+    padding: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seeAllBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: 'flex-start',
+    marginTop: 4,
+  },
+  seeAllText: {
+    fontSize: 12,
     fontWeight: '600',
   }
 });

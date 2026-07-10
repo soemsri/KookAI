@@ -79,24 +79,33 @@ def start_localtunnel():
     local_ip_addr = get_local_ip()
     host_id = get_or_create_host_id()
     
-    cmd = ["npx", "localtunnel", "--port", "8080"]
-    logging.info("Starting localtunnel...")
+    cmd = ["npx", "wrangler", "tunnel", "quick-start", "http://localhost:8080"]
+    logging.info("Starting Cloudflare Tunnel...")
     
     def run_tunnel():
         global public_url
         import time
         while True:
             try:
-                logging.info("Launching localtunnel subprocess...")
+                logging.info("Launching Cloudflare Tunnel subprocess...")
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    bufsize=1
+                    bufsize=1,
+                    shell=(os.name == 'nt')
                 )
                 for line in iter(proc.stdout.readline, ''):
-                    if "your url is:" in line.lower():
+                    logging.info(f"[Tunnel] {line.strip()}")
+                    if "trycloudflare.com" in line:
+                        url_match = re.search(r'https?://[^\s|]+trycloudflare\.com[^\s|]*', line)
+                        if url_match:
+                            public_url = url_match.group(0).strip()
+                            logging.info(f"Cloudflare Tunnel started successfully! Public URL: {public_url}")
+                            # Update Worker Registry with current local IP dynamically
+                            update_registry(host_id, public_url, get_local_ip())
+                    elif "your url is:" in line.lower():
                         url_match = re.search(r'https?://[^\s]+', line)
                         if url_match:
                             public_url = url_match.group(0).strip()
@@ -104,12 +113,13 @@ def start_localtunnel():
                             # Update Worker Registry with current local IP dynamically
                             update_registry(host_id, public_url, get_local_ip())
                 return_code = proc.wait()
-                logging.warning(f"Localtunnel subprocess exited with code {return_code}. Restarting in 5 seconds...")
+                logging.warning(f"Tunnel subprocess exited with code {return_code}. Restarting in 5 seconds...")
             except Exception as e:
-                logging.error(f"Error running localtunnel: {e}. Retrying in 5 seconds...")
+                logging.error(f"Error running tunnel: {e}. Retrying in 5 seconds...")
             time.sleep(5)
         
     threading.Thread(target=run_tunnel, daemon=True).start()
+
 
 def update_registry(host_id, url, local_ip):
     import urllib.request
@@ -1434,7 +1444,8 @@ async def get_usage_limits(request: Request):
             ["npx", "ccusage", "session", "--json"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            shell=(os.name == 'nt')
         )
         if res.returncode == 0:
             data = json.loads(res.stdout)
