@@ -101,14 +101,18 @@ def start_localtunnel():
                     if "trycloudflare.com" in line:
                         url_match = re.search(r'https?://[^\s|]+trycloudflare\.com[^\s|]*', line)
                         if url_match:
-                            public_url = url_match.group(0).strip()
+                            raw_url = url_match.group(0).strip()
+                            parsed = urllib.parse.urlparse(raw_url)
+                            public_url = f"{parsed.scheme}://{parsed.netloc}"
                             logging.info(f"Cloudflare Tunnel started successfully! Public URL: {public_url}")
                             # Update Worker Registry with current local IP dynamically
                             update_registry(host_id, public_url, get_local_ip())
                     elif "your url is:" in line.lower():
                         url_match = re.search(r'https?://[^\s]+', line)
                         if url_match:
-                            public_url = url_match.group(0).strip()
+                            raw_url = url_match.group(0).strip()
+                            parsed = urllib.parse.urlparse(raw_url)
+                            public_url = f"{parsed.scheme}://{parsed.netloc}"
                             logging.info(f"Localtunnel started successfully! Public URL: {public_url}")
                             # Update Worker Registry with current local IP dynamically
                             update_registry(host_id, public_url, get_local_ip())
