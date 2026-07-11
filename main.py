@@ -29,6 +29,17 @@ GEMINI_DATA_DIR = os.path.join(HOME_DIR, ".gemini")
 ANTIGRAVITY_DATA_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity")
 ANTIGRAVITY_CLI_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity-cli")
 DESKTOP_DIR = os.path.join(HOME_DIR, "Desktop")
+if os.name == "nt":
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")
+        path, _ = winreg.QueryValueEx(key, "Desktop")
+        winreg.CloseKey(key)
+        resolved_desktop = os.path.expandvars(path)
+        if os.path.exists(resolved_desktop):
+            DESKTOP_DIR = resolved_desktop
+    except Exception as e:
+        logging.error(f"Failed to resolve Windows Desktop user shell folder: {e}")
 WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Default execution timeout for the agy CLI (seconds)
@@ -437,29 +448,61 @@ def clean_project_name(path_name: str) -> str:
         return "GinRaiDee"
     return path_name
 
-# Helper: Get list of projects on Desktop (Dynamic list of folders)
+# Helper: Get list of projects on Desktop & Parent Workspace directory (Dynamic list of folders)
 def get_desktop_projects():
-    desktop_path = DESKTOP_DIR
     projects = ["agy", "VirtualOffice", "GinRaiDee", "HumanRelation"] # Default minimum set
+    
+    # 1. Scan the sibling directory (parent of workspace_dir)
+    parent_dir = os.path.dirname(WORKSPACE_DIR)
+    if os.path.exists(parent_dir):
+        try:
+            for entry in os.listdir(parent_dir):
+                full_path = os.path.join(parent_dir, entry)
+                if os.path.isdir(full_path) and not entry.startswith('.'):
+                    cleaned = clean_project_name(entry)
+                    if cleaned not in projects:
+                        projects.append(cleaned)
+        except Exception as e:
+            logging.error(f"Error scanning parent project dir {parent_dir}: {e}")
+            
+    # 2. Scan Desktop path
+    desktop_path = DESKTOP_DIR
     if os.path.exists(desktop_path):
-        for entry in os.listdir(desktop_path):
-            full_path = os.path.join(desktop_path, entry)
-            if os.path.isdir(full_path) and not entry.startswith('.'):
-                cleaned = clean_project_name(entry)
-                if cleaned not in projects:
-                    projects.append(cleaned)
+        try:
+            for entry in os.listdir(desktop_path):
+                full_path = os.path.join(desktop_path, entry)
+                if os.path.isdir(full_path) and not entry.startswith('.'):
+                    cleaned = clean_project_name(entry)
+                    if cleaned not in projects:
+                        projects.append(cleaned)
+        except Exception as e:
+            logging.error(f"Error scanning desktop dir {desktop_path}: {e}")
+            
     return projects
 
 def resolve_project_directory(project_id: str) -> str:
+    # 1. Check parent workspace directory (sibling projects)
+    parent_dir = os.path.dirname(WORKSPACE_DIR)
+    direct_path = os.path.join(parent_dir, project_id)
+    if os.path.exists(direct_path) and os.path.isdir(direct_path):
+        return direct_path
+    if os.path.exists(parent_dir):
+        for entry in os.listdir(parent_dir):
+            full_path = os.path.join(parent_dir, entry)
+            if os.path.isdir(full_path) and clean_project_name(entry) == project_id:
+                return full_path
+
+    # 2. Check Desktop directory
     desktop_path = DESKTOP_DIR
     direct_path = os.path.join(desktop_path, project_id)
-    if os.path.exists(direct_path):
+    if os.path.exists(direct_path) and os.path.isdir(direct_path):
         return direct_path
     if os.path.exists(desktop_path):
         for entry in os.listdir(desktop_path):
             full_path = os.path.join(desktop_path, entry)
             if os.path.isdir(full_path) and clean_project_name(entry) == project_id:
                 return full_path
+                
     return WORKSPACE_DIR
 
 def get_conversation_project(conversation_id: str) -> Optional[str]:
