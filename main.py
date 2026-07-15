@@ -770,6 +770,8 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
         cwd=cwd_path
     )
