@@ -102,6 +102,9 @@ const colors = {
 };
 
 const modelsList = [
+  { value: "Gemini 3.6 Flash (High)", desc: "Fastest response, ideal for coding tasks" },
+  { value: "Gemini 3.6 Flash (Medium)", desc: "Balanced speed and performance" },
+  { value: "Gemini 3.6 Flash (Low)", desc: "Fast, low resource usage" },
   { value: "Gemini 3.5 Flash (High)", desc: "Fastest response, ideal for coding tasks" },
   { value: "Gemini 3.5 Flash (Medium)", desc: "Balanced speed and performance" },
   { value: "Gemini 3.5 Flash (Low)", desc: "Fast, low resource usage" },
