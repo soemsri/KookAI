@@ -9,6 +9,40 @@ document.addEventListener("DOMContentLoaded", () => {
   const headerProject = document.getElementById("headerProject");
   const headerConvo = document.getElementById("headerConvo");
 
+  // Mobile Sidebar Controls
+  const mobileSidebarToggle = document.getElementById("mobileSidebarToggle");
+  const mobileHistorySidebarToggle = document.getElementById("mobileHistorySidebarToggle");
+  const sidebarCloseBtn = document.getElementById("sidebarCloseBtn");
+  const sidebarBackdrop = document.getElementById("sidebarBackdrop");
+  const sidebar = document.querySelector(".sidebar");
+
+  function openMobileSidebar() {
+    if (sidebar) sidebar.classList.add("open");
+    if (sidebarBackdrop) sidebarBackdrop.classList.remove("hidden");
+  }
+
+  function closeMobileSidebar() {
+    if (sidebar) sidebar.classList.remove("open");
+    if (sidebarBackdrop) sidebarBackdrop.classList.add("hidden");
+  }
+
+  function autoCloseMobileSidebar() {
+    if (window.innerWidth <= 768) {
+      closeMobileSidebar();
+    }
+  }
+
+  if (mobileSidebarToggle) mobileSidebarToggle.addEventListener("click", openMobileSidebar);
+  if (mobileHistorySidebarToggle) mobileHistorySidebarToggle.addEventListener("click", openMobileSidebar);
+  if (sidebarCloseBtn) sidebarCloseBtn.addEventListener("click", closeMobileSidebar);
+  if (sidebarBackdrop) sidebarBackdrop.addEventListener("click", closeMobileSidebar);
+
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 768) {
+      closeMobileSidebar();
+    }
+  });
+
   // Chat Panel UI Elements
   const promptTextarea = document.getElementById("promptTextarea");
   const sendBtn = document.getElementById("sendBtn");
@@ -154,11 +188,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (fastOption) fastOption.disabled = !capability?.fast;
   }
 
-  function applyModelSelection(model, startFreshOnProviderChange = true) {
-    const previousProvider = currentProvider;
+  function applyModelSelection(model, startFreshOnProviderChange = false) {
     currentModel = model;
     updateCodexControls();
-    if (startFreshOnProviderChange && previousProvider !== currentProvider && activeConversationId) {
+    if (startFreshOnProviderChange && activeConversationId) {
       startNewConversation();
     }
   }
@@ -432,6 +465,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Load Conversation ---
   function loadConversation(cid, project) {
+    autoCloseMobileSidebar();
     activeConversationId = cid;
     currentWorkspace = project;
     if (headerProject) headerProject.textContent = project;
@@ -459,19 +493,21 @@ document.addEventListener("DOMContentLoaded", () => {
     fetch(`/api/conversation/${cid}`)
       .then(res => res.json())
       .then(data => {
-        if (data.provider === "codex" && isCodexModel(data.model)) {
-          if (["Light", "Medium", "High", "Extra High", "Ultra"].includes(data.effort)) {
-            currentCodexEffort = data.effort;
+        if (data.model) {
+          if (data.effort) {
+            if (["Light", "Medium", "High", "Extra High", "Ultra"].includes(data.effort)) {
+              currentCodexEffort = data.effort;
+            }
+            if (["Low", "Medium", "High", "Extra", "Max"].includes(data.effort)) {
+              currentClaudeEffort = data.effort;
+            }
           }
-          if (["Standard", "Fast"].includes(data.speed)) {
+          if (data.speed && ["Standard", "Fast"].includes(data.speed)) {
             currentCodexSpeed = data.speed;
           }
-          applyModelSelection(data.model, false);
-        } else if (data.provider === "claude" && isClaudeModel(data.model)) {
-          if (["Low", "Medium", "High", "Extra", "Max"].includes(data.effort)) {
-            currentClaudeEffort = data.effort;
+          if (data.thinking !== undefined) {
+            currentClaudeThinking = data.thinking !== false;
           }
-          currentClaudeThinking = data.thinking !== false;
           applyModelSelection(data.model, false);
         } else if (data.provider === "agy" && currentProvider !== "agy") {
           applyModelSelection("Gemini 3.5 Flash (High)", false);
@@ -491,6 +527,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Start New Conversation ---
   function startNewConversation() {
+    autoCloseMobileSidebar();
     activeConversationId = generateUUID();
     messagesContainer.innerHTML = "";
     welcomeScreen.classList.remove("hidden");
@@ -532,11 +569,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function showChatTab() {
+    autoCloseMobileSidebar();
     switchNavigationPanel(chatPanel);
     historyMenuBtn.classList.remove("active");
   }
 
   function showHistoryTab() {
+    autoCloseMobileSidebar();
     switchNavigationPanel(historyPanel);
     historyMenuBtn.classList.add("active");
 
@@ -1042,15 +1081,26 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- Dropdown Layout Helpers ---
   function positionDropdown(btn, dropdown, direction = "down") {
     dropdown.classList.remove("hidden");
+    if (window.innerWidth <= 600) {
+      dropdown.style.top = "";
+      dropdown.style.left = "";
+      dropdown.style.bottom = "";
+      return;
+    }
     const rect = btn.getBoundingClientRect();
+    const dropdownWidth = dropdown.offsetWidth || 260;
+    let left = rect.left;
+    if (left + dropdownWidth > window.innerWidth - 12) {
+      left = Math.max(12, window.innerWidth - dropdownWidth - 12);
+    }
     if (direction === "up") {
       dropdown.style.top = "";
       dropdown.style.bottom = `${window.innerHeight - rect.top + 8}px`;
-      dropdown.style.left = `${rect.left}px`;
+      dropdown.style.left = `${left}px`;
     } else {
       dropdown.style.bottom = "";
       dropdown.style.top = `${rect.bottom + 8}px`;
-      dropdown.style.left = `${rect.left}px`;
+      dropdown.style.left = `${left}px`;
     }
   }
 

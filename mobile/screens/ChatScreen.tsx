@@ -1010,12 +1010,8 @@ setSelectedClaudeThinking(true);
 }
 
 if (currentProvider !== nextModel.provider && activeConvoIdRef.current) {
-const newId = `temp_${selectedProjectRef.current}_${Math.random().toString(36).substring(2, 11)}`;
-updateActiveConversation(newId, selectedProjectRef.current, nextModel.provider);
-setQueuedPromptList([]);
-updateMessages([]);
-const providerLabel = nextModel.provider === 'codex' ? 'Codex' : (nextModel.provider === 'claude' ? 'Claude' : 'KookAI');
-showToast(`Started a new ${providerLabel} conversation`);
+  activeConvoProviderRef.current = nextModel.provider;
+  setActiveConvoProvider(nextModel.provider);
 }
 
 setSelectedModel(modelName);
@@ -1629,25 +1625,22 @@ setSelectedProject(resolvedProject);
 selectedProjectRef.current = resolvedProject;
 updateActiveConversation(cid, resolvedProject, resolvedProvider);
 }
-if (resolvedProvider === 'codex' && data.model && getModelOption(data.model)?.provider === 'codex') {
-setSelectedModel(data.model);
-if (getCodexEfforts(data.model).some((item) => item.value === data.effort)) {
-setSelectedCodexEffort(data.effort);
-}
-if (getCodexSpeeds(data.model).some((item) => item.value === data.speed)) {
-setSelectedCodexSpeed(data.speed);
-}
-} else if (resolvedProvider === 'agy' && isCodexModel(selectedModel)) {
-setSelectedModel("Gemini 3.5 Flash (High)");
-}
-if (resolvedProvider === 'claude' && data.model && isClaudeModel(data.model)) {
-setSelectedModel(data.model);
-if (getClaudeEfforts(data.model).some((item) => item.value === data.effort)) {
-setSelectedClaudeEffort(data.effort);
-}
-setSelectedClaudeThinking(data.thinking !== false);
-} else if (resolvedProvider === 'agy' && isClaudeModel(selectedModel)) {
-setSelectedModel("Gemini 3.5 Flash (High)");
+if (data.model && getModelOption(data.model)) {
+  setSelectedModel(data.model);
+  if (data.effort) {
+    if (getCodexEfforts(data.model).some((item) => item.value === data.effort)) {
+      setSelectedCodexEffort(data.effort);
+    }
+    if (getClaudeEfforts(data.model).some((item) => item.value === data.effort)) {
+      setSelectedClaudeEffort(data.effort);
+    }
+  }
+  if (data.speed && getCodexSpeeds(data.model).some((item) => item.value === data.speed)) {
+    setSelectedCodexSpeed(data.speed);
+  }
+  if (data.thinking !== undefined) {
+    setSelectedClaudeThinking(data.thinking !== false);
+  }
 }
 pendingConversationScrollRef.current = true;
 updateMessages(data.messages || []);

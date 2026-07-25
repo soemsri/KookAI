@@ -134,8 +134,15 @@ body {
 .sidebar-brand {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   padding: 4px 8px 16px 8px;
+}
+
+.sidebar-brand-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .brand-logo {
@@ -151,6 +158,57 @@ body {
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
+}
+
+.sidebar-close-btn {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.sidebar-close-btn:hover {
+  background-color: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.mobile-sidebar-toggle {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.mobile-sidebar-toggle:hover {
+  background-color: var(--bg-active);
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  background-color: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 999;
+  opacity: 1;
+  transition: opacity var(--transition-normal);
 }
 
 /* New Conversation Button */
@@ -945,11 +1003,17 @@ body {
   overflow-y: auto;
 }
 
+.history-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
 .history-title {
   font-family: var(--font-display);
   font-size: 24px;
   font-weight: 600;
-  margin-bottom: 20px;
   color: var(--text-primary);
 }
 
@@ -2153,4 +2217,237 @@ body {
   border-radius: 12px;
   font-size: 10.5px;
   font-weight: 600;
+}
+
+/* ==========================================================================
+   Responsive Design System for Mobile & Desktop (Cross-Platform UX/UI)
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  /* Sidebar Drawer on Mobile */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1000;
+    width: 290px;
+    max-width: 85vw;
+    height: 100%;
+    height: 100dvh;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    transform: translateX(-100%);
+    transition: transform var(--transition-normal);
+    background-color: var(--bg-primary);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-close-btn,
+  .mobile-sidebar-toggle {
+    display: flex;
+  }
+
+  /* Header & Navigation */
+  .chat-header {
+    padding: 10px 14px;
+    min-height: 52px;
+  }
+
+  .header-caption {
+    max-width: calc(100% - 44px);
+    overflow: hidden;
+  }
+
+  .header-convo {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 13px;
+  }
+
+  .project-picker-dropdown {
+    font-size: 13px;
+  }
+
+  /* Messages & Chat Scroll Area */
+  .chat-scroll-container {
+    padding: 12px 10px 16px 10px;
+    gap: 14px;
+  }
+
+  .welcome-screen {
+    padding: 24px 12px;
+  }
+
+  .welcome-screen h1 {
+    font-size: 22px;
+  }
+
+  .welcome-screen p {
+    font-size: 13.5px;
+  }
+
+  .message-row {
+    gap: 10px;
+  }
+
+  .avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 11px;
+  }
+
+  .message-bubble {
+    max-width: 92%;
+    padding: 10px 14px;
+    font-size: 14px;
+    border-radius: 14px;
+  }
+
+  .message-bubble pre {
+    padding: 10px;
+    font-size: 13px;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .message-bubble code {
+    word-break: break-word;
+  }
+
+  /* Question & Choice Cards */
+  .question-card-container {
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .question-option-row {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  /* Prompt Card & Tools */
+  .prompt-section {
+    padding: 0 8px 10px 8px;
+  }
+
+  .prompt-outer-container {
+    border-radius: 18px;
+    padding: 6px 6px 0 6px;
+  }
+
+  .prompt-input-card {
+    border-radius: 14px;
+  }
+
+  #promptTextarea {
+    font-size: 15px; /* Touch-friendly size */
+    padding: 10px 12px 6px 12px;
+    min-height: 44px;
+  }
+
+  .prompt-tool-row {
+    padding: 6px 8px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .tool-row-left {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .model-picker-dropdown {
+    font-size: 12px;
+    padding: 4px 6px;
+    max-width: 140px;
+  }
+
+  .model-picker-dropdown span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tool-btn, .send-btn, .mic-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .prompt-bottom-bar {
+    padding: 8px 10px;
+    border-radius: 0 0 18px 18px;
+  }
+
+  /* Modals & Dialogs */
+  .modal-card {
+    width: calc(100vw - 20px);
+    max-width: 480px;
+    max-height: 88dvh;
+    border-radius: 16px;
+  }
+
+  .modal-header {
+    padding: 14px 16px;
+  }
+
+  .modal-body {
+    padding: 16px;
+    overflow-y: auto;
+    gap: 12px;
+  }
+
+  /* History Panel Layout */
+  .history-panel {
+    padding: 16px 12px;
+  }
+
+  .history-title {
+    font-size: 20px;
+  }
+
+  .history-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .filter-btn {
+    justify-content: center;
+    padding: 10px;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Dynamic Bottom Sheets / Dropdowns on Small Phones */
+  .dropdown-menu {
+    position: fixed !important;
+    left: 10px !important;
+    right: 10px !important;
+    width: calc(100vw - 20px) !important;
+    max-width: 460px;
+    bottom: 75px !important;
+    top: auto !important;
+    max-height: 60vh;
+    z-index: 1100;
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .usage-popup {
+    position: fixed !important;
+    left: 10px !important;
+    right: 10px !important;
+    width: calc(100vw - 20px) !important;
+    max-width: 460px;
+    bottom: 60px !important;
+    top: auto !important;
+    max-height: 75vh;
+    overflow-y: auto;
+    z-index: 1100;
+  }
 }

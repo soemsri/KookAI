@@ -23,13 +23,23 @@
 </head>
 <body>
   <div class="app-layout">
+    <!-- Mobile Sidebar Backdrop Overlay -->
+    <div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
 
     <!-- Left-hand Sidebar Panel -->
     <aside class="sidebar">
       <!-- Sidebar Header / App Branding -->
       <div class="sidebar-brand">
-        <img src="favicon.png" alt="KookAI Icon" class="brand-logo">
-        <span class="brand-name">KookAI</span>
+        <div class="sidebar-brand-title">
+          <img src="favicon.png" alt="KookAI Icon" class="brand-logo">
+          <span class="brand-name">KookAI</span>
+        </div>
+        <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
       </div>
 
       <!-- New Conversation Button -->
@@ -142,6 +152,13 @@
       <section class="content-panel chat-panel" id="chatPanel">
         <!-- Top row with current active Project & Workspace indicator -->
         <header class="chat-header">
+          <button class="mobile-sidebar-toggle" id="mobileSidebarToggle" aria-label="Toggle Menu">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+          </button>
           <div class="header-caption" id="headerCaption">
             <div class="project-picker-dropdown" id="projectPickerBtn" tabindex="0">
               <svg viewBox="0 0 24 24" class="icon-folder">
@@ -373,7 +390,16 @@
 
       <!-- Panel 2: Conversation History View (Match user screenshot 2) -->
       <section class="content-panel history-panel hidden" id="historyPanel">
-        <h1 class="history-title">Conversation History</h1>
+        <div class="history-header">
+          <button class="mobile-sidebar-toggle" id="mobileHistorySidebarToggle" aria-label="Toggle Menu">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+          </button>
+          <h1 class="history-title">Conversation History</h1>
+        </div>
 
         <div class="history-filter-row">
           <div class="search-box-wrapper">

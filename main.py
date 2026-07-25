@@ -610,6 +610,54 @@ CODEX_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "codex_conversatio
 codex_conversations_lock = threading.Lock()
 CLAUDE_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "claude_conversations.json")
 claude_conversations_lock = threading.Lock()
+CONVERSATION_METADATA_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "conversation_metadata.json")
+conversation_metadata_lock = threading.Lock()
+
+def _load_conversation_metadata() -> dict:
+    if not os.path.exists(CONVERSATION_METADATA_FILE):
+        return {}
+    try:
+        with open(CONVERSATION_METADATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logging.error(f"Failed to load conversation metadata: {e}")
+        return {}
+
+def _save_conversation_metadata(records: dict):
+    os.makedirs(os.path.dirname(CONVERSATION_METADATA_FILE), exist_ok=True)
+    temp_path = f"{CONVERSATION_METADATA_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, CONVERSATION_METADATA_FILE)
+
+def persist_conversation_metadata(
+    conversation_id: str,
+    project: str,
+    model: str,
+    provider: str,
+    effort: Optional[str] = None,
+    speed: Optional[str] = None,
+    thinking: Optional[bool] = None,
+):
+    if not conversation_id:
+        return
+    now = datetime.datetime.now().timestamp()
+    with conversation_metadata_lock:
+        records = _load_conversation_metadata()
+        existing = records.get(conversation_id, {})
+        records[conversation_id] = {
+            "id": conversation_id,
+            "project": project or existing.get("project"),
+            "model": model or existing.get("model"),
+            "provider": provider or existing.get("provider", "agy"),
+            "effort": effort if effort is not None else existing.get("effort"),
+            "speed": speed if speed is not None else existing.get("speed"),
+            "thinking": thinking if thinking is not None else existing.get("thinking"),
+            "timestamp": now,
+        }
+        _save_conversation_metadata(records)
+
 
 # Background chat task state for polling progress while agy is still running.
 chat_tasks = {}
@@ -1028,6 +1076,7 @@ def get_real_conversations():
                     except:
                         pass
 
+    meta_records = _load_conversation_metadata()
     conversations = []
     
     for path_pattern in brain_paths:
@@ -1123,12 +1172,18 @@ def get_real_conversations():
                     if not is_user_convo:
                         continue
                     
+                    meta = meta_records.get(cid, {})
                     conversations.append({
                         "id": cid,
                         "title": clean_title,
                         "project": project,
                         "timestamp": mtime,
-                        "messages": messages
+                        "messages": messages,
+                        "model": meta.get("model"),
+                        "provider": meta.get("provider", "agy"),
+                        "effort": meta.get("effort"),
+                        "speed": meta.get("speed"),
+                        "thinking": meta.get("thinking"),
                     })
             except Exception as e:
                 logging.error(f"Error parsing conversation {cid}: {e}")
@@ -1918,7 +1973,25 @@ async def get_conversation_details(cid: str, request: Request):
                     in_memory_chats[cid] = c["messages"]
                     messages = c["messages"]
                     project = c.get("project")
+                    model = c.get("model")
+                    provider = c.get("provider", "agy")
+                    effort = c.get("effort")
+                    speed = c.get("speed")
+                    thinking = c.get("thinking")
                     break
+
+    meta = _load_conversation_metadata().get(cid, {})
+    if meta:
+        if not model:
+            model = meta.get("model")
+        if not provider or provider == "agy":
+            provider = meta.get("provider", provider)
+        if not effort:
+            effort = meta.get("effort")
+        if not speed:
+            speed = meta.get("speed")
+        if thinking is None:
+            thinking = meta.get("thinking")
 
     if not project:
         for c in get_real_conversations():
@@ -2203,14 +2276,31 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     else:
         reply, resolved_cid = execute_selected(message)
 
-    if resolved_cid != actual_cid and actual_cid in interview_states:
-        interview_states[resolved_cid] = interview_states.pop(actual_cid)
+    if resolved_cid != actual_cid:
+        if actual_cid in interview_states:
+            interview_states[resolved_cid] = interview_states.pop(actual_cid)
+        if actual_cid in in_memory_chats:
+            existing_chats = in_memory_chats.pop(actual_cid)
+            if resolved_cid not in in_memory_chats:
+                in_memory_chats[resolved_cid] = existing_chats
+            else:
+                in_memory_chats[resolved_cid] = existing_chats + in_memory_chats[resolved_cid]
 
     if resolved_cid not in in_memory_chats:
         in_memory_chats[resolved_cid] = []
 
     in_memory_chats[resolved_cid].append({"role": "user", "content": user_visible_message})
     in_memory_chats[resolved_cid].append({"role": "assistant", "content": reply})
+
+    persist_conversation_metadata(
+        resolved_cid,
+        project_id,
+        model,
+        provider,
+        effort if provider in {"codex", "claude"} else None,
+        speed if provider == "codex" else None,
+        thinking if provider == "claude" else None,
+    )
 
     if provider == "codex":
         persist_codex_exchange(
