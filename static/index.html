@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AGY Workspace Client</title>
+  <title>KookAI Workspace Client</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <script>
     (() => {
-      const themeMode = localStorage.getItem("antigravity_theme") || "system";
+      const themeMode = localStorage.getItem("kookai_theme") || localStorage.getItem("antigravity_theme") || "system";
       if (themeMode === "light" || themeMode === "dark") {
         document.documentElement.dataset.theme = themeMode;
       }
@@ -26,8 +26,8 @@
     <aside class="sidebar">
       <!-- Sidebar Header / App Branding -->
       <div class="sidebar-brand">
-        <img src="favicon.png" alt="Antigravity Icon" class="brand-logo">
-        <span class="brand-name">Antigravity</span>
+        <img src="favicon.png" alt="KookAI Icon" class="brand-logo">
+        <span class="brand-name">KookAI</span>
       </div>
 
       <!-- New Conversation Button -->
@@ -615,7 +615,7 @@
         <div class="settings-tab-content hidden" id="settingsSystem">
           <div class="diagnostic-row">
             <span class="diagnostic-label">CLI Version:</span>
-            <span class="diagnostic-value" id="diagCliVersion">rtk 1.0.4 (Antigravity CLI Proxy)</span>
+            <span class="diagnostic-value" id="diagCliVersion">rtk 1.0.4 (KookAI CLI Proxy)</span>
           </div>
           <div class="diagnostic-row">
             <span class="diagnostic-label">Workspace Folder:</span>
@@ -627,7 +627,7 @@
           </div>
           <div class="diagnostic-row">
             <span class="diagnostic-label">Database Path:</span>
-            <span class="diagnostic-value" style="font-size:11px;">~/.gemini/antigravity/conversations/</span>
+            <span class="diagnostic-value" style="font-size:11px;">~/.gemini/kookai/conversations/</span>
           </div>
         </div>
       </div>
@@ -645,7 +645,7 @@
         <button class="close-modal-btn" id="closePairingModalBtn">&times;</button>
       </div>
       <div class="modal-body" style="text-align: center; padding: 20px;">
-        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px; line-height: 20px;">Scan this QR code from your Antigravity mobile app or enter the 6-digit PIN code to establish pairing.</p>
+        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px; line-height: 20px;">Scan this QR code from your KookAI mobile app or enter the 6-digit PIN code to establish pairing.</p>
 
   <style>
     @keyframes qr-spin {

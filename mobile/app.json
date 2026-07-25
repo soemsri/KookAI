@@ -1,23 +1,23 @@
 {
   "expo": {
-    "name": "Antigravity",
-    "slug": "antigravity",
-    "scheme": "antigravity",
+    "name": "KookAI",
+    "slug": "kookai",
+    "scheme": "kookai",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.antigravity.app",
+      "bundleIdentifier": "com.kookai.app",
       "infoPlist": {
-        "NSSpeechRecognitionUsageDescription": "Allow Antigravity to use speech recognition for voice input.",
-        "NSMicrophoneUsageDescription": "Allow Antigravity to use the microphone for voice input."
+        "NSSpeechRecognitionUsageDescription": "Allow KookAI to use speech recognition for voice input.",
+        "NSMicrophoneUsageDescription": "Allow KookAI to use the microphone for voice input."
       },
       "appleTeamId": "847T5J9632"
     },
     "android": {
-      "package": "com.antigravity.app",
+      "package": "com.kookai.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -37,21 +37,21 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Antigravity to access your camera for pairing QR codes.",
+          "cameraPermission": "Allow KookAI to access your camera for pairing QR codes.",
           "barcodeScannerEnabled": true
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Antigravity to select images for chat context."
+          "photosPermission": "Allow KookAI to select images for chat context."
         }
       ],
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Allow Antigravity to use the microphone for voice input.",
-          "speechRecognitionPermission": "Allow Antigravity to use speech recognition for voice input.",
+          "microphonePermission": "Allow KookAI to use the microphone for voice input.",
+          "speechRecognitionPermission": "Allow KookAI to use speech recognition for voice input.",
           "androidSpeechServicePackages": [
             "com.google.android.googlequicksearchbox",
             "com.google.android.tts",

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, Alert, SafeAreaView, Platform, StatusBar, useColorScheme, Linking } from 'react-native';
 import { Camera, CameraView } from 'expo-camera';
 import * as SecureStore from 'expo-secure-store';
@@ -250,7 +250,7 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bgSecondary }]}>
       <StatusBar barStyle={scheme === 'light' ? 'dark-content' : 'light-content'} backgroundColor={theme.bgPrimary} />
       <View style={[styles.card, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
-        <Text style={[styles.logoText, { color: theme.accent }]}>▲ Antigravity</Text>
+        <Text style={[styles.logoText, { color: theme.accent }]}>{'\u25B2'} KookAI</Text>
         <Text style={[styles.title, { color: theme.textPrimary }]}>Link New Workspace</Text>
         <Text style={[styles.subtitle, { color: theme.textSecondary }]}>Enter the 6-digit PIN code or scan the pairing QR code from your desktop app.</Text>
 
@@ -284,7 +284,7 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
               style={[styles.secondaryBtn, { borderColor: theme.borderColor }]} 
               onPress={() => void openNativeScanner()}
             >
-              <Text style={[styles.secondaryBtnText, { color: theme.textSecondary }]}>📷 Scan QR Code</Text>
+              <Text style={[styles.secondaryBtnText, { color: theme.textSecondary }]}>ðŸ“· Scan QR Code</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -395,3 +395,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   }
 });
+

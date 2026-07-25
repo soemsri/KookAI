@@ -11,7 +11,7 @@ export default function App() {
   const [pairingUrl, setPairingUrl] = useState<string | null>(null);
 
   const isPairingUrl = (url: string | null) => {
-    return Boolean(url && /(?:^antigravity:\/\/pair|[?&]pin=\d{6})/.test(url));
+    return Boolean(url && /(?:^(?:kookai|antigravity):\/\/pair|[?&]pin=\d{6})/.test(url));
   };
 
   // Check connection status on mount

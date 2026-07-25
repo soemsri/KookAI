@@ -185,7 +185,7 @@ const getUsageBucketForModel = (modelName: string): {
     return { key: 'gemini', title: 'Gemini Models (Google AI Ultra)' };
   }
   if (lowered.includes('gpt')) {
-    return { key: 'gpt', title: 'GPT Models (Antigravity)' };
+    return { key: 'gpt', title: 'GPT Models (KookAI)' };
   }
   return { key: 'claude', title: 'Claude Models (Claude Pro)' };
 };
@@ -967,7 +967,7 @@ const newId = `temp_${selectedProjectRef.current}_${Math.random().toString(36).s
 updateActiveConversation(newId, selectedProjectRef.current, nextModel.provider);
 setQueuedPromptList([]);
 updateMessages([]);
-showToast(`Started a new ${nextModel.provider === 'codex' ? 'Codex' : 'Antigravity'} conversation`);
+showToast(`Started a new ${nextModel.provider === 'codex' ? 'Codex' : 'KookAI'} conversation`);
 }
 
 setSelectedModel(modelName);
@@ -2261,7 +2261,7 @@ allowQueue: false,
       {/* Slide-in Left Sidebar */}
       <Animated.View style={[styles.sidebar, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor, opacity: sidebarOpacity, transform: [{ translateX: sidebarAnim }] }]}>
         <View style={[styles.sidebarHeader, { borderBottomColor: theme.borderColor }]}>
-          <Text style={[styles.sidebarLogo, { color: theme.accent }]}>▲ Antigravity</Text>
+<Text style={[styles.sidebarLogo, { color: theme.accent }]}>{'\u25B2'} KookAI</Text>
           <TouchableOpacity style={styles.closeSidebarBtn} onPress={toggleSidebar}>
             <Text style={{ color: theme.textSecondary, fontSize: 20 }}>✕</Text>
           </TouchableOpacity>
@@ -3180,7 +3180,7 @@ allowQueue: false,
               <View style={styles.settingsContent}>
                 <View style={styles.diagnosticRow}>
                   <Text style={[styles.diagnosticLabel, { color: theme.textSecondary }]}>Mobile App</Text>
-                  <Text style={[styles.diagnosticValue, { color: theme.textPrimary }]}>Antigravity Companion</Text>
+                  <Text style={[styles.diagnosticValue, { color: theme.textPrimary }]}>KookAI Companion</Text>
                 </View>
                 <View style={styles.diagnosticRow}>
                   <Text style={[styles.diagnosticLabel, { color: theme.textSecondary }]}>Connection</Text>

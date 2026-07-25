@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Open Antigravity</title>
+  <title>Open KookAI</title>
   <style>
     body {
       margin: 0;
@@ -44,15 +44,15 @@
 </head>
 <body>
   <main>
-    <h1>Open Antigravity</h1>
+    <h1>Open KookAI</h1>
     <p>Continue pairing this iPhone with your desktop workspace.</p>
-    <a id="openApp" href="#">Open Antigravity</a>
+    <a id="openApp" href="#">Open KookAI</a>
   </main>
 
   <script>
     const params = new URLSearchParams(window.location.search);
     const pin = params.get("pin") || "";
-    const link = /^\d{6}$/.test(pin) ? `antigravity://pair?pin=${pin}` : "antigravity://";
+    const link = /^\d{6}$/.test(pin) ? `kookai://pair?pin=${pin}` : "kookai://";
     const button = document.getElementById("openApp");
 
     button.href = link;

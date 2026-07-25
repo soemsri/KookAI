@@ -65,6 +65,18 @@ CODEX_MODEL_EFFORTS = {
 CODEX_CONVERSATION_PREFIX = "codex_"
 
 
+def hidden_subprocess_kwargs() -> dict[str, Any]:
+    """Return Windows flags that prevent spawned console tools from flashing."""
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {
+        "creationflags": subprocess.CREATE_NO_WINDOW,
+        "startupinfo": startupinfo,
+    }
+
+
 def is_codex_model(model_name: str) -> bool:
     return model_name in CODEX_MODEL_MAP or model_name in CODEX_MODEL_MAP.values()
 
@@ -172,6 +184,7 @@ def _is_runnable_codex(path: str) -> bool:
             stderr=subprocess.PIPE,
             text=True,
             timeout=5,
+            **hidden_subprocess_kwargs(),
         )
         return probe.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -422,7 +435,7 @@ def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: f
             "id": "init",
             "method": "initialize",
             "params": {
-                "clientInfo": {"name": "agy-mobile", "version": "1.0.0"},
+                "clientInfo": {"name": "KookAI", "version": "1.0.0"},
                 "capabilities": {"experimentalApi": True},
             },
         },
@@ -442,6 +455,7 @@ def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: f
         text=True,
         encoding="utf-8",
         errors="replace",
+        **hidden_subprocess_kwargs(),
     )
     output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
 

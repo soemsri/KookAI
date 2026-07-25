@@ -157,19 +157,19 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function saveAppPreferences() {
-    localStorage.setItem("antigravity_model", currentModel);
-    localStorage.setItem("antigravity_codex_effort", currentCodexEffort);
-    localStorage.setItem("antigravity_codex_speed", currentCodexSpeed);
-    localStorage.setItem("antigravity_target", currentTarget);
-    localStorage.setItem("antigravity_theme", currentThemeMode);
+    localStorage.setItem("kookai_model", currentModel);
+    localStorage.setItem("kookai_codex_effort", currentCodexEffort);
+    localStorage.setItem("kookai_codex_speed", currentCodexSpeed);
+    localStorage.setItem("kookai_target", currentTarget);
+    localStorage.setItem("kookai_theme", currentThemeMode);
   }
 
   function loadAppPreferences() {
-    const savedModel = localStorage.getItem("antigravity_model");
-    const savedTarget = localStorage.getItem("antigravity_target");
-    const savedThemeMode = localStorage.getItem("antigravity_theme");
-    const savedCodexEffort = localStorage.getItem("antigravity_codex_effort");
-    const savedCodexSpeed = localStorage.getItem("antigravity_codex_speed");
+    const savedModel = (localStorage.getItem("kookai_model") || localStorage.getItem("antigravity_model"));
+    const savedTarget = (localStorage.getItem("kookai_target") || localStorage.getItem("antigravity_target"));
+    const savedThemeMode = (localStorage.getItem("kookai_theme") || localStorage.getItem("antigravity_theme"));
+    const savedCodexEffort = (localStorage.getItem("kookai_codex_effort") || localStorage.getItem("antigravity_codex_effort"));
+    const savedCodexSpeed = (localStorage.getItem("kookai_codex_speed") || localStorage.getItem("antigravity_codex_speed"));
 
     if (["Light", "Medium", "High", "Extra High", "Ultra"].includes(savedCodexEffort)) {
       currentCodexEffort = savedCodexEffort;
@@ -1593,7 +1593,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         pairingPinText.textContent = pin;
         // Generate QR code using the free qrserver API. iPhone Camera opens HTTPS more reliably;
-        // the landing page redirects into the app with antigravity://pair?pin=...
+        // the landing page redirects into the app with kookai://pair?pin=...
         const pairingLink = `${pairingBaseUrl}/pair.html?pin=${encodeURIComponent(pin)}`;
         pairingQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(pairingLink)}&size=200x200&color=0f172a`;
       } catch (err) {

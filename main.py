@@ -21,6 +21,7 @@ from codex_backend import (
     classify_codex_progress_line,
     codex_session_id,
     fetch_codex_rate_limits,
+    hidden_subprocess_kwargs,
     is_codex_model,
     make_codex_conversation_id,
     normalize_codex_effort,
@@ -38,10 +39,12 @@ import getpass
 SYSTEM_USER = getpass.getuser()
 HOME_DIR = os.path.expanduser("~")
 
-# Base data directory for Antigravity settings & pairing configs
+# Base data directory for KookAI settings & pairing configs
 GEMINI_DATA_DIR = os.path.join(HOME_DIR, ".gemini")
-ANTIGRAVITY_DATA_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity")
-ANTIGRAVITY_CLI_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity-cli")
+ANTIGRAVITY_DATA_DIR = os.path.join(GEMINI_DATA_DIR, "kookai")
+ANTIGRAVITY_CLI_DIR = os.path.join(GEMINI_DATA_DIR, "kookai-cli")
+LEGACY_ANTIGRAVITY_DATA_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity")
+LEGACY_ANTIGRAVITY_CLI_DIR = os.path.join(GEMINI_DATA_DIR, "antigravity-cli")
 DESKTOP_DIR = os.path.join(HOME_DIR, "Desktop")
 if os.name == "nt":
     try:
@@ -56,12 +59,25 @@ if os.name == "nt":
         logging.error(f"Failed to resolve Windows Desktop user shell folder: {e}")
 WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+def migrate_legacy_data_dir(old_path: str, new_path: str):
+    if old_path == new_path or os.path.exists(new_path) or not os.path.exists(old_path):
+        return
+    try:
+        import shutil
+        shutil.copytree(old_path, new_path)
+        logging.info(f"Migrated legacy data directory from {old_path} to {new_path}")
+    except Exception as e:
+        logging.error(f"Failed to migrate legacy data directory from {old_path} to {new_path}: {e}")
+
+migrate_legacy_data_dir(LEGACY_ANTIGRAVITY_DATA_DIR, ANTIGRAVITY_DATA_DIR)
+migrate_legacy_data_dir(LEGACY_ANTIGRAVITY_CLI_DIR, ANTIGRAVITY_CLI_DIR)
+
 # Default execution timeout for the agy CLI (seconds)
 AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "600"))
 AGY_CLI_MAX_CAPTURE_CHARS = int(os.environ.get("AGY_CLI_MAX_CAPTURE_CHARS", "200000"))
 AGY_RELOAD = os.environ.get("AGY_RELOAD", "0").lower() in ("1", "true", "yes", "on")
 
-app = FastAPI(title="AGY Workspace Chat Client")
+app = FastAPI(title="KookAI Workspace Chat Client")
 
 # Ensure static directory exists
 os.makedirs("static", exist_ok=True)
@@ -96,7 +112,8 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
-# Worker dynamic registry URL
+# Worker dynamic registry URL. Keep the deployed worker hostname stable unless
+# that Cloudflare Worker is renamed/deployed separately.
 REGISTRY_WORKER_URL = os.environ.get("REGISTRY_WORKER_URL", "https://antigravity-pairing-broker.rangsarn.workers.dev")
 
 def start_localtunnel():
@@ -531,7 +548,7 @@ def get_codex_conversation(conversation_id: str) -> Optional[dict]:
     return record if isinstance(record, dict) else None
 
 
-# Helper: Get all database file names (conversation IDs) in antigravity folders
+# Helper: Get all database file names (conversation IDs) in kookai folders
 def get_existing_db_ids():
     db_paths = [
         os.path.join(ANTIGRAVITY_CLI_DIR, "conversations/*.db"),
@@ -734,7 +751,7 @@ def get_real_conversations():
                                 match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", scontent, re.DOTALL)
                                 prompt = match.group(1).strip() if match else scontent.strip()
                                 context_match = re.match(
-                                    r"Selected Antigravity project/workspace:\s*(.*?)\n"
+                                    r"Selected KookAI project/workspace:\s*(.*?)\n"
                                     r"Workspace directory:\s*(.*?)\n\n"
                                     r"User message:\n(.*)\Z",
                                     prompt,
@@ -994,7 +1011,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
     project_id = clean_project_name(os.path.basename(workspace or "agy"))
     cwd_path = resolve_project_directory(project_id)
     message_with_context = (
-        f"Selected Antigravity project/workspace: {project_id}\n"
+        f"Selected KookAI project/workspace: {project_id}\n"
         f"Workspace directory: {cwd_path}\n\n"
         f"User message:\n{message}"
     )
@@ -1660,7 +1677,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
                     f"📁 `{agents_file}`\n\n"
                     f"**Learned Rule**:\n"
                     f"> {rule_text}\n\n"
-                    "All future Antigravity agent interactions in this workspace will now respect this rule."
+                    "All future KookAI agent interactions in this workspace will now respect this rule."
                 )
             except Exception as e:
                 reply = f"❌ **Error saving rule**: {str(e)}"
@@ -1814,7 +1831,7 @@ async def get_chat_task_endpoint(task_id: str, request: Request, after: int = -1
 @app.post("/api/upload-media")
 async def upload_media_endpoint(conversation_id: str, filename: str, request: Request):
     actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
-    # Default to antigravity brain folder, fallback to antigravity-cli
+    # Default to kookai brain folder, fallback to kookai-cli
     folder = os.path.join(ANTIGRAVITY_DATA_DIR, f"brain/{actual_cid}")
     if not os.path.exists(folder):
         folder = os.path.join(ANTIGRAVITY_CLI_DIR, f"brain/{actual_cid}")
@@ -1894,7 +1911,8 @@ async def get_usage_limits(request: Request):
             capture_output=True,
             text=True,
             timeout=5,
-            shell=(os.name == 'nt')
+            shell=(os.name == 'nt'),
+            **hidden_subprocess_kwargs(),
         )
         if res.returncode == 0:
             data = json.loads(res.stdout)

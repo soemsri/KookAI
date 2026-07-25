@@ -1,5 +1,6 @@
 {
   "dependencies": {
     "wrangler": "^4.86.0"
-  }
+  },
+  "name": "kookai"
 }

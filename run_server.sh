@@ -1,9 +1,9 @@
 #!/bin/bash
 # Move to the project directory
-cd "/root/Desktop/agy-mobile"
+cd "/root/Desktop/KookAI"
 
 # Print message
-echo "Starting AGY Workspace Chat Server..."
+echo "Starting KookAI Workspace Chat Server..."
 
 # Run the server using the virtual environment's python
 ./venv/bin/python main.py
