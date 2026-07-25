@@ -1,0 +1,360 @@
+"""Codex CLI integration helpers.
+
+This module intentionally contains no FastAPI or filesystem state so command
+construction and JSONL parsing can be tested without starting the server.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import glob
+import tomllib
+from functools import lru_cache
+from typing import Any, Optional
+
+
+CODEX_MODEL_MAP = {
+    "5.6 Sol": "gpt-5.6-sol",
+    "5.6 Terra": "gpt-5.6-terra",
+    "5.6 Luna": "gpt-5.6-luna",
+    "5.5": "gpt-5.5",
+    "5.4": "gpt-5.4",
+    "5.4 Mini": "gpt-5.4-mini",
+}
+
+CODEX_EFFORT_MAP = {
+    "light": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "extra high": "xhigh",
+    "xhigh": "xhigh",
+    "ultra": "ultra",
+}
+
+CODEX_SPEED_MAP = {
+    "standard": "default",
+    "default": "default",
+    "fast": "priority",
+}
+
+# Fast mode currently supports the GPT-5.6 family, GPT-5.5, and GPT-5.4.
+CODEX_FAST_MODELS = {
+    "5.6 Sol",
+    "5.6 Terra",
+    "5.6 Luna",
+    "5.5",
+    "5.4",
+}
+
+CODEX_MODEL_EFFORTS = {
+    "5.6 Sol": {"low", "medium", "high", "xhigh", "ultra"},
+    "5.6 Terra": {"low", "medium", "high", "xhigh", "ultra"},
+    "5.6 Luna": {"low", "medium", "high", "xhigh"},
+    "5.5": {"low", "medium", "high", "xhigh"},
+    "5.4": {"low", "medium", "high", "xhigh"},
+    "5.4 Mini": {"low", "medium", "high", "xhigh"},
+}
+
+CODEX_CONVERSATION_PREFIX = "codex_"
+
+
+def is_codex_model(model_name: str) -> bool:
+    return model_name in CODEX_MODEL_MAP or model_name in CODEX_MODEL_MAP.values()
+
+
+def resolve_provider(provider: Optional[str], model_name: str) -> str:
+    normalized = (provider or "").strip().lower()
+    if normalized and normalized not in {"agy", "codex"}:
+        raise ValueError(f"Unsupported agent provider: {provider}")
+    if normalized == "codex" and not is_codex_model(model_name):
+        raise ValueError(f"Model {model_name} is not a Codex model")
+    if normalized == "agy" and is_codex_model(model_name):
+        raise ValueError(f"Model {model_name} must use the Codex provider")
+    if normalized:
+        return normalized
+    return "codex" if is_codex_model(model_name) else "agy"
+
+
+def codex_model_slug(model_name: str) -> str:
+    if model_name in CODEX_MODEL_MAP:
+        return CODEX_MODEL_MAP[model_name]
+    if model_name in CODEX_MODEL_MAP.values():
+        return model_name
+    raise ValueError(f"Unsupported Codex model: {model_name}")
+
+
+def normalize_codex_effort(
+    effort: Optional[str],
+    model_name: Optional[str] = None,
+) -> tuple[str, str]:
+    display_value = (effort or "Medium").strip()
+    cli_value = CODEX_EFFORT_MAP.get(display_value.lower())
+    if not cli_value:
+        raise ValueError(f"Unsupported Codex effort: {display_value}")
+    canonical_display = {
+        "low": "Light",
+        "medium": "Medium",
+        "high": "High",
+        "xhigh": "Extra High",
+        "ultra": "Ultra",
+    }[cli_value]
+    if model_name:
+        display_model = next(
+            (name for name, slug in CODEX_MODEL_MAP.items() if model_name in {name, slug}),
+            model_name,
+        )
+        supported = CODEX_MODEL_EFFORTS.get(display_model)
+        if not supported or cli_value not in supported:
+            raise ValueError(
+                f"Effort {canonical_display} is not supported by Codex model {display_model}"
+            )
+    return canonical_display, cli_value
+
+
+def normalize_codex_speed(speed: Optional[str], model_name: str) -> tuple[str, str]:
+    display_value = (speed or "Standard").strip()
+    cli_value = CODEX_SPEED_MAP.get(display_value.lower())
+    if not cli_value:
+        raise ValueError(f"Unsupported Codex speed: {display_value}")
+    canonical_display = "Fast" if cli_value == "priority" else "Standard"
+    display_model = next(
+        (name for name, slug in CODEX_MODEL_MAP.items() if model_name in {name, slug}),
+        model_name,
+    )
+    if cli_value == "priority" and display_model not in CODEX_FAST_MODELS:
+        raise ValueError(f"Fast speed is not supported by Codex model {model_name}")
+    return canonical_display, cli_value
+
+
+def codex_session_id(conversation_id: Optional[str]) -> Optional[str]:
+    if conversation_id and conversation_id.startswith(CODEX_CONVERSATION_PREFIX):
+        session_id = conversation_id[len(CODEX_CONVERSATION_PREFIX) :].strip()
+        return session_id or None
+    return None
+
+
+def make_codex_conversation_id(session_id: str) -> str:
+    return f"{CODEX_CONVERSATION_PREFIX}{session_id}"
+
+
+def _config_codex_cli_path() -> Optional[str]:
+    config_path = os.path.expanduser("~/.codex/config.toml")
+    if not os.path.isfile(config_path):
+        return None
+    try:
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+        return (
+            config.get("mcp_servers", {})
+            .get("node_repl", {})
+            .get("env", {})
+            .get("CODEX_CLI_PATH")
+        )
+    except Exception:
+        return None
+
+
+def _is_runnable_codex(path: str) -> bool:
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        probe = subprocess.run(
+            [path, "--version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        return probe.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+@lru_cache(maxsize=1)
+def resolve_codex_executable() -> str:
+    configured = os.environ.get("CODEX_CLI_PATH", "").strip()
+    config_path = _config_codex_cli_path()
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    candidates = [
+        os.path.expanduser(configured) if configured else None,
+        os.path.expanduser(config_path) if config_path else None,
+        os.path.expanduser("~/.codex/plugins/.plugin-appserver/codex.exe"),
+    ]
+    if local_app_data:
+        candidates.extend(
+            sorted(
+                glob.glob(os.path.join(local_app_data, "OpenAI", "Codex", "bin", "*", "codex.exe")),
+                key=lambda path: os.path.getmtime(path),
+                reverse=True,
+            )
+        )
+    candidates.extend([
+        shutil.which("codex"),
+        os.path.expanduser("~/.local/bin/codex"),
+    ])
+
+    checked = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        normalized = os.path.abspath(candidate)
+        if normalized in checked:
+            continue
+        checked.add(normalized)
+        if _is_runnable_codex(normalized):
+            return normalized
+
+    raise FileNotFoundError(
+        "No runnable Codex CLI was found. Install it, run `codex login`, "
+        "or set CODEX_CLI_PATH."
+    )
+
+
+def build_codex_command(
+    codex_path: str,
+    prompt: str,
+    model_name: str,
+    effort: Optional[str] = "Medium",
+    speed: Optional[str] = "Standard",
+    target: str = "Sandbox",
+    conversation_id: Optional[str] = None,
+    image_paths: Optional[list[str]] = None,
+) -> list[str]:
+    model_slug = codex_model_slug(model_name)
+    effort_display, effort_cli = normalize_codex_effort(effort, model_name)
+    _, service_tier = normalize_codex_speed(speed, model_name)
+
+    command = [
+        codex_path,
+        "exec",
+        "--json",
+        "--color",
+        "never",
+        "--model",
+        model_slug,
+        "--skip-git-repo-check",
+        "-c",
+        "model_provider=openai",
+        "-c",
+        "approval_policy=never",
+        "-c",
+        f"model_reasoning_effort={effort_cli}",
+        "-c",
+        f"service_tier={service_tier}",
+    ]
+    if (target or "Sandbox").strip().lower() in {"local", "local sandbox", "sandbox"}:
+        command += ["--sandbox", "workspace-write"]
+    else:
+        command.append("--dangerously-bypass-approvals-and-sandbox")
+    if service_tier == "priority":
+        command += ["-c", "features.fast_mode=true"]
+    if effort_display == "Ultra":
+        command += ["-c", "features.multi_agent=true"]
+
+    session_id = codex_session_id(conversation_id)
+    if session_id:
+        command += ["resume", session_id]
+        for path in image_paths or []:
+            command += ["--image", path]
+        command.append("-")
+    else:
+        for path in image_paths or []:
+            command += ["--image", path]
+        command.append("-")
+    return command
+
+
+def parse_codex_jsonl(output: str) -> dict[str, Any]:
+    session_id: Optional[str] = None
+    final_message = ""
+    errors: list[str] = []
+    events: list[dict[str, Any]] = []
+
+    for raw_line in (output or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+
+        events.append(event)
+        event_type = event.get("type")
+        if event_type == "thread.started":
+            session_id = event.get("thread_id") or session_id
+        elif event_type == "item.completed":
+            item = event.get("item") or {}
+            if item.get("type") == "agent_message" and item.get("text"):
+                final_message = str(item["text"])
+        elif event_type in {"turn.failed", "error"}:
+            error = event.get("error")
+            if isinstance(error, dict):
+                error = error.get("message") or json.dumps(error)
+            if error:
+                errors.append(str(error))
+
+    return {
+        "session_id": session_id,
+        "final_message": final_message,
+        "errors": errors,
+        "events": events,
+    }
+
+
+def classify_codex_progress_line(source: str, line: str) -> Optional[dict[str, str]]:
+    clean = (line or "").strip()
+    if not clean:
+        return None
+
+    # Human-readable diagnostics are normally written to stderr.
+    if source == "stderr":
+        lowered = clean.lower()
+        event_type = "error" if any(
+            term in lowered
+            for term in ("error", "failed", "failure", "denied", "unauthorized", "invalid")
+        ) else "progress"
+        return {"type": event_type, "message": clean[:500]}
+
+    try:
+        event = json.loads(clean)
+    except json.JSONDecodeError:
+        return {"type": "progress", "message": clean[:500]}
+    if not isinstance(event, dict):
+        return None
+
+    event_type = event.get("type")
+    if event_type == "thread.started":
+        return {"type": "progress", "message": "Codex session started."}
+    if event_type == "turn.started":
+        return {"type": "progress", "message": "Codex is working..."}
+    if event_type in {"turn.failed", "error"}:
+        error = event.get("error") or "Codex task failed."
+        if isinstance(error, dict):
+            error = error.get("message") or json.dumps(error)
+        return {"type": "error", "message": str(error)[:500]}
+
+    if event_type in {"item.started", "item.completed", "item.updated"}:
+        item = event.get("item") or {}
+        item_type = item.get("type")
+        if item_type == "command_execution":
+            command = item.get("command") or item.get("aggregated_output")
+            if command:
+                verb = "Running" if event_type == "item.started" else "Completed"
+                return {"type": "progress", "message": f"{verb}: {str(command)[:440]}"}
+        if item_type in {"mcp_tool_call", "web_search", "file_change"}:
+            label = item_type.replace("_", " ").title()
+            return {"type": "progress", "message": f"{label}..."}
+        if item_type == "reasoning":
+            text = item.get("text") or item.get("summary")
+            if text:
+                return {"type": "progress", "message": str(text)[:500]}
+
+    return None

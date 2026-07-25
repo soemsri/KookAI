@@ -35,6 +35,10 @@ interface Conversation {
   id: string;
   title: string;
   project: string;
+  provider?: AgentProvider;
+  model?: string;
+  effort?: CodexEffort;
+  speed?: CodexSpeed;
 }
 
 interface ChatScreenProps {
@@ -58,6 +62,9 @@ interface QueuedPrompt {
 id: string;
 content: string;
 model: string;
+provider: AgentProvider;
+effort: CodexEffort;
+speed: CodexSpeed;
 target: string;
 project: string;
 conversationId: string;
@@ -71,6 +78,17 @@ message: string;
 
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
+type AgentProvider = 'agy' | 'codex';
+type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
+type CodexSpeed = 'Standard' | 'Fast';
+
+interface ModelOption {
+  value: string;
+  desc: string;
+  provider: AgentProvider;
+  supportsUltra?: boolean;
+  supportsFast?: boolean;
+}
 
 const colors = {
   dark: {
@@ -101,19 +119,51 @@ const colors = {
   }
 };
 
-const modelsList = [
-  { value: "Gemini 3.6 Flash (High)", desc: "Fastest response, ideal for coding tasks" },
-  { value: "Gemini 3.6 Flash (Medium)", desc: "Balanced speed and performance" },
-  { value: "Gemini 3.6 Flash (Low)", desc: "Fast, low resource usage" },
-  { value: "Gemini 3.5 Flash (High)", desc: "Fastest response, ideal for coding tasks" },
-  { value: "Gemini 3.5 Flash (Medium)", desc: "Balanced speed and performance" },
-  { value: "Gemini 3.5 Flash (Low)", desc: "Fast, low resource usage" },
-  { value: "Gemini 3.1 Pro (High)", desc: "Deep reasoning, complex tasks" },
-  { value: "Gemini 3.1 Pro (Low)", desc: "Enhanced logic reasoning" },
-  { value: "Claude Sonnet 4.6 (Thinking)", desc: "Advanced reasoning with thinking trace" },
-  { value: "Claude Opus 4.6 (Thinking)", desc: "Highest reasoning capacity model" },
-  { value: "GPT-OSS 120B (Medium)", desc: "Open-source large scale LLM" }
+const modelsList: ModelOption[] = [
+  { value: "Gemini 3.6 Flash (High)", desc: "Fastest response, ideal for coding tasks", provider: "agy" },
+  { value: "Gemini 3.6 Flash (Medium)", desc: "Balanced speed and performance", provider: "agy" },
+  { value: "Gemini 3.6 Flash (Low)", desc: "Fast, low resource usage", provider: "agy" },
+  { value: "Gemini 3.5 Flash (High)", desc: "Fastest response, ideal for coding tasks", provider: "agy" },
+  { value: "Gemini 3.5 Flash (Medium)", desc: "Balanced speed and performance", provider: "agy" },
+  { value: "Gemini 3.5 Flash (Low)", desc: "Fast, low resource usage", provider: "agy" },
+  { value: "Gemini 3.1 Pro (High)", desc: "Deep reasoning, complex tasks", provider: "agy" },
+  { value: "Gemini 3.1 Pro (Low)", desc: "Enhanced logic reasoning", provider: "agy" },
+  { value: "Claude Sonnet 4.6 (Thinking)", desc: "Advanced reasoning with thinking trace", provider: "agy" },
+  { value: "Claude Opus 4.6 (Thinking)", desc: "Highest reasoning capacity model", provider: "agy" },
+  { value: "GPT-OSS 120B (Medium)", desc: "Open-source large scale LLM", provider: "agy" },
+  { value: "5.6 Sol", desc: "Codex for complex, open-ended work", provider: "codex", supportsUltra: true, supportsFast: true },
+  { value: "5.6 Terra", desc: "Codex everyday all-rounder", provider: "codex", supportsUltra: true, supportsFast: true },
+  { value: "5.6 Luna", desc: "Codex for clear, repeatable work", provider: "codex", supportsFast: true },
+  { value: "5.5", desc: "Codex GPT-5.5", provider: "codex", supportsFast: true },
+  { value: "5.4", desc: "Codex GPT-5.4", provider: "codex", supportsFast: true },
+  { value: "5.4 Mini", desc: "Compact Codex model", provider: "codex" },
 ];
+
+const codexEffortList: { value: CodexEffort; desc: string }[] = [
+  { value: "Light", desc: "Quick, well-scoped tasks" },
+  { value: "Medium", desc: "Balanced speed and depth" },
+  { value: "High", desc: "Difficult multi-step tasks" },
+  { value: "Extra High", desc: "Maximum single-agent reasoning" },
+  { value: "Ultra", desc: "Parallel subagents for complex work" },
+];
+
+const codexSpeedList: { value: CodexSpeed; desc: string }[] = [
+  { value: "Standard", desc: "Default speed" },
+  { value: "Fast", desc: "1.5x speed, more usage" },
+];
+
+const getModelOption = (modelName: string) => modelsList.find((model) => model.value === modelName);
+const isCodexModel = (modelName: string) => getModelOption(modelName)?.provider === "codex";
+const getCodexEfforts = (modelName: string) => (
+  getModelOption(modelName)?.supportsUltra
+    ? codexEffortList
+    : codexEffortList.filter((item) => item.value !== "Ultra")
+);
+const getCodexSpeeds = (modelName: string) => (
+  getModelOption(modelName)?.supportsFast
+    ? codexSpeedList
+    : codexSpeedList.filter((item) => item.value !== "Fast")
+);
 
 const targetsList = [
   { value: "Sandbox", desc: "Execute in a secure local sandbox (recommended)" },
@@ -137,6 +187,8 @@ const PREFERENCE_KEYS = {
   speechLang: 'settings_speech_lang',
   themeMode: 'settings_theme_mode',
   fontSize: 'settings_font_size',
+  codexEffort: 'settings_codex_effort',
+  codexSpeed: 'settings_codex_speed',
 };
 
 const slashCommands: PromptSuggestion[] = [
@@ -195,6 +247,11 @@ const parseQuestionPayload = (content: string): QuestionPayload | null => {
 
 const getBadgeStyles = (modelName: string, isDark: boolean) => {
   const name = modelName.toLowerCase();
+  if (isCodexModel(modelName)) {
+    return isDark
+      ? { text: 'Codex', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }
+      : { text: 'Codex', bg: '#d1fae5', color: '#047857' };
+  }
   if (name.includes('flash')) {
     return isDark
       ? { text: 'Flash', bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24' }
@@ -649,6 +706,7 @@ const [loading, setLoading] = useState(false);
 const [taskProgressEvents, setTaskProgressEvents] = useState<ChatTaskEvent[]>([]);
 const [activeConvoId, setActiveConvoId] = useState<string>('');
 const [activeConvoProject, setActiveConvoProject] = useState<string>('agy');
+const [activeConvoProvider, setActiveConvoProvider] = useState<AgentProvider>('agy');
 const [conversations, setConversations] = useState<Conversation[]>([]);
   const [queuedPrompts, setQueuedPrompts] = useState<QueuedPrompt[]>([]);
   const [isInitializingChat, setIsInitializingChat] = useState(true);
@@ -666,6 +724,8 @@ const [conversations, setConversations] = useState<Conversation[]>([]);
 
 // Model, Target & Project Pickers
 const [selectedModel, setSelectedModel] = useState("Gemini 3.5 Flash (High)");
+const [selectedCodexEffort, setSelectedCodexEffort] = useState<CodexEffort>("Medium");
+const [selectedCodexSpeed, setSelectedCodexSpeed] = useState<CodexSpeed>("Standard");
 const [selectedTarget, setSelectedTarget] = useState("Sandbox");
 const [selectedSpeechLang, setSelectedSpeechLang] = useState("th-TH");
 const [selectedThemeMode, setSelectedThemeMode] = useState<ThemeMode>("system");
@@ -712,6 +772,8 @@ const toggleThemeMode = async () => {
 
 // Modal Overlays
 const [isModelModalOpen, setIsModelModalOpen] = useState(false);
+const [isEffortModalOpen, setIsEffortModalOpen] = useState(false);
+const [isSpeedModalOpen, setIsSpeedModalOpen] = useState(false);
 const [isTargetModalOpen, setIsTargetModalOpen] = useState(false);
 const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
 const [isPlusModalOpen, setIsPlusModalOpen] = useState(false);
@@ -719,6 +781,8 @@ const [isUsageModalOpen, setIsUsageModalOpen] = useState(false);
 const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
 const [draftSettingsModel, setDraftSettingsModel] = useState(selectedModel);
+const [draftSettingsCodexEffort, setDraftSettingsCodexEffort] = useState<CodexEffort>(selectedCodexEffort);
+const [draftSettingsCodexSpeed, setDraftSettingsCodexSpeed] = useState<CodexSpeed>(selectedCodexSpeed);
 const [draftSettingsTarget, setDraftSettingsTarget] = useState(selectedTarget);
 const [draftSettingsSpeechLang, setDraftSettingsSpeechLang] = useState(selectedSpeechLang);
 const [draftSettingsThemeMode, setDraftSettingsThemeMode] = useState<ThemeMode>(selectedThemeMode);
@@ -742,6 +806,7 @@ const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const loadingRef = useRef(false);
   const activeConvoIdRef = useRef('');
   const activeConvoProjectRef = useRef('agy');
+  const activeConvoProviderRef = useRef<AgentProvider>('agy');
   const selectedProjectRef = useRef('agy');
   const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
   const pendingConversationScrollRef = useRef(false);
@@ -832,18 +897,47 @@ throw err;
 }
 };
 
-const updateActiveConversation = (conversationId: string, project: string) => {
+const updateActiveConversation = (
+conversationId: string,
+project: string,
+provider: AgentProvider = activeConvoProviderRef.current,
+) => {
 activeConvoIdRef.current = conversationId;
 activeConvoProjectRef.current = project;
+activeConvoProviderRef.current = provider;
 selectedProjectRef.current = project;
 setActiveConvoId(conversationId);
 setActiveConvoProject(project);
+setActiveConvoProvider(provider);
 setSelectedProject(project);
 };
 
 const setQueuedPromptList = (nextQueue: QueuedPrompt[]) => {
 queuedPromptsRef.current = nextQueue;
 setQueuedPrompts(nextQueue);
+};
+
+const applySelectedModel = (modelName: string) => {
+const nextModel = getModelOption(modelName);
+if (!nextModel) return;
+const currentProvider = getModelOption(selectedModel)?.provider || 'agy';
+
+if (!nextModel.supportsUltra && selectedCodexEffort === 'Ultra') {
+setSelectedCodexEffort('Medium');
+}
+if (!nextModel.supportsFast && selectedCodexSpeed === 'Fast') {
+setSelectedCodexSpeed('Standard');
+}
+
+if (currentProvider !== nextModel.provider && activeConvoIdRef.current) {
+const newId = `temp_${selectedProjectRef.current}_${Math.random().toString(36).substring(2, 11)}`;
+updateActiveConversation(newId, selectedProjectRef.current, nextModel.provider);
+setQueuedPromptList([]);
+updateMessages([]);
+showToast(`Started a new ${nextModel.provider === 'codex' ? 'Codex' : 'Antigravity'} conversation`);
+}
+
+setSelectedModel(modelName);
 };
 
 useEffect(() => {
@@ -864,21 +958,50 @@ activeConvoProjectRef.current = activeConvoProject;
 }, [activeConvoProject]);
 
 useEffect(() => {
+activeConvoProviderRef.current = activeConvoProvider;
+}, [activeConvoProvider]);
+
+useEffect(() => {
 selectedProjectRef.current = selectedProject;
 }, [selectedProject]);
 
   const loadSavedPreferences = async () => {
     try {
-      const [savedModel, savedTarget, savedSpeechLang, savedThemeMode, savedFontSize] = await Promise.all([
+      const [
+        savedModel,
+        savedTarget,
+        savedSpeechLang,
+        savedThemeMode,
+        savedFontSize,
+        savedCodexEffort,
+        savedCodexSpeed,
+      ] = await Promise.all([
         SecureStore.getItemAsync(PREFERENCE_KEYS.model),
         SecureStore.getItemAsync(PREFERENCE_KEYS.target),
         SecureStore.getItemAsync(PREFERENCE_KEYS.speechLang),
         SecureStore.getItemAsync(PREFERENCE_KEYS.themeMode),
         SecureStore.getItemAsync(PREFERENCE_KEYS.fontSize),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.codexEffort),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.codexSpeed),
       ]);
 
+      const effectiveModel = savedModel && modelsList.some((model) => model.value === savedModel)
+        ? savedModel
+        : selectedModel;
       if (savedModel && modelsList.some((model) => model.value === savedModel)) {
         setSelectedModel(savedModel);
+      }
+      if (
+        savedCodexEffort
+        && getCodexEfforts(effectiveModel).some((item) => item.value === savedCodexEffort)
+      ) {
+        setSelectedCodexEffort(savedCodexEffort as CodexEffort);
+      }
+      if (
+        savedCodexSpeed
+        && getCodexSpeeds(effectiveModel).some((item) => item.value === savedCodexSpeed)
+      ) {
+        setSelectedCodexSpeed(savedCodexSpeed as CodexSpeed);
       }
       if (savedTarget && targetsList.some((target) => target.value === savedTarget)) {
         setSelectedTarget(savedTarget);
@@ -1033,6 +1156,8 @@ selectedProjectRef.current = selectedProject;
 
 const openSettingsModal = () => {
 setDraftSettingsModel(selectedModel);
+setDraftSettingsCodexEffort(selectedCodexEffort);
+setDraftSettingsCodexSpeed(selectedCodexSpeed);
 setDraftSettingsTarget(selectedTarget);
 setDraftSettingsSpeechLang(selectedSpeechLang);
 setDraftSettingsThemeMode(selectedThemeMode);
@@ -1042,7 +1167,16 @@ setIsSettingsModalOpen(true);
 };
 
 const saveSettings = async () => {
-setSelectedModel(draftSettingsModel);
+applySelectedModel(draftSettingsModel);
+const draftModelOption = getModelOption(draftSettingsModel);
+const nextEffort = draftModelOption?.supportsUltra || draftSettingsCodexEffort !== 'Ultra'
+  ? draftSettingsCodexEffort
+  : 'Medium';
+const nextSpeed = draftModelOption?.supportsFast || draftSettingsCodexSpeed !== 'Fast'
+  ? draftSettingsCodexSpeed
+  : 'Standard';
+setSelectedCodexEffort(nextEffort);
+setSelectedCodexSpeed(nextSpeed);
 setSelectedTarget(draftSettingsTarget);
 setSelectedSpeechLang(draftSettingsSpeechLang);
 setSelectedThemeMode(draftSettingsThemeMode);
@@ -1051,6 +1185,8 @@ setSelectedFontSize(draftSettingsFontSize);
 try {
 await Promise.all([
 SecureStore.setItemAsync(PREFERENCE_KEYS.model, draftSettingsModel),
+SecureStore.setItemAsync(PREFERENCE_KEYS.codexEffort, nextEffort),
+SecureStore.setItemAsync(PREFERENCE_KEYS.codexSpeed, nextSpeed),
 SecureStore.setItemAsync(PREFERENCE_KEYS.target, draftSettingsTarget),
 SecureStore.setItemAsync(PREFERENCE_KEYS.speechLang, draftSettingsSpeechLang),
 SecureStore.setItemAsync(PREFERENCE_KEYS.themeMode, draftSettingsThemeMode),
@@ -1364,11 +1500,13 @@ setLoadingConvList(false);
 };
 
 const selectConversation = async (cid: string, projectName?: string) => {
-const conversationProject = projectName || conversations.find((convo) => convo.id === cid)?.project;
+const selectedConversation = conversations.find((convo) => convo.id === cid);
+const conversationProject = projectName || selectedConversation?.project;
+const conversationProvider = selectedConversation?.provider || (cid.startsWith('codex_') ? 'codex' : 'agy');
 if (conversationProject) {
 setSelectedProject(conversationProject);
 selectedProjectRef.current = conversationProject;
-updateActiveConversation(cid, conversationProject);
+updateActiveConversation(cid, conversationProject, conversationProvider);
 } else {
 activeConvoIdRef.current = cid;
 setActiveConvoId(cid);
@@ -1378,10 +1516,22 @@ setLoadingState(true);
     try {
 const data = await callHostApi(`/api/conversation/${cid}`);
 const resolvedProject = data.project || conversationProject;
+const resolvedProvider: AgentProvider = data.provider === 'codex' ? 'codex' : conversationProvider;
 if (resolvedProject) {
 setSelectedProject(resolvedProject);
 selectedProjectRef.current = resolvedProject;
-updateActiveConversation(cid, resolvedProject);
+updateActiveConversation(cid, resolvedProject, resolvedProvider);
+}
+if (resolvedProvider === 'codex' && data.model && getModelOption(data.model)?.provider === 'codex') {
+setSelectedModel(data.model);
+if (getCodexEfforts(data.model).some((item) => item.value === data.effort)) {
+setSelectedCodexEffort(data.effort);
+}
+if (getCodexSpeeds(data.model).some((item) => item.value === data.speed)) {
+setSelectedCodexSpeed(data.speed);
+}
+} else if (resolvedProvider === 'agy' && isCodexModel(selectedModel)) {
+setSelectedModel("Gemini 3.5 Flash (High)");
 }
 pendingConversationScrollRef.current = true;
 updateMessages(data.messages || []);
@@ -1395,7 +1545,7 @@ updateMessages(data.messages || []);
 
 const startNewChat = () => {
 const newId = `temp_${selectedProject}_${Math.random().toString(36).substring(2, 11)}`;
-updateActiveConversation(newId, selectedProject);
+updateActiveConversation(newId, selectedProject, getModelOption(selectedModel)?.provider || 'agy');
 setQueuedPromptList([]);
 updateMessages([]);
 };
@@ -1405,8 +1555,10 @@ setSelectedProject(project);
 selectedProjectRef.current = project;
 activeConvoIdRef.current = '';
 activeConvoProjectRef.current = project;
+activeConvoProviderRef.current = getModelOption(selectedModel)?.provider || 'agy';
 setActiveConvoId('');
 setActiveConvoProject(project);
+setActiveConvoProvider(activeConvoProviderRef.current);
 setQueuedPromptList([]);
 updateMessages([]);
 setIsProjectModalOpen(false);
@@ -1415,7 +1567,7 @@ setIsProjectModalOpen(false);
 const ensureActiveConversationForContext = () => {
 const conversationId = activeConvoId || `temp_${selectedProject}_${Math.random().toString(36).substring(2, 11)}`;
 if (!activeConvoId) {
-updateActiveConversation(conversationId, selectedProject);
+updateActiveConversation(conversationId, selectedProject, getModelOption(selectedModel)?.provider || 'agy');
 }
 return conversationId;
 };
@@ -1581,6 +1733,9 @@ const nextQueue = [
 id: `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
 content: userMsg,
 model: selectedModel,
+provider: getModelOption(selectedModel)?.provider || 'agy',
+effort: selectedCodexEffort,
+speed: selectedCodexSpeed,
 target: selectedTarget,
 project: selectedProjectRef.current,
 conversationId,
@@ -1611,6 +1766,9 @@ const [nextPrompt, ...remainingQueue] = queuedPromptsRef.current;
 setQueuedPromptList(remainingQueue);
 sendChatMessage(nextPrompt.content, messagesRef.current, false, {
 model: nextPrompt.model,
+provider: nextPrompt.provider,
+effort: nextPrompt.effort,
+speed: nextPrompt.speed,
 target: nextPrompt.target,
 project: nextPrompt.project,
 conversationId: nextPrompt.conversationId,
@@ -1638,6 +1796,9 @@ allowQueue: false,
     }
 
     const requestModel = options?.model || selectedModel;
+    const requestProvider = options?.provider || getModelOption(requestModel)?.provider || 'agy';
+    const requestEffort = options?.effort || selectedCodexEffort;
+    const requestSpeed = options?.speed || selectedCodexSpeed;
     const requestTarget = options?.target || selectedTarget;
     const requestProject = options?.project || selectedProjectRef.current;
 
@@ -1656,12 +1817,14 @@ allowQueue: false,
     setLocalAttachments([]); // Clear from input bar instantly so it looks sent
 
     try {
-      const shouldReuseConversation = activeConvoIdRef.current && activeConvoProjectRef.current === requestProject;
+      const shouldReuseConversation = activeConvoIdRef.current
+        && activeConvoProjectRef.current === requestProject
+        && activeConvoProviderRef.current === requestProvider;
       const convoId = options?.conversationId || (shouldReuseConversation
       ? activeConvoIdRef.current
       : `temp_${requestProject}_${Math.random().toString(36).substring(2, 11)}`);
       if (!shouldReuseConversation || activeConvoIdRef.current !== convoId) {
-        updateActiveConversation(convoId, requestProject);
+        updateActiveConversation(convoId, requestProject, requestProvider);
       }
 
       // Upload local attachments if any right before posting task
@@ -1686,6 +1849,9 @@ allowQueue: false,
         body: JSON.stringify({
           message: userMsg,
           model: requestModel,
+          provider: requestProvider,
+          effort: requestEffort,
+          speed: requestSpeed,
           workspace: requestProject,
           target: requestTarget,
           conversation_id: convoId
@@ -1726,10 +1892,10 @@ allowQueue: false,
         loadConversations(false);
         fetchUsageLimits();
         if (response.conversation_id && response.conversation_id !== convoId) {
-          updateActiveConversation(response.conversation_id, requestProject);
+          updateActiveConversation(response.conversation_id, requestProject, requestProvider);
           replaceQueuedConversationId(convoId, response.conversation_id);
         } else {
-          updateActiveConversation(convoId, requestProject);
+          updateActiveConversation(convoId, requestProject, requestProvider);
         }
       }
     } catch (err: any) {
@@ -1800,6 +1966,7 @@ allowQueue: false,
 
   const getActiveUsagePercentage = () => {
     if (!usageLimitData) return 0;
+    if (isCodexModel(selectedModel)) return 0;
     const isGemini = selectedModel.toLowerCase().includes("gemini");
     const activeHourlyPercent = isGemini
       ? (usageLimitData.geminiHourlyPercent ?? 0)
@@ -2236,7 +2403,9 @@ allowQueue: false,
               </View>
               <Text style={[styles.queuedPromptText, { color: theme.textPrimary }]}>{item.content}</Text>
               <Text style={[styles.queuedPromptMeta, { color: theme.textMuted }]} numberOfLines={1}>
-                {item.model} · {item.target}
+                {item.model}
+                {item.provider === 'codex' ? ` · ${item.effort} · ${item.speed}` : ''}
+                {` · ${item.target}`}
               </Text>
             </View>
           ))}
@@ -2346,7 +2515,9 @@ allowQueue: false,
                       onPress={() => setIsModelModalOpen(true)}
                       disabled={isPromptDisabled}
                     >
-                      <Text style={[styles.modelPickerText, { color: theme.textPrimary }]}>{selectedModel}</Text>
+                      <Text style={[styles.modelPickerText, { color: theme.textPrimary }]}>
+                        {isCodexModel(selectedModel) ? `${selectedModel} ${selectedCodexEffort}` : selectedModel}
+                      </Text>
                       <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
                     </TouchableOpacity>
                   </View>
@@ -2376,6 +2547,26 @@ allowQueue: false,
                     </TouchableOpacity>
                   </View>
                 </View>
+                {isCodexModel(selectedModel) && (
+                  <View style={styles.codexOptionsRow}>
+                    <TouchableOpacity
+                      style={[styles.codexOptionBtn, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}
+                      onPress={() => setIsEffortModalOpen(true)}
+                      disabled={isPromptDisabled}
+                    >
+                      <Text style={[styles.codexOptionLabel, { color: theme.textMuted }]}>Effort</Text>
+                      <Text style={[styles.codexOptionValue, { color: theme.textPrimary }]}>{selectedCodexEffort}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.codexOptionBtn, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}
+                      onPress={() => setIsSpeedModalOpen(true)}
+                      disabled={isPromptDisabled}
+                    >
+                      <Text style={[styles.codexOptionLabel, { color: theme.textMuted }]}>Speed</Text>
+                      <Text style={[styles.codexOptionValue, { color: theme.textPrimary }]}>{selectedCodexSpeed}</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </>
             )}
           </View>
@@ -2536,7 +2727,7 @@ allowQueue: false,
                     key={model.value}
                     style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
                     onPress={() => {
-                      setSelectedModel(model.value);
+                      applySelectedModel(model.value);
                       setIsModelModalOpen(false);
                     }}
                   >
@@ -2554,6 +2745,78 @@ allowQueue: false,
                 );
               })}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Codex effort picker */}
+      <Modal visible={isEffortModalOpen} transparent animationType="slide" onRequestClose={() => setIsEffortModalOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsEffortModalOpen(false)} />
+          <View style={[styles.bottomSheet, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
+            <View style={[styles.bottomSheetHeader, { borderBottomColor: theme.borderColor }]}>
+              <Text style={[styles.bottomSheetTitle, { color: theme.textPrimary }]}>Codex Effort</Text>
+              <TouchableOpacity onPress={() => setIsEffortModalOpen(false)} style={styles.closeModalX}>
+                <Text style={{ color: theme.textSecondary, fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.bottomSheetContent}>
+              {getCodexEfforts(selectedModel).map((item) => {
+                const isActive = selectedCodexEffort === item.value;
+                return (
+                  <TouchableOpacity
+                    key={item.value}
+                    style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
+                    onPress={() => {
+                      setSelectedCodexEffort(item.value);
+                      setIsEffortModalOpen(false);
+                    }}
+                  >
+                    <View style={styles.modelInfo}>
+                      <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{item.value}</Text>
+                      <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>{item.desc}</Text>
+                    </View>
+                    {isActive && <Text style={{ color: theme.accent, fontSize: 16, fontWeight: '700' }}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Codex speed picker */}
+      <Modal visible={isSpeedModalOpen} transparent animationType="slide" onRequestClose={() => setIsSpeedModalOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsSpeedModalOpen(false)} />
+          <View style={[styles.bottomSheet, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
+            <View style={[styles.bottomSheetHeader, { borderBottomColor: theme.borderColor }]}>
+              <Text style={[styles.bottomSheetTitle, { color: theme.textPrimary }]}>Codex Speed</Text>
+              <TouchableOpacity onPress={() => setIsSpeedModalOpen(false)} style={styles.closeModalX}>
+                <Text style={{ color: theme.textSecondary, fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.bottomSheetContent}>
+              {getCodexSpeeds(selectedModel).map((item) => {
+                const isActive = selectedCodexSpeed === item.value;
+                return (
+                  <TouchableOpacity
+                    key={item.value}
+                    style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
+                    onPress={() => {
+                      setSelectedCodexSpeed(item.value);
+                      setIsSpeedModalOpen(false);
+                    }}
+                  >
+                    <View style={styles.modelInfo}>
+                      <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{item.value}</Text>
+                      <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>{item.desc}</Text>
+                    </View>
+                    {isActive && <Text style={{ color: theme.accent, fontSize: 16, fontWeight: '700' }}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
         </View>
       </Modal>
@@ -2686,7 +2949,15 @@ allowQueue: false,
                     <TouchableOpacity
                       key={model.value}
                       style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
-                      onPress={() => setDraftSettingsModel(model.value)}
+                      onPress={() => {
+                        setDraftSettingsModel(model.value);
+                        if (!model.supportsUltra && draftSettingsCodexEffort === 'Ultra') {
+                          setDraftSettingsCodexEffort('Medium');
+                        }
+                        if (!model.supportsFast && draftSettingsCodexSpeed === 'Fast') {
+                          setDraftSettingsCodexSpeed('Standard');
+                        }
+                      }}
                     >
                       <View style={styles.modalItemLeft}>
                         <View style={[styles.badge, { backgroundColor: badge.bg }]}>
@@ -2701,6 +2972,46 @@ allowQueue: false,
                     </TouchableOpacity>
                   );
                 })}
+
+                {isCodexModel(draftSettingsModel) && (
+                  <>
+                    <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>Codex Effort</Text>
+                    {getCodexEfforts(draftSettingsModel).map((item) => {
+                      const isActive = draftSettingsCodexEffort === item.value;
+                      return (
+                        <TouchableOpacity
+                          key={item.value}
+                          style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
+                          onPress={() => setDraftSettingsCodexEffort(item.value)}
+                        >
+                          <View style={styles.modelInfo}>
+                            <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{item.value}</Text>
+                            <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>{item.desc}</Text>
+                          </View>
+                          {isActive && <Text style={{ color: theme.accent, fontSize: 16, fontWeight: '700' }}>✓</Text>}
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                    <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>Codex Speed</Text>
+                    {getCodexSpeeds(draftSettingsModel).map((item) => {
+                      const isActive = draftSettingsCodexSpeed === item.value;
+                      return (
+                        <TouchableOpacity
+                          key={item.value}
+                          style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
+                          onPress={() => setDraftSettingsCodexSpeed(item.value)}
+                        >
+                          <View style={styles.modelInfo}>
+                            <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{item.value}</Text>
+                            <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>{item.desc}</Text>
+                          </View>
+                          {isActive && <Text style={{ color: theme.accent, fontSize: 16, fontWeight: '700' }}>✓</Text>}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </>
+                )}
 
                 <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>Execution Target</Text>
                 {targetsList.map((target) => {
@@ -3640,10 +3951,35 @@ queuedPromptBubble: {
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 12,
+    maxWidth: 230,
   },
   modelPickerText: {
     fontSize: 11,
     fontWeight: '600',
+    flexShrink: 1,
+  },
+  codexOptionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  codexOptionBtn: {
+    flex: 1,
+    minHeight: 40,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  codexOptionLabel: {
+    fontSize: 9,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  codexOptionValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
   },
   sendBtnRound: {
     width: 28,

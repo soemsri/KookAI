@@ -15,6 +15,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
+from codex_backend import (
+    CODEX_CONVERSATION_PREFIX,
+    build_codex_command,
+    classify_codex_progress_line,
+    codex_session_id,
+    is_codex_model,
+    make_codex_conversation_id,
+    normalize_codex_effort,
+    normalize_codex_speed,
+    parse_codex_jsonl,
+    resolve_codex_executable,
+    resolve_provider,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -318,12 +331,19 @@ class ChatRequest(BaseModel):
     workspace: str
     target: str
     conversation_id: str
+    provider: Optional[str] = None
+    effort: Optional[str] = "Medium"
+    speed: Optional[str] = "Standard"
 
 # Temp UUID to actual conversation ID mapping
 convo_id_mapping = {}
 
 # In-memory session message cache (stores active tab sessions)
 in_memory_chats = {}
+
+# Persistent metadata/history for conversations started through Codex CLI.
+CODEX_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "codex_conversations.json")
+codex_conversations_lock = threading.Lock()
 
 # Background chat task state for polling progress while agy is still running.
 chat_tasks = {}
@@ -429,6 +449,86 @@ SEED_CONVERSATIONS = [
         "messages": []
     }
 ]
+
+
+def _load_codex_conversation_records() -> dict:
+    if not os.path.exists(CODEX_CONVERSATIONS_FILE):
+        return {}
+    try:
+        with open(CODEX_CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logging.error(f"Failed to load Codex conversation history: {e}")
+        return {}
+
+
+def _save_codex_conversation_records(records: dict):
+    os.makedirs(os.path.dirname(CODEX_CONVERSATIONS_FILE), exist_ok=True)
+    temp_path = f"{CODEX_CONVERSATIONS_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, CODEX_CONVERSATIONS_FILE)
+
+
+def persist_codex_exchange(
+    conversation_id: str,
+    project: str,
+    model: str,
+    effort: str,
+    speed: str,
+    user_message: str,
+    assistant_message: str,
+):
+    if not conversation_id.startswith(CODEX_CONVERSATION_PREFIX):
+        return
+
+    now = datetime.datetime.now().timestamp()
+    with codex_conversations_lock:
+        records = _load_codex_conversation_records()
+        record = records.get(conversation_id, {})
+        messages = record.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        messages.extend([
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_message},
+        ])
+
+        clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", user_message).strip()
+        if not clean_title:
+            clean_title = "Codex conversation"
+        if len(clean_title) > 40:
+            clean_title = clean_title[:40] + "..."
+
+        records[conversation_id] = {
+            "id": conversation_id,
+            "session_id": codex_session_id(conversation_id),
+            "title": record.get("title") or clean_title,
+            "project": project,
+            "provider": "codex",
+            "model": model,
+            "effort": effort,
+            "speed": speed,
+            "timestamp": now,
+            "messages": messages,
+        }
+        _save_codex_conversation_records(records)
+
+
+def get_codex_conversations() -> List[dict]:
+    with codex_conversations_lock:
+        records = _load_codex_conversation_records()
+    conversations = [value for value in records.values() if isinstance(value, dict)]
+    conversations.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
+    return conversations
+
+
+def get_codex_conversation(conversation_id: str) -> Optional[dict]:
+    with codex_conversations_lock:
+        record = _load_codex_conversation_records().get(conversation_id)
+    return record if isinstance(record, dict) else None
+
 
 # Helper: Get all database file names (conversation IDs) in antigravity folders
 def get_existing_db_ids():
@@ -763,10 +863,18 @@ def classify_cli_progress_line(source: str, line: str):
     return {"type": "progress", "message": clean}
 
 
-def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=None):
+def run_agent_command(
+    cmd,
+    cwd_path,
+    timeout=AGY_CLI_TIMEOUT,
+    progress_callback=None,
+    progress_line_classifier=classify_cli_progress_line,
+    raw_line_callback=None,
+    stdin_text=None,
+):
     proc = subprocess.Popen(
         cmd,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -805,6 +913,11 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
         try:
             for line in iter(pipe.readline, ""):
                 append_capture(capture, line)
+                if raw_line_callback:
+                    try:
+                        raw_line_callback(source, line.rstrip("\n"))
+                    except Exception as e:
+                        logging.debug(f"Raw CLI line callback failed: {e}")
                 output_queue.put((source, line.rstrip("\n")))
         finally:
             pipe.close()
@@ -814,11 +927,25 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
     stdout_thread.start()
     stderr_thread.start()
 
+    if stdin_text is not None and proc.stdin:
+        def write_stdin():
+            try:
+                proc.stdin.write(stdin_text)
+            except (BrokenPipeError, OSError):
+                pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+
+        threading.Thread(target=write_stdin, daemon=True).start()
+
     start_time = datetime.datetime.now().timestamp()
     while proc.poll() is None or not output_queue.empty():
         try:
             source, line = output_queue.get(timeout=0.2)
-            event = classify_cli_progress_line(source, line)
+            event = progress_line_classifier(source, line)
             if event and progress_callback:
                 progress_callback(event["type"], event["message"])
         except queue.Empty:
@@ -840,7 +967,7 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
 
     while not output_queue.empty():
         source, line = output_queue.get()
-        event = classify_cli_progress_line(source, line)
+        event = progress_line_classifier(source, line)
         if event and progress_callback:
             progress_callback(event["type"], event["message"])
 
@@ -849,6 +976,16 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
         proc.returncode,
         stdout=capture_text(stdout_capture),
         stderr=capture_text(stderr_capture)
+    )
+
+
+def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=None):
+    return run_agent_command(
+        cmd,
+        cwd_path,
+        timeout=timeout,
+        progress_callback=progress_callback,
+        progress_line_classifier=classify_cli_progress_line,
     )
 
 def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: str = "Sandbox", workspace: str = "agy", progress_callback=None):
@@ -978,6 +1115,183 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
     except Exception as e:
         return f"❌ **Execution Error**: Failed to run `agy` CLI. Details: `{str(e)}`", actual_cid
 
+def run_codex_cli(
+    message: str,
+    model_ui_name: str,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    effort: str = "Medium",
+    speed: str = "Standard",
+    image_paths: Optional[List[str]] = None,
+    progress_callback=None,
+):
+    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    cwd_path = resolve_project_directory(project_id)
+    mapping_key = f"codex:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+    effort_display, _ = normalize_codex_effort(effort, model_ui_name)
+    speed_display, _ = normalize_codex_speed(speed, model_ui_name)
+
+    message_with_context = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+    if effort_display == "Ultra":
+        message_with_context = (
+            "[EXECUTION MODE: ULTRA]\n"
+            "Use subagents for independent work that can run in parallel, then integrate and verify "
+            "their results before answering. Do not spawn subagents for trivial work.\n\n"
+            + message_with_context
+        )
+
+    def execute(run_conversation_id: Optional[str]):
+        stream_result = {"session_id": None, "final_message": "", "errors": []}
+
+        def capture_codex_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_codex_jsonl(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["final_message"] = parsed_line["final_message"]
+            if parsed_line["errors"]:
+                stream_result["errors"].extend(parsed_line["errors"])
+
+        codex_path = resolve_codex_executable()
+        cmd = build_codex_command(
+            codex_path=codex_path,
+            prompt=message_with_context,
+            model_name=model_ui_name,
+            effort=effort_display,
+            speed=speed_display,
+            target=target,
+            conversation_id=run_conversation_id,
+            image_paths=image_paths,
+        )
+        logging.info(
+            "Executing Codex CLI in %s with model=%s effort=%s speed=%s target=%s resume=%s",
+            cwd_path,
+            model_ui_name,
+            effort_display,
+            speed_display,
+            target,
+            bool(codex_session_id(run_conversation_id)),
+        )
+        result = run_agent_command(
+            cmd,
+            cwd_path,
+            timeout=AGY_CLI_TIMEOUT,
+            progress_callback=progress_callback,
+            progress_line_classifier=classify_codex_progress_line,
+            raw_line_callback=capture_codex_line,
+            stdin_text=message_with_context,
+        )
+        parsed = parse_codex_jsonl(result.stdout or "")
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": stream_result["final_message"] or parsed["final_message"],
+            "errors": stream_result["errors"] or parsed["errors"],
+        }
+
+    try:
+        result, parsed = execute(actual_cid)
+        combined_error = "\n".join(
+            part
+            for part in [
+                (result.stderr or "").strip(),
+                "\n".join(parsed["errors"]).strip(),
+            ]
+            if part
+        )
+        recoverable_resume_error = codex_session_id(actual_cid) and any(
+            phrase in combined_error.lower()
+            for phrase in (
+                "session not found",
+                "thread not found",
+                "failed to resume",
+                "unable to resume",
+                "no rollout found",
+            )
+        )
+        if result.returncode != 0 and recoverable_resume_error:
+            if progress_callback:
+                progress_callback("progress", "Codex session was unavailable; starting a fresh session.")
+            result, parsed = execute(None)
+            combined_error = "\n".join(
+                part
+                for part in [
+                    (result.stderr or "").strip(),
+                    "\n".join(parsed["errors"]).strip(),
+                ]
+                if part
+            )
+
+        session_id = parsed["session_id"]
+        resolved_cid = make_codex_conversation_id(session_id) if session_id else actual_cid
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+
+        if result.returncode == 0 and parsed["final_message"]:
+            return parsed["final_message"].strip(), resolved_cid
+
+        error_message = combined_error or "Codex CLI did not return a final response."
+        return (
+            f"⚠️ **Codex CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```",
+            resolved_cid,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"⏱️ **Timeout Error**: The request to `codex` CLI exceeded "
+            f"the {AGY_CLI_TIMEOUT}-second limit.",
+            actual_cid,
+        )
+    except Exception as e:
+        return (
+            "❌ **Execution Error**: Failed to run `codex` CLI. "
+            f"Install/authenticate Codex or set `CODEX_CLI_PATH`. Details: `{str(e)}`",
+            actual_cid,
+        )
+
+
+def run_selected_cli(
+    message: str,
+    model_ui_name: str,
+    conversation_id: str,
+    target: str,
+    workspace: str,
+    provider: Optional[str] = None,
+    effort: str = "Medium",
+    speed: str = "Standard",
+    image_paths: Optional[List[str]] = None,
+    progress_callback=None,
+):
+    selected_provider = resolve_provider(provider, model_ui_name)
+    if selected_provider == "codex":
+        return run_codex_cli(
+            message,
+            model_ui_name,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            speed,
+            image_paths,
+            progress_callback,
+        )
+    return run_agy_cli(
+        message,
+        model_ui_name,
+        conversation_id,
+        target,
+        workspace,
+        progress_callback,
+    )
+
+
 # --- Endpoints ---
 
 @app.get("/api/files")
@@ -1019,16 +1333,15 @@ async def get_projects(request: Request):
 @app.get("/api/conversations")
 async def get_conversations(request: Request, project: Optional[str] = None):
     verify_authorization(request)
-    # Retrieve real conversations + seeds
     real_convos = get_real_conversations()
-    
-    # Merge with seed conversations (avoiding duplicates)
-    seen_titles = {c["title"] for c in real_convos}
-    merged = list(real_convos)
-    
+    for convo in real_convos:
+        convo.setdefault("provider", "agy")
+    codex_convos = get_codex_conversations()
+    merged = list(real_convos) + codex_convos
+    seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
-        if c["title"] not in seen_titles:
-            merged.append(c)
+        if c["id"] not in seen_ids:
+            merged.append({**c, "provider": "agy"})
             
     # Filter by project if supplied
     if project:
@@ -1042,11 +1355,14 @@ async def get_conversations(request: Request, project: Optional[str] = None):
 async def get_chat_history(request: Request):
     verify_authorization(request)
     real_convos = get_real_conversations()
-    seen_titles = {c["title"] for c in real_convos}
-    merged = list(real_convos)
+    for convo in real_convos:
+        convo.setdefault("provider", "agy")
+    codex_convos = get_codex_conversations()
+    merged = list(real_convos) + codex_convos
+    seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
-        if c["title"] not in seen_titles:
-            merged.append(c)
+        if c["id"] not in seen_ids:
+            merged.append({**c, "provider": "agy"})
             
     # Sort all by last modified time
     merged.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
@@ -1057,9 +1373,29 @@ async def get_conversation_details(cid: str, request: Request):
     verify_authorization(request)
     messages = []
     project = None
+    provider = "agy"
+    model = None
+    effort = None
+    speed = None
+    codex_record = get_codex_conversation(cid)
+
     # First check memory cache
     if cid in in_memory_chats:
         messages = in_memory_chats[cid]
+        if codex_record:
+            project = codex_record.get("project")
+            provider = "codex"
+            model = codex_record.get("model")
+            effort = codex_record.get("effort")
+            speed = codex_record.get("speed")
+    elif codex_record:
+        messages = codex_record.get("messages", [])
+        project = codex_record.get("project")
+        provider = "codex"
+        model = codex_record.get("model")
+        effort = codex_record.get("effort")
+        speed = codex_record.get("speed")
+        in_memory_chats[cid] = messages
     else:
         # Check seed conversations
         for c in SEED_CONVERSATIONS:
@@ -1113,7 +1449,14 @@ async def get_conversation_details(cid: str, request: Request):
             "content": f"![Attached Image](/api/media?{token_part}path={urllib.parse.quote(p)})"
         })
 
-    return JSONResponse(content={"messages": processed_messages, "project": project})
+    return JSONResponse(content={
+        "messages": processed_messages,
+        "project": project,
+        "provider": provider,
+        "model": model,
+        "effort": effort,
+        "speed": speed,
+    })
 
 def build_chat_response(request: ChatRequest, progress_callback=None):
     message = request.message
@@ -1121,8 +1464,24 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     workspace = request.workspace
     target = request.target
     conversation_id = request.conversation_id
+    provider = resolve_provider(request.provider, model)
+    effort = request.effort or "Medium"
+    speed = request.speed or "Standard"
+    if provider == "codex":
+        effort, _ = normalize_codex_effort(effort, model)
+        speed, _ = normalize_codex_speed(speed, model)
 
-    actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
+    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    if provider == "codex":
+        actual_cid = convo_id_mapping.get(
+            f"codex:{project_id}:{conversation_id}",
+            conversation_id,
+        )
+    else:
+        actual_cid = convo_id_mapping.get(
+            f"{project_id}:{conversation_id}",
+            convo_id_mapping.get(conversation_id, conversation_id),
+        )
     
     # Prepend any pending media files to the message
     attached_media = pending_media.pop(actual_cid, [])
@@ -1135,6 +1494,26 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         message = user_visible_message + "\n\n" + media_instrs
     else:
         user_visible_message = message
+
+    def execute_selected(prompt: str):
+        codex_images = [
+            path
+            for path in attached_media
+            if os.path.splitext(path)[1].lower()
+            in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+        ]
+        return run_selected_cli(
+            prompt,
+            model,
+            conversation_id,
+            target,
+            workspace,
+            provider,
+            effort,
+            speed,
+            codex_images,
+            progress_callback,
+        )
 
     msg_lower = message.strip().lower()
 
@@ -1164,14 +1543,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             "}"
         )
         
-        reply, resolved_cid = run_agy_cli(
-            grill_init_prompt,
-            model,
-            conversation_id,
-            target,
-            workspace,
-            progress_callback=progress_callback
-        )
+        reply, resolved_cid = execute_selected(grill_init_prompt)
         
         # Ensure clean JSON format by stripping markdown formatting if present
         reply_clean = reply.strip()
@@ -1204,14 +1576,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             "and state that the alignment is complete. Do NOT use the JSON format for the final summary response."
         )
         
-        reply, resolved_cid = run_agy_cli(
-            grill_continue_prompt,
-            model,
-            conversation_id,
-            target,
-            workspace,
-            progress_callback=progress_callback
-        )
+        reply, resolved_cid = execute_selected(grill_continue_prompt)
         
         reply_clean = reply.strip()
         if reply_clean.startswith("```json"):
@@ -1260,14 +1625,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
                 "Do not stop until the objective is fully completed, verified, and all tests pass.\n\n"
                 f"Objective:\n{goal_text}"
             )
-            reply, resolved_cid = run_agy_cli(
-                wrapped_message,
-                model,
-                conversation_id,
-                target,
-                workspace,
-                progress_callback=progress_callback
-            )
+            reply, resolved_cid = execute_selected(wrapped_message)
     elif msg_lower.startswith("/learn"):
         rule_text = message[6:].strip()
         if not rule_text:
@@ -1280,8 +1638,12 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         else:
             project_id = clean_project_name(os.path.basename(workspace or "agy"))
             cwd_path = resolve_project_directory(project_id)
-            agents_dir = os.path.join(cwd_path, ".agents")
-            agents_file = os.path.join(agents_dir, "AGENTS.md")
+            agents_file = (
+                os.path.join(cwd_path, "AGENTS.md")
+                if provider == "codex"
+                else os.path.join(cwd_path, ".agents", "AGENTS.md")
+            )
+            agents_dir = os.path.dirname(agents_file)
             
             try:
                 os.makedirs(agents_dir, exist_ok=True)
@@ -1321,14 +1683,10 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         )
         resolved_cid = conversation_id
     else:
-        reply, resolved_cid = run_agy_cli(
-            message,
-            model,
-            conversation_id,
-            target,
-            workspace,
-            progress_callback=progress_callback
-        )
+        reply, resolved_cid = execute_selected(message)
+
+    if resolved_cid != actual_cid and actual_cid in interview_states:
+        interview_states[resolved_cid] = interview_states.pop(actual_cid)
 
     if resolved_cid not in in_memory_chats:
         in_memory_chats[resolved_cid] = []
@@ -1336,11 +1694,26 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     in_memory_chats[resolved_cid].append({"role": "user", "content": user_visible_message})
     in_memory_chats[resolved_cid].append({"role": "assistant", "content": reply})
 
+    if provider == "codex":
+        persist_codex_exchange(
+            resolved_cid,
+            project_id,
+            model,
+            effort,
+            speed,
+            user_visible_message,
+            reply,
+        )
+
     processed_reply = reply.replace("file:///", "/api/media?path=/")
     return {
         "status": "success",
         "reply": processed_reply,
-        "conversation_id": resolved_cid
+        "conversation_id": resolved_cid,
+        "provider": provider,
+        "model": model,
+        "effort": effort if provider == "codex" else None,
+        "speed": speed if provider == "codex" else None,
     }
 
 

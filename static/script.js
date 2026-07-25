@@ -25,21 +25,31 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Tool Dropdown Buttons
   const modelBtn = document.getElementById("modelBtn");
+  const codexEffortBtn = document.getElementById("codexEffortBtn");
+  const codexSpeedBtn = document.getElementById("codexSpeedBtn");
   const targetBtn = document.getElementById("targetBtn");
   const projectPickerBtn = document.getElementById("projectPickerBtn");
 
   // Dropdown Menus
   const workspaceDropdown = document.getElementById("workspaceDropdown");
   const modelDropdown = document.getElementById("modelDropdown");
+  const codexEffortDropdown = document.getElementById("codexEffortDropdown");
+  const codexSpeedDropdown = document.getElementById("codexSpeedDropdown");
   const targetDropdown = document.getElementById("targetDropdown");
 
   // Display texts
   const currentModelText = document.getElementById("currentModelText");
+  const currentCodexEffortText = document.getElementById("currentCodexEffortText");
+  const currentCodexSpeedText = document.getElementById("currentCodexSpeedText");
+  const codexInlineControls = document.getElementById("codexInlineControls");
   const currentTargetText = document.getElementById("currentTargetText");
 
   // State Variables
   let currentWorkspace = "agy";
   let currentModel = "Gemini 3.5 Flash (High)";
+  let currentProvider = "agy";
+  let currentCodexEffort = "Medium";
+  let currentCodexSpeed = "Standard";
   let currentTarget = "Sandbox";
   let currentThemeMode = "system";
   let activeConversationId = ""; // Current chat session ID
@@ -48,6 +58,68 @@ document.addEventListener("DOMContentLoaded", () => {
   let conversationsList = [];
   let isRecording = false;
   let recognition = null;
+
+  const CODEX_MODELS = {
+    "5.6 Sol": { ultra: true, fast: true },
+    "5.6 Terra": { ultra: true, fast: true },
+    "5.6 Luna": { ultra: false, fast: true },
+    "5.5": { ultra: false, fast: true },
+    "5.4": { ultra: false, fast: true },
+    "5.4 Mini": { ultra: false, fast: false }
+  };
+
+  const isCodexModel = model => Object.prototype.hasOwnProperty.call(CODEX_MODELS, model);
+
+  function updateCodexControls() {
+    const capability = CODEX_MODELS[currentModel];
+    currentProvider = capability ? "codex" : "agy";
+
+    if (capability && !capability.ultra && currentCodexEffort === "Ultra") {
+      currentCodexEffort = "Medium";
+    }
+    if (capability && !capability.fast && currentCodexSpeed === "Fast") {
+      currentCodexSpeed = "Standard";
+    }
+
+    codexInlineControls?.classList.toggle("hidden", !capability);
+    if (currentModelText) {
+      currentModelText.textContent = capability
+        ? `${currentModel} ${currentCodexEffort}`
+        : currentModel;
+    }
+    if (currentCodexEffortText) currentCodexEffortText.textContent = currentCodexEffort;
+    if (currentCodexSpeedText) currentCodexSpeedText.textContent = currentCodexSpeed;
+    modelDropdown?.querySelectorAll(".dropdown-item").forEach(item => {
+      item.classList.toggle("active", item.dataset.value === currentModel);
+    });
+
+    codexEffortDropdown?.querySelectorAll(".dropdown-item").forEach(item => {
+      const isUnsupported = item.dataset.ultraOnly === "true" && !capability?.ultra;
+      item.classList.toggle("hidden", isUnsupported);
+      item.classList.toggle("active", item.dataset.value === currentCodexEffort);
+    });
+    codexSpeedDropdown?.querySelectorAll(".dropdown-item").forEach(item => {
+      const isUnsupported = item.dataset.fastOnly === "true" && !capability?.fast;
+      item.classList.toggle("hidden", isUnsupported);
+      item.classList.toggle("active", item.dataset.value === currentCodexSpeed);
+    });
+
+    document.getElementById("settingsCodexEffortGroup")?.classList.toggle("hidden", !capability);
+    document.getElementById("settingsCodexSpeedGroup")?.classList.toggle("hidden", !capability);
+    const ultraOption = document.querySelector('#settingsCodexEffort option[value="Ultra"]');
+    const fastOption = document.querySelector('#settingsCodexSpeed option[value="Fast"]');
+    if (ultraOption) ultraOption.disabled = !capability?.ultra;
+    if (fastOption) fastOption.disabled = !capability?.fast;
+  }
+
+  function applyModelSelection(model, startFreshOnProviderChange = true) {
+    const previousProvider = currentProvider;
+    currentModel = model;
+    updateCodexControls();
+    if (startFreshOnProviderChange && previousProvider !== currentProvider && activeConversationId) {
+      startNewConversation();
+    }
+  }
 
   // Autocomplete state
   let isSuggesting = false;
@@ -86,6 +158,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function saveAppPreferences() {
     localStorage.setItem("antigravity_model", currentModel);
+    localStorage.setItem("antigravity_codex_effort", currentCodexEffort);
+    localStorage.setItem("antigravity_codex_speed", currentCodexSpeed);
     localStorage.setItem("antigravity_target", currentTarget);
     localStorage.setItem("antigravity_theme", currentThemeMode);
   }
@@ -94,10 +168,18 @@ document.addEventListener("DOMContentLoaded", () => {
     const savedModel = localStorage.getItem("antigravity_model");
     const savedTarget = localStorage.getItem("antigravity_target");
     const savedThemeMode = localStorage.getItem("antigravity_theme");
+    const savedCodexEffort = localStorage.getItem("antigravity_codex_effort");
+    const savedCodexSpeed = localStorage.getItem("antigravity_codex_speed");
+
+    if (["Light", "Medium", "High", "Extra High", "Ultra"].includes(savedCodexEffort)) {
+      currentCodexEffort = savedCodexEffort;
+    }
+    if (["Standard", "Fast"].includes(savedCodexSpeed)) {
+      currentCodexSpeed = savedCodexSpeed;
+    }
 
     if (savedModel) {
-      currentModel = savedModel;
-      if (currentModelText) currentModelText.textContent = currentModel;
+      applyModelSelection(savedModel, false);
       modelDropdown.querySelectorAll(".dropdown-item").forEach(item => {
         if (item.getAttribute("data-value") === currentModel) {
           item.classList.add("active");
@@ -106,6 +188,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       });
     }
+    updateCodexControls();
 
     if (savedTarget) {
       currentTarget = savedTarget;
@@ -323,6 +406,17 @@ document.addEventListener("DOMContentLoaded", () => {
     fetch(`/api/conversation/${cid}`)
       .then(res => res.json())
       .then(data => {
+        if (data.provider === "codex" && isCodexModel(data.model)) {
+          if (["Light", "Medium", "High", "Extra High", "Ultra"].includes(data.effort)) {
+            currentCodexEffort = data.effort;
+          }
+          if (["Standard", "Fast"].includes(data.speed)) {
+            currentCodexSpeed = data.speed;
+          }
+          applyModelSelection(data.model, false);
+        } else if (data.provider !== "codex" && currentProvider === "codex") {
+          applyModelSelection("Gemini 3.5 Flash (High)", false);
+        }
         const messages = data.messages || [];
         if (messages.length === 0) {
           welcomeScreen.classList.remove("hidden");
@@ -486,6 +580,9 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({
           message: message,
           model: currentModel,
+          provider: currentProvider,
+          effort: currentCodexEffort,
+          speed: currentCodexSpeed,
           workspace: currentWorkspace,
           target: currentTarget,
           conversation_id: activeConversationId
@@ -904,6 +1001,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!modelBtn.contains(e.target) && !modelDropdown.contains(e.target)) {
       modelDropdown.classList.add("hidden");
     }
+    if (codexEffortBtn && !codexEffortBtn.contains(e.target) && !codexEffortDropdown.contains(e.target)) {
+      codexEffortDropdown.classList.add("hidden");
+    }
+    if (codexSpeedBtn && !codexSpeedBtn.contains(e.target) && !codexSpeedDropdown.contains(e.target)) {
+      codexSpeedDropdown.classList.add("hidden");
+    }
     if (!targetBtn.contains(e.target) && !targetDropdown.contains(e.target)) {
       targetDropdown.classList.add("hidden");
     }
@@ -930,10 +1033,34 @@ document.addEventListener("DOMContentLoaded", () => {
     e.stopPropagation();
     workspaceDropdown.classList.add("hidden");
     targetDropdown.classList.add("hidden");
+    codexEffortDropdown.classList.add("hidden");
+    codexSpeedDropdown.classList.add("hidden");
     if (modelDropdown.classList.contains("hidden")) {
       positionDropdown(modelBtn, modelDropdown, "up");
     } else {
       modelDropdown.classList.add("hidden");
+    }
+  });
+
+  codexEffortBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    modelDropdown.classList.add("hidden");
+    codexSpeedDropdown.classList.add("hidden");
+    if (codexEffortDropdown.classList.contains("hidden")) {
+      positionDropdown(codexEffortBtn, codexEffortDropdown, "up");
+    } else {
+      codexEffortDropdown.classList.add("hidden");
+    }
+  });
+
+  codexSpeedBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    modelDropdown.classList.add("hidden");
+    codexEffortDropdown.classList.add("hidden");
+    if (codexSpeedDropdown.classList.contains("hidden")) {
+      positionDropdown(codexSpeedBtn, codexSpeedDropdown, "up");
+    } else {
+      codexSpeedDropdown.classList.add("hidden");
     }
   });
 
@@ -966,11 +1093,28 @@ document.addEventListener("DOMContentLoaded", () => {
     modelDropdown.querySelectorAll(".dropdown-item").forEach(el => el.classList.remove("active"));
     item.classList.add("active");
     const val = item.getAttribute("data-value");
-    currentModel = val;
-    currentModelText.textContent = val;
+    applyModelSelection(val);
     modelDropdown.classList.add("hidden");
     saveAppPreferences();
     refreshUsageDisplay();
+  });
+
+  codexEffortDropdown.addEventListener("click", (e) => {
+    const item = e.target.closest(".dropdown-item");
+    if (!item || item.classList.contains("hidden")) return;
+    currentCodexEffort = item.getAttribute("data-value");
+    updateCodexControls();
+    codexEffortDropdown.classList.add("hidden");
+    saveAppPreferences();
+  });
+
+  codexSpeedDropdown.addEventListener("click", (e) => {
+    const item = e.target.closest(".dropdown-item");
+    if (!item || item.classList.contains("hidden")) return;
+    currentCodexSpeed = item.getAttribute("data-value");
+    updateCodexControls();
+    codexSpeedDropdown.classList.add("hidden");
+    saveAppPreferences();
   });
 
   targetDropdown.addEventListener("click", (e) => {
@@ -1067,6 +1211,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const settingsCloseBtn = document.getElementById("settingsCloseBtn");
   const settingsSaveBtn = document.getElementById("settingsSaveBtn");
   const settingsDefaultModel = document.getElementById("settingsDefaultModel");
+  const settingsCodexEffort = document.getElementById("settingsCodexEffort");
+  const settingsCodexSpeed = document.getElementById("settingsCodexSpeed");
   const settingsDefaultTarget = document.getElementById("settingsDefaultTarget");
   const settingsSpeechLang = document.getElementById("settingsSpeechLang");
   const settingsThemeMode = document.getElementById("settingsThemeMode");
@@ -1074,12 +1220,31 @@ document.addEventListener("DOMContentLoaded", () => {
   settingsBtn.addEventListener("click", () => {
     // Populate with current configurations
     settingsDefaultModel.value = currentModel;
+    settingsCodexEffort.value = currentCodexEffort;
+    settingsCodexSpeed.value = currentCodexSpeed;
+    updateCodexControls();
     settingsDefaultTarget.value = currentTarget;
     setThemeModeControl(currentThemeMode);
     if (recognition) {
       settingsSpeechLang.value = recognition.lang || "th-TH";
     }
     settingsModal.classList.remove("hidden");
+  });
+
+  settingsDefaultModel.addEventListener("change", () => {
+    const capability = CODEX_MODELS[settingsDefaultModel.value];
+    document.getElementById("settingsCodexEffortGroup")?.classList.toggle("hidden", !capability);
+    document.getElementById("settingsCodexSpeedGroup")?.classList.toggle("hidden", !capability);
+    const ultraOption = settingsCodexEffort.querySelector('option[value="Ultra"]');
+    const fastOption = settingsCodexSpeed.querySelector('option[value="Fast"]');
+    ultraOption.disabled = !capability?.ultra;
+    fastOption.disabled = !capability?.fast;
+    if (!capability?.ultra && settingsCodexEffort.value === "Ultra") {
+      settingsCodexEffort.value = "Medium";
+    }
+    if (!capability?.fast && settingsCodexSpeed.value === "Fast") {
+      settingsCodexSpeed.value = "Standard";
+    }
   });
 
   settingsThemeMode.addEventListener("click", (e) => {
@@ -1112,8 +1277,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Save settings
   settingsSaveBtn.addEventListener("click", () => {
-    currentModel = settingsDefaultModel.value;
-    currentModelText.textContent = currentModel;
+    currentCodexEffort = settingsCodexEffort.value;
+    currentCodexSpeed = settingsCodexSpeed.value;
+    applyModelSelection(settingsDefaultModel.value);
 
     // Update active dropdown element highlight
     modelDropdown.querySelectorAll(".dropdown-item").forEach(item => {
@@ -1211,7 +1377,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Update main button chart based on selected model
     const isGemini = currentModel.toLowerCase().includes("gemini");
-    const activeHourlyPercent = isGemini ? usageData.geminiHourlyPercent : usageData.claudeHourlyPercent;
+    const activeHourlyPercent = isCodexModel(currentModel)
+      ? 0
+      : (isGemini ? usageData.geminiHourlyPercent : usageData.claudeHourlyPercent);
     const mainVal = isUsage ? activeHourlyPercent : (100 - activeHourlyPercent);
 
     const mainCircle = document.getElementById("mainUsageBtnChartCircle");

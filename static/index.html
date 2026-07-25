@@ -168,6 +168,16 @@
                       <polyline points="6 9 12 15 18 9"></polyline>
                     </svg>
                   </div>
+                  <div class="codex-inline-controls hidden" id="codexInlineControls">
+                    <button class="codex-inline-btn" id="codexEffortBtn" type="button">
+                      <span class="codex-inline-label">Effort</span>
+                      <span id="currentCodexEffortText">Medium</span>
+                    </button>
+                    <button class="codex-inline-btn" id="codexSpeedBtn" type="button">
+                      <span class="codex-inline-label">Speed</span>
+                      <span id="currentCodexSpeedText">Standard</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div class="tool-row-right">
@@ -443,6 +453,69 @@
         <span class="model-desc">Open-source large scale LLM</span>
       </div>
     </div>
+
+    <div class="dropdown-item" data-value="5.6 Sol" data-provider="codex" data-ultra="true" data-fast="true">
+      <span class="model-badge codex">Codex</span>
+      <div class="model-info">
+        <span class="model-name">5.6 Sol</span>
+        <span class="model-desc">Complex, open-ended work</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="5.6 Terra" data-provider="codex" data-ultra="true" data-fast="true">
+      <span class="model-badge codex">Codex</span>
+      <div class="model-info">
+        <span class="model-name">5.6 Terra</span>
+        <span class="model-desc">Everyday all-rounder</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="5.6 Luna" data-provider="codex" data-fast="true">
+      <span class="model-badge codex">Codex</span>
+      <div class="model-info">
+        <span class="model-name">5.6 Luna</span>
+        <span class="model-desc">Clear, repeatable work</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="5.5" data-provider="codex" data-fast="true">
+      <span class="model-badge codex">Codex</span>
+      <div class="model-info">
+        <span class="model-name">5.5</span>
+        <span class="model-desc">Codex GPT-5.5</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="5.4" data-provider="codex" data-fast="true">
+      <span class="model-badge codex">Codex</span>
+      <div class="model-info">
+        <span class="model-name">5.4</span>
+        <span class="model-desc">Codex GPT-5.4</span>
+      </div>
+    </div>
+
+    <div class="dropdown-item" data-value="5.4 Mini" data-provider="codex">
+      <span class="model-badge codex">Codex</span>
+      <div class="model-info">
+        <span class="model-name">5.4 Mini</span>
+        <span class="model-desc">Compact Codex model</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="dropdown-menu hidden" id="codexEffortDropdown">
+    <div class="dropdown-header">Codex Effort</div>
+    <div class="dropdown-item" data-value="Light"><span>Light</span><small>Quick tasks</small></div>
+    <div class="dropdown-item active" data-value="Medium"><span>Medium</span><small>Balanced</small></div>
+    <div class="dropdown-item" data-value="High"><span>High</span><small>Multi-step work</small></div>
+    <div class="dropdown-item" data-value="Extra High"><span>Extra High</span><small>Deep reasoning</small></div>
+    <div class="dropdown-item" data-value="Ultra" data-ultra-only="true"><span>Ultra</span><small>Parallel subagents</small></div>
+  </div>
+
+  <div class="dropdown-menu hidden" id="codexSpeedDropdown">
+    <div class="dropdown-header">Codex Speed</div>
+    <div class="dropdown-item active" data-value="Standard"><span>Standard</span><small>Default speed</small></div>
+    <div class="dropdown-item" data-value="Fast" data-fast-only="true"><span>Fast</span><small>1.5x speed, more usage</small></div>
   </div>
 
   <!-- 3. Target Dropdown Menu -->
@@ -488,6 +561,29 @@
               <option value="Claude Sonnet 4.6 (Thinking)">Claude Sonnet 4.6 (Thinking)</option>
               <option value="Claude Opus 4.6 (Thinking)">Claude Opus 4.6 (Thinking)</option>
               <option value="GPT-OSS 120B (Medium)">GPT-OSS 120B (Medium)</option>
+              <option value="5.6 Sol">5.6 Sol (Codex)</option>
+              <option value="5.6 Terra">5.6 Terra (Codex)</option>
+              <option value="5.6 Luna">5.6 Luna (Codex)</option>
+              <option value="5.5">5.5 (Codex)</option>
+              <option value="5.4">5.4 (Codex)</option>
+              <option value="5.4 Mini">5.4 Mini (Codex)</option>
+            </select>
+          </div>
+          <div class="settings-group hidden" id="settingsCodexEffortGroup">
+            <label>Codex Effort</label>
+            <select id="settingsCodexEffort">
+              <option value="Light">Light</option>
+              <option value="Medium">Medium</option>
+              <option value="High">High</option>
+              <option value="Extra High">Extra High</option>
+              <option value="Ultra">Ultra</option>
+            </select>
+          </div>
+          <div class="settings-group hidden" id="settingsCodexSpeedGroup">
+            <label>Codex Speed</label>
+            <select id="settingsCodexSpeed">
+              <option value="Standard">Standard</option>
+              <option value="Fast">Fast — 1.5x speed, more usage</option>
             </select>
           </div>
           <div class="settings-group">

@@ -11,17 +11,26 @@ The server acts as the backend broker and hosts the web chat console.
 ### Prerequisites
 - **Python 3.10+**
 - **Node.js** (for tunnel sharing)
+- **Antigravity (`agy`) CLI** for the existing Gemini/Claude/GPT-OSS models
+- **Codex CLI** for the Codex model family (`5.6 Sol`, `5.6 Terra`, `5.6 Luna`, `5.5`, `5.4`, and `5.4 Mini`)
 
 ### Installation
 1. Install the required Python packages:
    ```bash
    pip install fastapi uvicorn pydantic
    ```
-2. Start the server:
+2. To use Codex models, install and authenticate the Codex CLI:
+   ```bash
+   npm install -g @openai/codex
+   codex login
+   ```
+   If the server cannot find the runnable CLI (for example, when a Windows app
+   alias shadows it), set `CODEX_CLI_PATH` to the full executable path.
+3. Start the server:
    ```bash
    python main.py
    ```
-   *Note: The server automatically launches `npx localtunnel` to make the connection secure and accessible from your mobile phone.*
+   *Note: The server automatically launches a Cloudflare Quick Tunnel to make the connection accessible from your mobile phone.*
 
 ---
 
@@ -60,6 +69,17 @@ The mobile app is built with React Native and Expo.
    - Open the app on your mobile device.
    - Enter the 6-digit pairing PIN.
 4. **Start Chatting**: Once successfully paired, you can now interact with your local AGY workspace directly from your mobile phone!
+
+### Codex options
+
+Selecting a Codex model exposes two additional controls:
+
+- **Effort**: Light, Medium, High, Extra High, and (for 5.6 Sol/Terra) Ultra.
+- **Speed**: Standard or Fast. Fast uses more allowance and is unavailable for 5.4 Mini.
+
+`Sandbox` maps to Codex workspace-write isolation. `Real` bypasses Codex
+approvals and sandboxing, so only use it with a trusted paired device and
+workspace.
 
 ---
 
