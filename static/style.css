@@ -462,6 +462,7 @@ body {
 /* Main Content Area */
 .main-content {
   flex-grow: 1;
+  min-width: 0;
   height: 100%;
   background-color: var(--bg-secondary);
   display: flex;
@@ -2223,7 +2224,7 @@ body {
    Responsive Design System for Mobile & Desktop (Cross-Platform UX/UI)
    ========================================================================== */
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   /* Sidebar Drawer on Mobile */
   .sidebar {
     position: fixed;

@@ -27,7 +27,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function autoCloseMobileSidebar() {
-    if (window.innerWidth <= 768) {
+    if (window.innerWidth <= 1024) {
       closeMobileSidebar();
     }
   }
@@ -38,7 +38,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (sidebarBackdrop) sidebarBackdrop.addEventListener("click", closeMobileSidebar);
 
   window.addEventListener("resize", () => {
-    if (window.innerWidth > 768) {
+    if (window.innerWidth > 1024) {
       closeMobileSidebar();
     }
   });
@@ -1809,9 +1809,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const googleAuthModal = document.getElementById("googleAuthModal");
   const closeGoogleAuthModalBtn = document.getElementById("closeGoogleAuthModalBtn");
-  const googleQuickAuthForm = document.getElementById("googleQuickAuthForm");
-  const demoAuthName = document.getElementById("demoAuthName");
-  const demoAuthEmail = document.getElementById("demoAuthEmail");
 
   const settingsGoogleClientId = document.getElementById("settingsGoogleClientId");
   const settingsAdminEmail = document.getElementById("settingsAdminEmail");
@@ -1839,14 +1836,12 @@ document.addEventListener("DOMContentLoaded", () => {
           settingsAdminEmail.value = adminEmail;
         }
 
-        // Restore cached local user or server session user
-        const localSaved = localStorage.getItem("kookai_google_user");
-        let sessionUser = data.user;
-        if (!sessionUser && localSaved) {
-          try { sessionUser = JSON.parse(localSaved); } catch (e) {}
-        }
+        // Trust only the server-side session created from a verified Google token.
+        // Remove identities cached by the retired Quick Auth flow.
+        localStorage.removeItem("kookai_google_user");
+        const sessionUser = data.user;
         if (sessionUser) {
-          setGoogleUser(sessionUser, false);
+          setGoogleUser(sessionUser);
         } else {
           updateGoogleAuthUI();
         }
@@ -1906,26 +1901,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function setGoogleUser(userObj, syncServer = true) {
+  function setGoogleUser(userObj) {
     currentUser = userObj;
     if (userObj) {
       localStorage.setItem("kookai_google_user", JSON.stringify(userObj));
-      if (syncServer) {
-        fetch("/api/auth/google/verify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: userObj.email, name: userObj.name, picture: userObj.picture })
-        })
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.user) {
-            currentUser = data.user;
-            localStorage.setItem("kookai_google_user", JSON.stringify(data.user));
-            updateGoogleAuthUI();
-          }
-        })
-        .catch(e => console.warn("Failed to sync auth session:", e));
-      }
     } else {
       localStorage.removeItem("kookai_google_user");
     }
@@ -2085,30 +2064,6 @@ document.addEventListener("DOMContentLoaded", () => {
     googleAuthModal.addEventListener("click", (e) => {
       if (e.target === googleAuthModal && currentUser) {
         googleAuthModal.classList.add("hidden");
-      }
-    });
-  }
-
-  if (googleQuickAuthForm) {
-    googleQuickAuthForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const name = demoAuthName?.value.trim() || "Google User";
-      const email = demoAuthEmail?.value.trim() || "user@gmail.com";
-      const fakePicture = `https://lh3.googleusercontent.com/a/default-user`;
-      
-      try {
-        const res = await fetch("/api/auth/google/verify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, email, picture: fakePicture })
-        });
-        const data = await res.json();
-        if (res.ok && data.status === "success" && data.user) {
-          setGoogleUser(data.user);
-          if (googleAuthModal) googleAuthModal.classList.add("hidden");
-        }
-      } catch (err) {
-        console.error("Quick auth failed:", err);
       }
     });
   }

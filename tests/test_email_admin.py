@@ -3,6 +3,10 @@ import json
 import os
 import sys
 import unittest
+from unittest.mock import patch
+
+from fastapi import HTTPException
+from pydantic import ValidationError
 
 # Ensure parent directory is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -54,32 +58,64 @@ class TestEmailAdmin(unittest.TestCase):
         self.assertFalse(is_admin_email(""))
         self.assertFalse(is_admin_email(None))
 
-    def test_verify_google_auth_assigns_admin_role(self):
+    def test_verify_google_auth_rejects_manual_identity(self):
+        with self.assertRaises(ValidationError):
+            GoogleAuthVerifyRequest(
+                email="attacker@example.com",
+                name="Attacker"
+            )
+
+    def test_verify_google_auth_rejects_unverified_token(self):
         config = load_google_auth_config()
-        config["admin_email"] = "superuser@domain.com"
+        config["client_id"] = "test-client.apps.googleusercontent.com"
         save_google_auth_config(config)
 
-        # 1. Login as Admin user
-        req_admin = GoogleAuthVerifyRequest(
-            email="superuser@domain.com",
-            name="Super Admin"
-        )
-        res_admin = asyncio.run(verify_google_auth(req_admin))
-        self.assertEqual(res_admin.status_code, 200)
-        data_admin = json.loads(res_admin.body)
-        self.assertTrue(data_admin["user"]["is_admin"])
-        self.assertEqual(data_admin["user"]["role"], "admin")
+        with patch(
+            "main.google_id_token.verify_oauth2_token",
+            side_effect=ValueError("Invalid token"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(
+                    verify_google_auth(
+                        GoogleAuthVerifyRequest(credential="forged.token.value")
+                    )
+                )
+        self.assertEqual(ctx.exception.status_code, 401)
 
-        # 2. Login as Standard user
-        req_user = GoogleAuthVerifyRequest(
-            email="standard@domain.com",
-            name="Standard User"
-        )
-        res_user = asyncio.run(verify_google_auth(req_user))
-        self.assertEqual(res_user.status_code, 200)
-        data_user = json.loads(res_user.body)
-        self.assertFalse(data_user["user"]["is_admin"])
-        self.assertEqual(data_user["user"]["role"], "user")
+    def test_verify_google_auth_accepts_verified_google_token(self):
+        config = load_google_auth_config()
+        config["client_id"] = "test-client.apps.googleusercontent.com"
+        config["admin_email"] = "owner@example.com"
+        save_google_auth_config(config)
+        verified_claims = {
+            "iss": "https://accounts.google.com",
+            "aud": config["client_id"],
+            "sub": "google-subject-123",
+            "email": "owner@example.com",
+            "email_verified": True,
+            "name": "Owner",
+            "picture": "",
+        }
+
+        with (
+            patch(
+                "main.google_id_token.verify_oauth2_token",
+                return_value=verified_claims,
+            ) as verify_token,
+            patch("main.save_google_auth_session") as save_session,
+        ):
+            response = asyncio.run(
+                verify_google_auth(
+                    GoogleAuthVerifyRequest(credential="valid-google-id-token")
+                )
+            )
+
+        self.assertEqual(response.status_code, 200)
+        user = json.loads(response.body)["user"]
+        self.assertTrue(user["is_admin"])
+        verify_token.assert_called_once()
+        self.assertEqual(verify_token.call_args.args[2], config["client_id"])
+        save_session.assert_called_once()
 
     def test_admin_email_endpoints(self):
         # GET /api/admin/email

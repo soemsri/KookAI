@@ -1,0 +1,4 @@
+fastapi>=0.139,<1
+uvicorn>=0.51,<1
+pydantic>=2.13,<3
+google-auth[requests]>=2.40,<3

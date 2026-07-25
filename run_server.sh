@@ -1,6 +1,6 @@
 #!/bin/bash
-# Move to the project directory
-cd "/root/Desktop/KookAI"
+# Always run from the directory containing this script.
+cd -- "$(dirname -- "$0")"
 
 # Print message
 echo "Starting KookAI Workspace Chat Server..."

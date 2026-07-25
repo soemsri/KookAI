@@ -22,7 +22,7 @@ The server acts as the backend broker and hosts the web chat console.
 1. Install the required Python packages:
 
    ```bash
-   pip install fastapi uvicorn pydantic
+   pip install -r requirements.txt
    ```
 
 2. Download and install the Antigravity CLI (`agy`):

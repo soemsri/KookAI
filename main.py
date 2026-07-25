@@ -9,14 +9,14 @@ import uuid
 import queue
 import urllib.parse
 import urllib.request
-import base64
-import ssl
 import datetime
 from collections import deque
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel
+from google.auth.transport import requests as google_auth_requests
+from google.oauth2 import id_token as google_id_token
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from codex_backend import (
     CODEX_CONVERSATION_PREFIX,
@@ -445,10 +445,9 @@ class AdminEmailRequest(BaseModel):
     admin_email: str
 
 class GoogleAuthVerifyRequest(BaseModel):
-    credential: Optional[str] = None
-    email: Optional[str] = None
-    name: Optional[str] = None
-    picture: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
+    credential: str
 
 @app.get("/api/auth/google/config")
 async def get_google_auth_config():
@@ -510,64 +509,44 @@ async def get_admin_status():
 
 @app.post("/api/auth/google/verify")
 async def verify_google_auth(req: GoogleAuthVerifyRequest):
-    user_info = None
-    credential = req.credential.strip() if req.credential else ""
-    
-    if credential:
-        # 1. Try online verification with Google oauth2 tokeninfo endpoint
-        try:
-            url = f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}"
-            req_obj = urllib.request.Request(url, headers={"User-Agent": "KookAI-Server"})
-            context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req_obj, timeout=5, context=context) as res:
-                if res.status == 200:
-                    token_data = json.loads(res.read().decode('utf-8'))
-                    user_info = {
-                        "id": token_data.get("sub"),
-                        "email": token_data.get("email"),
-                        "name": token_data.get("name", token_data.get("email", "Google User")),
-                        "picture": token_data.get("picture", ""),
-                        "email_verified": token_data.get("email_verified", True),
-                        "authenticated_at": int(datetime.datetime.now().timestamp())
-                    }
-        except Exception as e:
-            logging.warning(f"Google online tokeninfo failed, falling back to JWT decode: {e}")
+    credential = req.credential.strip()
+    client_id = load_google_auth_config().get("client_id", "").strip()
+    if not credential:
+        raise HTTPException(status_code=400, detail="Google credential is required")
+    if not client_id:
+        raise HTTPException(status_code=503, detail="Google Sign-In is not configured")
 
-        # 2. Fallback to local JWT parsing
-        if not user_info:
-            try:
-                parts = credential.split('.')
-                if len(parts) == 3:
-                    payload_b64 = parts[1]
-                    rem = len(payload_b64) % 4
-                    if rem > 0:
-                        payload_b64 += '=' * (4 - rem)
-                    payload_bytes = base64.urlsafe_b64decode(payload_b64)
-                    payload = json.loads(payload_bytes.decode('utf-8'))
-                    user_info = {
-                        "id": payload.get("sub", f"google_user_{uuid.uuid4().hex[:8]}"),
-                        "email": payload.get("email", "user@gmail.com"),
-                        "name": payload.get("name", payload.get("given_name", "Google User")),
-                        "picture": payload.get("picture", ""),
-                        "email_verified": payload.get("email_verified", True),
-                        "authenticated_at": int(datetime.datetime.now().timestamp())
-                    }
-            except Exception as jwt_err:
-                logging.error(f"Failed to decode Google JWT token: {jwt_err}")
+    try:
+        token_data = google_id_token.verify_oauth2_token(
+            credential,
+            google_auth_requests.Request(),
+            client_id,
+        )
+    except Exception as e:
+        logging.warning(f"Google ID token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid Google credential")
 
-    # 3. Direct user details payload (e.g., demo/manual sign in or OAuth user object)
-    if not user_info and (req.email or req.name):
-        user_info = {
-            "id": f"google_user_{uuid.uuid4().hex[:8]}",
-            "email": req.email.strip() if req.email else "user@gmail.com",
-            "name": req.name.strip() if req.name else "Google User",
-            "picture": req.picture or "",
-            "email_verified": True,
-            "authenticated_at": int(datetime.datetime.now().timestamp())
-        }
+    now = int(datetime.datetime.now().timestamp())
+    issuer = token_data.get("iss")
+    audience = token_data.get("aud")
+    email_verified = str(token_data.get("email_verified", "")).lower() == "true"
+    if (
+        audience != client_id
+        or issuer not in ("accounts.google.com", "https://accounts.google.com")
+        or not token_data.get("sub")
+        or not token_data.get("email")
+        or not email_verified
+    ):
+        raise HTTPException(status_code=401, detail="Invalid Google credential claims")
 
-    if not user_info:
-        raise HTTPException(status_code=400, detail="Invalid Google credential token or user parameters")
+    user_info = {
+        "id": token_data["sub"],
+        "email": token_data["email"],
+        "name": token_data.get("name", token_data["email"]),
+        "picture": token_data.get("picture", ""),
+        "email_verified": True,
+        "authenticated_at": now
+    }
 
     user_info["is_admin"] = is_admin_email(user_info.get("email"))
     user_info["role"] = "admin" if user_info["is_admin"] else "user"
