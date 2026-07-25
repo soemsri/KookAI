@@ -8,6 +8,9 @@ import json
 import uuid
 import queue
 import urllib.parse
+import urllib.request
+import base64
+import ssl
 import datetime
 from collections import deque
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
@@ -353,6 +356,237 @@ async def pair_device(req: PairRequest):
         "token": token,
         "host_id": get_or_create_host_id()
     })
+
+# --- Google Auth Configuration & Session Management ---
+DEFAULT_ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@gmail.com")
+
+def get_auth_file_path(filename):
+    local_dir = os.path.join(WORKSPACE_DIR, ".data")
+    primary = os.path.join(local_dir, filename)
+    fallback = os.path.join(ANTIGRAVITY_DATA_DIR, filename)
+    return primary, fallback
+
+def load_google_auth_config():
+    default_config = {
+        "client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
+        "admin_email": DEFAULT_ADMIN_EMAIL
+    }
+    primary, fallback = get_auth_file_path("google_auth_config.json")
+    for path in [primary, fallback]:
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        if not data.get("admin_email"):
+                            data["admin_email"] = default_config["admin_email"]
+                        if not data.get("client_id"):
+                            data["client_id"] = default_config["client_id"]
+                        return data
+            except Exception as e:
+                logging.error(f"Failed to load google auth config from {path}: {e}")
+    return default_config
+
+def is_admin_email(email: Optional[str]) -> bool:
+    if not email:
+        return False
+    config = load_google_auth_config()
+    admin_emails_str = config.get("admin_email", DEFAULT_ADMIN_EMAIL)
+    if not admin_emails_str:
+        return False
+    allowed_emails = [e.strip().lower() for e in admin_emails_str.split(",") if e.strip()]
+    return email.strip().lower() in allowed_emails
+
+def save_google_auth_config(config):
+    primary, fallback = get_auth_file_path("google_auth_config.json")
+    for path in [primary, fallback]:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(config, f, indent=2)
+            return
+        except Exception as e:
+            logging.warning(f"Failed to save google auth config to {path}: {e}")
+
+def load_google_auth_session():
+    primary, fallback = get_auth_file_path("google_auth_session.json")
+    for path in [primary, fallback]:
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+                    if data and isinstance(data, dict) and data.get("id"):
+                        data["is_admin"] = is_admin_email(data.get("email"))
+                        data["role"] = "admin" if data["is_admin"] else "user"
+                        return data
+            except Exception as e:
+                pass
+    return None
+
+def save_google_auth_session(user_info):
+    primary, fallback = get_auth_file_path("google_auth_session.json")
+    for path in [primary, fallback]:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                if user_info is None:
+                    f.write("{}")
+                else:
+                    json.dump(user_info, f, indent=2)
+            return
+        except Exception as e:
+            logging.warning(f"Failed to save google auth session to {path}: {e}")
+
+class GoogleAuthConfigRequest(BaseModel):
+    client_id: Optional[str] = None
+    admin_email: Optional[str] = None
+
+class AdminEmailRequest(BaseModel):
+    admin_email: str
+
+class GoogleAuthVerifyRequest(BaseModel):
+    credential: Optional[str] = None
+    email: Optional[str] = None
+    name: Optional[str] = None
+    picture: Optional[str] = None
+
+@app.get("/api/auth/google/config")
+async def get_google_auth_config():
+    config = load_google_auth_config()
+    session = load_google_auth_session()
+    return JSONResponse(content={
+        "client_id": config.get("client_id", ""),
+        "admin_email": config.get("admin_email", DEFAULT_ADMIN_EMAIL),
+        "user": session
+    })
+
+@app.post("/api/auth/google/config")
+async def update_google_auth_config(req: GoogleAuthConfigRequest):
+    config = load_google_auth_config()
+    if req.client_id is not None:
+        config["client_id"] = req.client_id.strip()
+    if req.admin_email is not None:
+        config["admin_email"] = req.admin_email.strip()
+    save_google_auth_config(config)
+    session = load_google_auth_session()
+    return JSONResponse(content={
+        "status": "success",
+        "client_id": config.get("client_id", ""),
+        "admin_email": config.get("admin_email", ""),
+        "user": session
+    })
+
+@app.get("/api/admin/email")
+async def get_admin_email():
+    config = load_google_auth_config()
+    return JSONResponse(content={
+        "admin_email": config.get("admin_email", DEFAULT_ADMIN_EMAIL)
+    })
+
+@app.post("/api/admin/email")
+async def update_admin_email(req: AdminEmailRequest):
+    config = load_google_auth_config()
+    config["admin_email"] = req.admin_email.strip()
+    save_google_auth_config(config)
+    session = load_google_auth_session()
+    return JSONResponse(content={
+        "status": "success",
+        "admin_email": config["admin_email"],
+        "user": session
+    })
+
+@app.get("/api/admin/status")
+async def get_admin_status():
+    config = load_google_auth_config()
+    session = load_google_auth_session()
+    admin_email = config.get("admin_email", DEFAULT_ADMIN_EMAIL)
+    is_admin = session.get("is_admin", False) if session else False
+    return JSONResponse(content={
+        "admin_email": admin_email,
+        "is_admin": is_admin,
+        "role": "admin" if is_admin else "user",
+        "user": session
+    })
+
+@app.post("/api/auth/google/verify")
+async def verify_google_auth(req: GoogleAuthVerifyRequest):
+    user_info = None
+    credential = req.credential.strip() if req.credential else ""
+    
+    if credential:
+        # 1. Try online verification with Google oauth2 tokeninfo endpoint
+        try:
+            url = f"https://oauth2.googleapis.com/tokeninfo?id_token={credential}"
+            req_obj = urllib.request.Request(url, headers={"User-Agent": "KookAI-Server"})
+            context = ssl._create_unverified_context()
+            with urllib.request.urlopen(req_obj, timeout=5, context=context) as res:
+                if res.status == 200:
+                    token_data = json.loads(res.read().decode('utf-8'))
+                    user_info = {
+                        "id": token_data.get("sub"),
+                        "email": token_data.get("email"),
+                        "name": token_data.get("name", token_data.get("email", "Google User")),
+                        "picture": token_data.get("picture", ""),
+                        "email_verified": token_data.get("email_verified", True),
+                        "authenticated_at": int(datetime.datetime.now().timestamp())
+                    }
+        except Exception as e:
+            logging.warning(f"Google online tokeninfo failed, falling back to JWT decode: {e}")
+
+        # 2. Fallback to local JWT parsing
+        if not user_info:
+            try:
+                parts = credential.split('.')
+                if len(parts) == 3:
+                    payload_b64 = parts[1]
+                    rem = len(payload_b64) % 4
+                    if rem > 0:
+                        payload_b64 += '=' * (4 - rem)
+                    payload_bytes = base64.urlsafe_b64decode(payload_b64)
+                    payload = json.loads(payload_bytes.decode('utf-8'))
+                    user_info = {
+                        "id": payload.get("sub", f"google_user_{uuid.uuid4().hex[:8]}"),
+                        "email": payload.get("email", "user@gmail.com"),
+                        "name": payload.get("name", payload.get("given_name", "Google User")),
+                        "picture": payload.get("picture", ""),
+                        "email_verified": payload.get("email_verified", True),
+                        "authenticated_at": int(datetime.datetime.now().timestamp())
+                    }
+            except Exception as jwt_err:
+                logging.error(f"Failed to decode Google JWT token: {jwt_err}")
+
+    # 3. Direct user details payload (e.g., demo/manual sign in or OAuth user object)
+    if not user_info and (req.email or req.name):
+        user_info = {
+            "id": f"google_user_{uuid.uuid4().hex[:8]}",
+            "email": req.email.strip() if req.email else "user@gmail.com",
+            "name": req.name.strip() if req.name else "Google User",
+            "picture": req.picture or "",
+            "email_verified": True,
+            "authenticated_at": int(datetime.datetime.now().timestamp())
+        }
+
+    if not user_info:
+        raise HTTPException(status_code=400, detail="Invalid Google credential token or user parameters")
+
+    user_info["is_admin"] = is_admin_email(user_info.get("email"))
+    user_info["role"] = "admin" if user_info["is_admin"] else "user"
+
+    save_google_auth_session(user_info)
+    return JSONResponse(content={
+        "status": "success",
+        "user": user_info
+    })
+
+@app.get("/api/auth/me")
+async def get_current_user():
+    session = load_google_auth_session()
+    return JSONResponse(content={"user": session})
+
+@app.post("/api/auth/logout")
+async def logout_user():
+    save_google_auth_session(None)
+    return JSONResponse(content={"status": "success"})
 
 class ChatRequest(BaseModel):
     message: str

@@ -23,3 +23,5 @@ Thumbs.db
 # Project-specific temporary/test files
 test_output.txt
 logs/
+.data/
+server.log

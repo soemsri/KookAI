@@ -267,6 +267,7 @@ document.addEventListener("DOMContentLoaded", () => {
     startNewConversation(); // Generate initial UUID
     loadProjectsAndConversations();
     fetchWorkspaceFiles();
+    initGoogleAuth();
   }
 
   // --- Fetch Data ---
@@ -1401,6 +1402,29 @@ document.addEventListener("DOMContentLoaded", () => {
       recognition.lang = settingsSpeechLang.value;
     }
 
+    if (settingsGoogleClientId || settingsAdminEmail) {
+      const newClientId = settingsGoogleClientId ? settingsGoogleClientId.value.trim() : googleClientId;
+      const newAdminEmail = settingsAdminEmail ? settingsAdminEmail.value.trim() : adminEmail;
+      
+      if (newClientId !== googleClientId || newAdminEmail !== adminEmail) {
+        googleClientId = newClientId;
+        adminEmail = newAdminEmail;
+        fetch("/api/auth/google/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ client_id: newClientId, admin_email: newAdminEmail })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.user) {
+            currentUser = data.user;
+            updateGoogleAuthUI();
+          }
+          setupGoogleIdentitySDK();
+        });
+      }
+    }
+
     currentThemeMode = settingsThemeMode.querySelector(".theme-segment.active")?.getAttribute("data-theme-mode") || "system";
     applyThemeMode();
     saveAppPreferences();
@@ -1707,10 +1731,334 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  if (pairingModal) {
-    pairingModal.addEventListener("click", (e) => {
-      if (e.target === pairingModal) {
-        pairingModal.classList.add("hidden");
+  // Helper for escaping HTML strings safely
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  // --- Google Auth State & Logic ---
+  let currentUser = null;
+  let googleClientId = "";
+
+  const sidebarGoogleLoginBtn = document.getElementById("sidebarGoogleLoginBtn");
+  const authLoggedOut = document.getElementById("authLoggedOut");
+  const authLoggedIn = document.getElementById("authLoggedIn");
+  const userProfileBadge = document.getElementById("userProfileBadge");
+  const userMenuDropdown = document.getElementById("userMenuDropdown");
+  const userAvatar = document.getElementById("userAvatar");
+  const userName = document.getElementById("userName");
+  const userEmail = document.getElementById("userEmail");
+  const openAuthSettingsBtn = document.getElementById("openAuthSettingsBtn");
+  const sidebarGoogleLogoutBtn = document.getElementById("sidebarGoogleLogoutBtn");
+
+  const googleAuthModal = document.getElementById("googleAuthModal");
+  const closeGoogleAuthModalBtn = document.getElementById("closeGoogleAuthModalBtn");
+  const googleQuickAuthForm = document.getElementById("googleQuickAuthForm");
+  const demoAuthName = document.getElementById("demoAuthName");
+  const demoAuthEmail = document.getElementById("demoAuthEmail");
+
+  const settingsGoogleClientId = document.getElementById("settingsGoogleClientId");
+  const settingsAdminEmail = document.getElementById("settingsAdminEmail");
+  const userRoleBadge = document.getElementById("userRoleBadge");
+  const dropdownAdminBadge = document.getElementById("dropdownAdminBadge");
+  const authStatusCard = document.getElementById("authStatusCard");
+  const authStatusContent = document.getElementById("authStatusContent");
+  const modalGoogleLoginBtn = document.getElementById("modalGoogleLoginBtn");
+  const modalGoogleLogoutBtn = document.getElementById("modalGoogleLogoutBtn");
+
+  let adminEmail = "admin@gmail.com";
+
+  // Fetch Google Auth config & session on startup
+  async function initGoogleAuth() {
+    try {
+      const res = await fetch("/api/auth/google/config");
+      if (res.ok) {
+        const data = await res.json();
+        googleClientId = data.client_id || "";
+        adminEmail = data.admin_email || "admin@gmail.com";
+        if (settingsGoogleClientId) {
+          settingsGoogleClientId.value = googleClientId;
+        }
+        if (settingsAdminEmail) {
+          settingsAdminEmail.value = adminEmail;
+        }
+
+        // Restore cached local user or server session user
+        const localSaved = localStorage.getItem("kookai_google_user");
+        let sessionUser = data.user;
+        if (!sessionUser && localSaved) {
+          try { sessionUser = JSON.parse(localSaved); } catch (e) {}
+        }
+        if (sessionUser) {
+          setGoogleUser(sessionUser, false);
+        } else {
+          updateGoogleAuthUI();
+        }
+
+        // Initialize official Google Identity Services SDK if Client ID is configured
+        setupGoogleIdentitySDK();
+      }
+    } catch (err) {
+      console.warn("Failed to initialize Google Auth:", err);
+      updateGoogleAuthUI();
+    }
+  }
+
+  function setupGoogleIdentitySDK() {
+    if (window.google && window.google.accounts && window.google.accounts.id && googleClientId) {
+      try {
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: handleGoogleCredentialResponse,
+          auto_select: false
+        });
+
+        const gsiContainer = document.getElementById("gsiButtonContainer");
+        if (gsiContainer) {
+          gsiContainer.innerHTML = "";
+          window.google.accounts.id.renderButton(gsiContainer, {
+            theme: (document.documentElement.dataset.theme === "dark" || currentThemeMode === "dark") ? "filled_blue" : "outline",
+            size: "large",
+            shape: "pill",
+            width: 280
+          });
+        }
+      } catch (e) {
+        console.warn("GSI initialization error:", e);
+      }
+    }
+  }
+
+  async function handleGoogleCredentialResponse(response) {
+    if (!response || !response.credential) return;
+    try {
+      const res = await fetch("/api/auth/google/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential: response.credential })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "success" && data.user) {
+        setGoogleUser(data.user);
+        if (googleAuthModal) googleAuthModal.classList.add("hidden");
+      } else {
+        alert("Google Sign-In failed: " + (data.detail || "Invalid token"));
+      }
+    } catch (err) {
+      console.error("Error verifying Google credential:", err);
+      alert("Failed to connect to authentication server.");
+    }
+  }
+
+  function setGoogleUser(userObj, syncServer = true) {
+    currentUser = userObj;
+    if (userObj) {
+      localStorage.setItem("kookai_google_user", JSON.stringify(userObj));
+      if (syncServer) {
+        fetch("/api/auth/google/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: userObj.email, name: userObj.name, picture: userObj.picture })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.user) {
+            currentUser = data.user;
+            localStorage.setItem("kookai_google_user", JSON.stringify(data.user));
+            updateGoogleAuthUI();
+          }
+        })
+        .catch(e => console.warn("Failed to sync auth session:", e));
+      }
+    } else {
+      localStorage.removeItem("kookai_google_user");
+    }
+    updateGoogleAuthUI();
+  }
+
+  function updateGoogleAuthUI() {
+    if (currentUser) {
+      if (authLoggedOut) authLoggedOut.classList.add("hidden");
+      if (authLoggedIn) authLoggedIn.classList.remove("hidden");
+
+      if (userName) userName.textContent = currentUser.name || "Google User";
+      if (userEmail) userEmail.textContent = currentUser.email || "";
+
+      const isAdmin = !!(currentUser && (currentUser.is_admin || currentUser.role === "admin"));
+      if (userRoleBadge) {
+        if (isAdmin) userRoleBadge.classList.remove("hidden");
+        else userRoleBadge.classList.add("hidden");
+      }
+      if (dropdownAdminBadge) {
+        if (isAdmin) dropdownAdminBadge.classList.remove("hidden");
+        else dropdownAdminBadge.classList.add("hidden");
+      }
+
+      if (userAvatar) {
+        if (currentUser.picture) {
+          userAvatar.src = currentUser.picture;
+          userAvatar.style.display = "block";
+        } else {
+          const initial = (currentUser.name || currentUser.email || "G").charAt(0).toUpperCase();
+          const avatarBg = isAdmin ? "%23F59E0B" : "%234285F4";
+          const svgAvatar = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" rx="16" fill="${avatarBg}"/><text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" fill="white" font-family="sans-serif" font-weight="bold" font-size="14">${initial}</text></svg>`;
+          userAvatar.src = svgAvatar;
+          userAvatar.style.display = "block";
+        }
+      }
+
+      if (modalGoogleLoginBtn) modalGoogleLoginBtn.classList.add("hidden");
+      if (modalGoogleLogoutBtn) modalGoogleLogoutBtn.classList.remove("hidden");
+
+      if (authStatusContent) {
+        const roleBadgeHtml = isAdmin
+          ? `<span class="admin-pill" style="margin-top: 4px;">👑 Administrator</span>`
+          : `<span class="badge-verified" style="margin-top: 4px;">✓ Standard User</span>`;
+
+        authStatusContent.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <img src="${userAvatar?.src || ''}" style="width: 40px; height: 40px; border-radius: 50%; border: 2px solid ${isAdmin ? '#f59e0b' : 'var(--accent-color)'};" />
+            <div>
+              <div style="font-weight: 600; font-size: 14px; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
+                ${escapeHtml(currentUser.name || 'Google User')}
+                ${isAdmin ? '<span style="font-size: 11px; color: #f59e0b;">(Admin)</span>' : ''}
+              </div>
+              <div style="font-size: 12px; color: var(--text-muted);">${escapeHtml(currentUser.email || '')}</div>
+              <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
+                ${roleBadgeHtml}
+                <span style="font-size: 11px; color: var(--text-muted);">Admin Email: <b>${escapeHtml(adminEmail)}</b></span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // Hide auth modal and show close button for future modal opens (e.g. from settings)
+      if (googleAuthModal) googleAuthModal.classList.add("hidden");
+      if (closeGoogleAuthModalBtn) closeGoogleAuthModalBtn.style.display = "block";
+    } else {
+      if (authLoggedOut) authLoggedOut.classList.remove("hidden");
+      if (authLoggedIn) authLoggedIn.classList.add("hidden");
+      if (userMenuDropdown) userMenuDropdown.classList.add("hidden");
+
+      if (modalGoogleLoginBtn) modalGoogleLoginBtn.classList.remove("hidden");
+      if (modalGoogleLogoutBtn) modalGoogleLogoutBtn.classList.add("hidden");
+
+      if (authStatusContent) {
+        authStatusContent.innerHTML = `
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <div style="font-weight: 600; font-size: 13.5px; color: var(--text-primary);">Google Login Required</div>
+              <div style="font-size: 12px; color: var(--text-muted);">Sign in with Google to unlock and access the web workspace.</div>
+            </div>
+            <span style="font-size: 11px; padding: 3px 8px; background: rgba(239, 68, 68, 0.1); color: var(--status-red); border-radius: 12px; font-weight: 500;">Authentication Gate</span>
+          </div>
+        `;
+      }
+
+      // Show mandatory Google Auth login gate overlay on Web frontend
+      setupGoogleIdentitySDK();
+      if (googleAuthModal) googleAuthModal.classList.remove("hidden");
+      if (closeGoogleAuthModalBtn) closeGoogleAuthModalBtn.style.display = "none"; // Hide close button when not logged in
+    }
+  }
+
+  // Open Google Auth Modal
+  function openGoogleAuthModal() {
+    setupGoogleIdentitySDK();
+    if (googleAuthModal) googleAuthModal.classList.remove("hidden");
+    if (closeGoogleAuthModalBtn) closeGoogleAuthModalBtn.style.display = currentUser ? "block" : "none";
+  }
+
+  // Event Listeners for Google Auth
+  if (sidebarGoogleLoginBtn) {
+    sidebarGoogleLoginBtn.addEventListener("click", () => {
+      openGoogleAuthModal();
+    });
+  }
+
+  if (userProfileBadge) {
+    userProfileBadge.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (userMenuDropdown) {
+        userMenuDropdown.classList.toggle("hidden");
+      }
+    });
+  }
+
+  document.addEventListener("click", (e) => {
+    if (userMenuDropdown && !userMenuDropdown.contains(e.target) && !userProfileBadge?.contains(e.target)) {
+      userMenuDropdown.classList.add("hidden");
+    }
+  });
+
+  if (openAuthSettingsBtn) {
+    openAuthSettingsBtn.addEventListener("click", () => {
+      if (userMenuDropdown) userMenuDropdown.classList.add("hidden");
+      if (settingsBtn) settingsBtn.click();
+      const authTab = settingsModal?.querySelector('.settings-tab[data-target="settingsAuth"]');
+      if (authTab) authTab.click();
+    });
+  }
+
+  async function performGoogleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (e) {
+      console.warn("Logout endpoint error:", e);
+    }
+    setGoogleUser(null);
+    if (window.google?.accounts?.id) {
+      try { window.google.accounts.id.disableAutoSelect(); } catch (e) {}
+    }
+  }
+
+  if (sidebarGoogleLogoutBtn) sidebarGoogleLogoutBtn.addEventListener("click", performGoogleLogout);
+  if (modalGoogleLogoutBtn) modalGoogleLogoutBtn.addEventListener("click", performGoogleLogout);
+  if (modalGoogleLoginBtn) modalGoogleLoginBtn.addEventListener("click", openGoogleAuthModal);
+
+  if (closeGoogleAuthModalBtn) {
+    closeGoogleAuthModalBtn.addEventListener("click", () => {
+      if (currentUser && googleAuthModal) {
+        googleAuthModal.classList.add("hidden");
+      }
+    });
+  }
+
+  if (googleAuthModal) {
+    googleAuthModal.addEventListener("click", (e) => {
+      if (e.target === googleAuthModal && currentUser) {
+        googleAuthModal.classList.add("hidden");
+      }
+    });
+  }
+
+  if (googleQuickAuthForm) {
+    googleQuickAuthForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = demoAuthName?.value.trim() || "Google User";
+      const email = demoAuthEmail?.value.trim() || "user@gmail.com";
+      const fakePicture = `https://lh3.googleusercontent.com/a/default-user`;
+      
+      try {
+        const res = await fetch("/api/auth/google/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, email, picture: fakePicture })
+        });
+        const data = await res.json();
+        if (res.ok && data.status === "success" && data.user) {
+          setGoogleUser(data.user);
+          if (googleAuthModal) googleAuthModal.classList.add("hidden");
+        }
+      } catch (err) {
+        console.error("Quick auth failed:", err);
       }
     });
   }
