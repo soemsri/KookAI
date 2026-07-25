@@ -243,7 +243,8 @@ const DEFAULT_USAGE_LIMIT_DATA = {
   gptWeeklyLimit: 100000000,
   gptHourlyUsed: 0,
   gptHourlyLimit: 10000000,
-  codexUsageNote: "Codex GPT models use the ChatGPT/Codex GPT usage budget.",
+  codexRateLimits: null,
+  codexUsageNote: "Codex GPT models use your ChatGPT/Codex account rate limit.",
 };
 
 const getSpeechRecognitionModule = () => {
@@ -1998,6 +1999,14 @@ allowQueue: false,
 
   const getActiveUsagePercentage = () => {
     if (!usageLimitData) return 0;
+    if (isCodexModel(selectedModel)) {
+      const primary = usageLimitData.codexRateLimits?.primary;
+      if (primary) {
+        return usageMode === 'usage'
+          ? Number(primary.usedPercent ?? 0)
+          : Number(primary.remainingPercent ?? Math.max(0, 100 - (primary.usedPercent ?? 0)));
+      }
+    }
     const bucket = getUsageBucketForModel(selectedModel);
     const activeHourlyPercent = Number(usageLimitData[`${bucket.key}HourlyPercent`] ?? 0);
     return usageMode === 'usage' ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent);
@@ -2063,6 +2072,54 @@ allowQueue: false,
             {usageMode === 'usage'
               ? `Used ${used.toLocaleString()} tokens (${usedPercent.toFixed(1)}%)`
               : `${remainingTokens.toLocaleString()} tokens (${Math.max(0, 100 - usedPercent).toFixed(1)}%) remaining`
+            }
+          </Text>
+        </View>
+        {renderCircularChart(displayPercent, theme.statusGreen)}
+      </View>
+    );
+  };
+
+  const formatCodexResetDate = (timestampSeconds?: number | null) => {
+    if (!timestampSeconds) return '';
+    try {
+      return new Date(timestampSeconds * 1000).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    } catch {
+      return '';
+    }
+  };
+
+  const formatCodexWindowLabel = (windowDurationMins?: number | null) => {
+    if (windowDurationMins === 10080) return 'Weekly Limit';
+    if (windowDurationMins === 300) return 'Five Hour Limit';
+    if (windowDurationMins && windowDurationMins >= 60) {
+      const hours = windowDurationMins / 60;
+      return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} Hour Limit`;
+    }
+    return 'Usage Limit';
+  };
+
+  const renderCodexRateLimitRow = (windowData: any, fallbackLabel: string) => {
+    if (!windowData) return null;
+    const usedPercent = Number(windowData.usedPercent ?? 0);
+    const remainingPercent = Number(windowData.remainingPercent ?? Math.max(0, 100 - usedPercent));
+    const displayPercent = usageMode === 'usage' ? usedPercent : remainingPercent;
+    const resetDate = formatCodexResetDate(windowData.resetsAt);
+
+    return (
+      <View style={styles.usageRow}>
+        <View style={styles.usageRowLabel}>
+          <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>
+            {formatCodexWindowLabel(windowData.windowDurationMins) || fallbackLabel}
+          </Text>
+          <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
+            {usageMode === 'usage'
+              ? `Used ${usedPercent.toFixed(0)}% of your Codex account limit${resetDate ? `; resets ${resetDate}` : ''}`
+              : `${remainingPercent.toFixed(0)}% remaining${resetDate ? `; resets ${resetDate}` : ''}`
             }
           </Text>
         </View>
@@ -3197,8 +3254,22 @@ allowQueue: false,
                       {usageLimitData.codexUsageNote || getUsageBucketForModel(selectedModel).note}
                     </Text>
                   ) : null}
-                  {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Weekly', 'Weekly Limit')}
-                  {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Hourly', 'Five Hour Limit')}
+                  {isCodexModel(selectedModel) && usageLimitData.codexRateLimits ? (
+                    <>
+                      {renderCodexRateLimitRow(usageLimitData.codexRateLimits.primary, 'Weekly Limit')}
+                      {renderCodexRateLimitRow(usageLimitData.codexRateLimits.secondary, 'Five Hour Limit')}
+                      {typeof usageLimitData.codexRateLimits.availableResets === 'number' ? (
+                        <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textMuted }]}>
+                          {usageLimitData.codexRateLimits.availableResets} available resets
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Weekly', 'Weekly Limit')}
+                      {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Hourly', 'Five Hour Limit')}
+                    </>
+                  )}
                 </View>
               </ScrollView>
               {(loadingUsage || usageLimitError) && (

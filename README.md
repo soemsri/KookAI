@@ -1,4 +1,4 @@
-# AGY Workspace Chat Client
+# Kookai AI agent on mobile 
 
 A companion system that connects your mobile device directly to your local Antigravity (AGY) workspace, allowing you to chat and interact with the workspace on the go.
 

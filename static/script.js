@@ -1339,7 +1339,8 @@ document.addEventListener("DOMContentLoaded", () => {
     gptWeeklyLimit: 100000000,
     gptHourlyUsed: 0,
     gptHourlyLimit: 10000000,
-    codexUsageNote: "Codex GPT models use the ChatGPT/Codex GPT usage budget."
+    codexRateLimits: null,
+    codexUsageNote: "Codex GPT models use your ChatGPT/Codex account rate limit."
   };
 
   async function fetchUsageLimits() {
@@ -1415,12 +1416,38 @@ document.addEventListener("DOMContentLoaded", () => {
     };
   }
 
+  function formatCodexResetDate(timestampSeconds) {
+    if (!timestampSeconds) return "";
+    try {
+      return new Date(timestampSeconds * 1000).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+      });
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function formatCodexWindowLabel(windowDurationMins) {
+    if (windowDurationMins === 10080) return "Weekly Limit";
+    if (windowDurationMins === 300) return "Five Hour Limit";
+    if (windowDurationMins && windowDurationMins >= 60) {
+      const hours = windowDurationMins / 60;
+      return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} Hour Limit`;
+    }
+    return "Usage Limit";
+  }
+
   function updateUsageDataDisplay(mode) {
     const isUsage = (mode === "usage");
     const activeBucket = getUsageBucketForCurrentModel();
 
     // Update main button chart based on selected model
-    const activeHourlyPercent = Number(usageData[`${activeBucket.key}HourlyPercent`] || 0);
+    const codexPrimary = isCodexModel(currentModel) ? usageData.codexRateLimits?.primary : null;
+    const activeHourlyPercent = codexPrimary
+      ? Number(codexPrimary.usedPercent || 0)
+      : Number(usageData[`${activeBucket.key}HourlyPercent`] || 0);
     const mainVal = isUsage ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent);
 
     const mainCircle = document.getElementById("mainUsageBtnChartCircle");
@@ -1474,6 +1501,44 @@ document.addEventListener("DOMContentLoaded", () => {
       secondaryNote.textContent = note;
       secondaryNote.classList.toggle("hidden", !note);
     }
+
+    if (isCodexModel(currentModel) && usageData.codexRateLimits) {
+      const weeklyRow = document.getElementById("secondaryWeeklyRow");
+      const hourlyRow = document.getElementById("secondaryHourlyRow");
+      const renderCodexWindow = (windowData, elementPrefix, fallbackLabel) => {
+        if (!windowData) return false;
+        const usedPercent = Number(windowData.usedPercent || 0);
+        const remainingPercent = Number(windowData.remainingPercent ?? Math.max(0, 100 - usedPercent));
+        const val = isUsage ? usedPercent : remainingPercent;
+        const resetDate = formatCodexResetDate(windowData.resetsAt);
+        const percentEl = document.getElementById(`${elementPrefix}Percent`);
+        const chartEl = document.getElementById(`${elementPrefix}Chart`);
+        const descEl = document.getElementById(`${elementPrefix}Desc`);
+        const rowEl = document.getElementById(elementPrefix === "claudeWeekly" ? "secondaryWeeklyRow" : "secondaryHourlyRow");
+        const labelEl = rowEl?.querySelector(".usage-label");
+        if (rowEl) rowEl.classList.remove("hidden");
+        if (labelEl) labelEl.textContent = formatCodexWindowLabel(windowData.windowDurationMins) || fallbackLabel;
+        if (percentEl) percentEl.textContent = `${val.toFixed(0)}%`;
+        if (chartEl) chartEl.setAttribute("stroke-dasharray", `${val}, 100`);
+        if (descEl) {
+          descEl.textContent = isUsage
+            ? `Used ${usedPercent.toFixed(0)}% of your Codex account limit${resetDate ? `; resets ${resetDate}` : ""}.`
+            : `${remainingPercent.toFixed(0)}% remaining${resetDate ? `; resets ${resetDate}` : ""}.`;
+        }
+        return true;
+      };
+      renderCodexWindow(usageData.codexRateLimits.primary, "claudeWeekly", "Weekly Limit");
+      const hasSecondary = renderCodexWindow(usageData.codexRateLimits.secondary, "claudeHourly", "Five Hour Limit");
+      if (weeklyRow) weeklyRow.classList.remove("hidden");
+      if (hourlyRow) hourlyRow.classList.toggle("hidden", !hasSecondary);
+      if (secondaryNote && typeof usageData.codexRateLimits.availableResets === "number") {
+        secondaryNote.textContent = `${secondaryNote.textContent} ${usageData.codexRateLimits.availableResets} available resets.`;
+      }
+      return;
+    }
+
+    document.getElementById("secondaryWeeklyRow")?.classList.remove("hidden");
+    document.getElementById("secondaryHourlyRow")?.classList.remove("hidden");
     updateSection(`${activeBucket.key}Weekly`, "weekly", "claudeWeekly");
     updateSection(`${activeBucket.key}Hourly`, "5-hour", "claudeHourly");
   }

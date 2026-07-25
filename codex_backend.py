@@ -12,6 +12,9 @@ import shutil
 import subprocess
 import glob
 import tomllib
+import time
+import threading
+import queue
 from functools import lru_cache
 from typing import Any, Optional
 
@@ -358,3 +361,124 @@ def classify_codex_progress_line(source: str, line: str) -> Optional[dict[str, s
                 return {"type": "progress", "message": str(text)[:500]}
 
     return None
+
+
+def _normalize_rate_limit_window(window: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not isinstance(window, dict):
+        return None
+    try:
+        used_percent = int(window.get("usedPercent", 0))
+    except (TypeError, ValueError):
+        used_percent = 0
+    used_percent = max(0, min(100, used_percent))
+    return {
+        "usedPercent": used_percent,
+        "remainingPercent": max(0, 100 - used_percent),
+        "windowDurationMins": window.get("windowDurationMins"),
+        "resetsAt": window.get("resetsAt"),
+    }
+
+
+def summarize_codex_rate_limits(response_result: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Return a sanitized Codex account rate-limit snapshot.
+
+    The app-server response can include opaque reset-credit IDs and descriptions.
+    This summary intentionally keeps only display-safe aggregate fields.
+    """
+    if not isinstance(response_result, dict):
+        return None
+
+    rate_limits = response_result.get("rateLimits")
+    by_limit_id = response_result.get("rateLimitsByLimitId")
+    if isinstance(by_limit_id, dict) and isinstance(by_limit_id.get("codex"), dict):
+        rate_limits = by_limit_id["codex"]
+    if not isinstance(rate_limits, dict):
+        return None
+
+    reset_summary = response_result.get("rateLimitResetCredits") or {}
+    available_resets = reset_summary.get("availableCount")
+    try:
+        available_resets = int(available_resets) if available_resets is not None else None
+    except (TypeError, ValueError):
+        available_resets = None
+
+    return {
+        "available": True,
+        "limitId": rate_limits.get("limitId"),
+        "limitName": rate_limits.get("limitName"),
+        "planType": rate_limits.get("planType"),
+        "primary": _normalize_rate_limit_window(rate_limits.get("primary")),
+        "secondary": _normalize_rate_limit_window(rate_limits.get("secondary")),
+        "availableResets": available_resets,
+    }
+
+
+def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: float = 10) -> Optional[dict[str, Any]]:
+    """Fetch current Codex account rate limits from the local Codex app-server."""
+    executable = codex_path or resolve_codex_executable()
+    messages = [
+        {
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "initialize",
+            "params": {
+                "clientInfo": {"name": "agy-mobile", "version": "1.0.0"},
+                "capabilities": {"experimentalApi": True},
+            },
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": "rate_limits",
+            "method": "account/rateLimits/read",
+            "params": None,
+        },
+    ]
+
+    process = subprocess.Popen(
+        [executable, "app-server", "--listen", "stdio://"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+
+    def read_stream(stream: Any, name: str):
+        for line in iter(stream.readline, ""):
+            output_queue.put((name, line.rstrip("\n")))
+
+    threading.Thread(target=read_stream, args=(process.stdout, "stdout"), daemon=True).start()
+    threading.Thread(target=read_stream, args=(process.stderr, "stderr"), daemon=True).start()
+
+    try:
+        assert process.stdin is not None
+        for message in messages:
+            process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
+        process.stdin.flush()
+
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            try:
+                source, line = output_queue.get(timeout=0.25)
+            except queue.Empty:
+                if process.poll() is not None:
+                    break
+                continue
+            if source != "stdout" or not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("id") == "rate_limits":
+                if event.get("error"):
+                    return None
+                return summarize_codex_rate_limits(event.get("result") or {})
+        return None
+    finally:
+        try:
+            process.terminate()
+        except Exception:
+            pass

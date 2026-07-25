@@ -20,6 +20,7 @@ from codex_backend import (
     build_codex_command,
     classify_codex_progress_line,
     codex_session_id,
+    fetch_codex_rate_limits,
     is_codex_model,
     make_codex_conversation_id,
     normalize_codex_effort,
@@ -1866,8 +1867,26 @@ async def get_usage_limits(request: Request):
         "gptWeeklyLimit": 100000000,
         "gptHourlyUsed": 0,
         "gptHourlyLimit": 10000000,
-        "codexUsageNote": "Codex GPT models use the ChatGPT/Codex GPT budget. This local endpoint reports usage fields available from local tooling."
+        "codexRateLimits": None,
+        "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop."
     }
+
+    try:
+        codex_rate_limits = fetch_codex_rate_limits(timeout_seconds=8)
+        if codex_rate_limits:
+            result_data["codexRateLimits"] = codex_rate_limits
+            primary = codex_rate_limits.get("primary") or {}
+            secondary = codex_rate_limits.get("secondary") or {}
+            if isinstance(primary.get("usedPercent"), int):
+                result_data["gptWeeklyPercent"] = primary["usedPercent"]
+                result_data["gptWeeklyUsed"] = primary["usedPercent"]
+                result_data["gptWeeklyLimit"] = 100
+            if isinstance(secondary.get("usedPercent"), int):
+                result_data["gptHourlyPercent"] = secondary["usedPercent"]
+                result_data["gptHourlyUsed"] = secondary["usedPercent"]
+                result_data["gptHourlyLimit"] = 100
+    except Exception as e:
+        logging.error(f"Failed to fetch Codex account rate limits: {e}")
     
     try:
         res = subprocess.run(
@@ -1952,15 +1971,17 @@ async def get_usage_limits(request: Request):
             result_data["geminiHourlyUsed"] = gemini_hourly
             result_data["claudeWeeklyUsed"] = claude_weekly
             result_data["claudeHourlyUsed"] = claude_hourly
-            result_data["gptWeeklyUsed"] = gpt_weekly
-            result_data["gptHourlyUsed"] = gpt_hourly
+            if not result_data.get("codexRateLimits"):
+                result_data["gptWeeklyUsed"] = gpt_weekly
+                result_data["gptHourlyUsed"] = gpt_hourly
             
             result_data["geminiWeeklyPercent"] = round((gemini_weekly / gw_limit) * 100, 1) if gemini_weekly > 0 else 1.2
             result_data["geminiHourlyPercent"] = round((gemini_hourly / gh_limit) * 100, 1) if gemini_hourly > 0 else 0.5
             result_data["claudeWeeklyPercent"] = round((claude_weekly / cw_limit) * 100, 1) if claude_weekly > 0 else 2.5
             result_data["claudeHourlyPercent"] = round((claude_hourly / ch_limit) * 100, 1) if claude_hourly > 0 else 1.8
-            result_data["gptWeeklyPercent"] = round((gpt_weekly / cw_limit) * 100, 1) if gpt_weekly > 0 else 0.0
-            result_data["gptHourlyPercent"] = round((gpt_hourly / ch_limit) * 100, 1) if gpt_hourly > 0 else 0.0
+            if not result_data.get("codexRateLimits"):
+                result_data["gptWeeklyPercent"] = round((gpt_weekly / cw_limit) * 100, 1) if gpt_weekly > 0 else 0.0
+                result_data["gptHourlyPercent"] = round((gpt_hourly / ch_limit) * 100, 1) if gpt_hourly > 0 else 0.0
             
     except Exception as e:
         logging.error(f"Failed to fetch usage limits from ccusage: {e}")
