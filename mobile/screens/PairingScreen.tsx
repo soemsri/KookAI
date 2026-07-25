@@ -284,7 +284,7 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
               style={[styles.secondaryBtn, { borderColor: theme.borderColor }]} 
               onPress={() => void openNativeScanner()}
             >
-              <Text style={[styles.secondaryBtnText, { color: theme.textSecondary }]}>ðŸ“· Scan QR Code</Text>
+              <Text style={[styles.secondaryBtnText, { color: theme.textSecondary }]}>Scan QR Code</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -395,4 +395,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   }
 });
+
 
