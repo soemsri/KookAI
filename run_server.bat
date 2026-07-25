@@ -1,6 +1,6 @@
 @echo off
-title AGY Workspace Chat Server
-cd /d "d:\Gemini\Project\agy-mobile"
-echo Starting AGY Workspace Chat Server...
+title KookAI Workspace Chat Server
+cd /d "d:\Gemini\Project\KookAI"
+echo Starting KookAI Workspace Chat Server...
 python main.py
 pause

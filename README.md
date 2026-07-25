@@ -1,6 +1,6 @@
 # Kookai AI agent on mobile 
 
-A companion system that connects your mobile device directly to your local Antigravity (AGY) workspace, allowing you to chat and interact with the workspace on the go.
+A companion system that connects your mobile device directly to your local KookAI workspace, allowing you to chat and interact with the workspace on the go.
 
 ---
 
@@ -11,7 +11,7 @@ The server acts as the backend broker and hosts the web chat console.
 ### Prerequisites
 - **Python 3.10+**
 - **Node.js** (for tunnel sharing)
-- **Antigravity (`agy`) CLI** for the existing Gemini/Claude/GPT-OSS models
+- **Antigravity CLI** for the existing Gemini/Claude/GPT-OSS models
 - **Codex CLI** for the Codex model family (`5.6 Sol`, `5.6 Terra`, `5.6 Luna`, `5.5`, `5.4`, and `5.4 Mini`)
 
 ### Installation
@@ -19,14 +19,39 @@ The server acts as the backend broker and hosts the web chat console.
    ```bash
    pip install fastapi uvicorn pydantic
    ```
-2. To use Codex models, install and authenticate the Codex CLI:
+2. Download and install the Antigravity CLI (`agy`) for Gemini/Claude/GPT-OSS models:
+
+   **macOS / Linux**
+   ```bash
+   curl -fsSL https://antigravity.google/cli/install.sh | bash
+   ```
+
+   **Windows PowerShell**
+   ```powershell
+   irm https://antigravity.google/cli/install.ps1 | iex
+   ```
+
+   **Windows CMD**
+   ```cmd
+   curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd
+   ```
+
+   Then authenticate the CLI:
+   ```bash
+   agy login
+   ```
+   After logging in, verify that the CLI is available:
+   ```bash
+   agy --version
+   ```
+3. To use Codex models, install and authenticate the Codex CLI:
    ```bash
    npm install -g @openai/codex
    codex login
    ```
    If the server cannot find the runnable CLI (for example, when a Windows app
    alias shadows it), set `CODEX_CLI_PATH` to the full executable path.
-3. Start the server:
+4. Start the server:
    ```bash
    python main.py
    ```
@@ -68,7 +93,7 @@ The mobile app is built with React Native and Expo.
 3. **Pair Mobile**: 
    - Open the app on your mobile device.
    - Enter the 6-digit pairing PIN.
-4. **Start Chatting**: Once successfully paired, you can now interact with your local AGY workspace directly from your mobile phone!
+4. **Start Chatting**: Once successfully paired, you can now interact with your local KookAI workspace directly from your mobile phone!
 
 ### Codex options
 
