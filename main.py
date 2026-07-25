@@ -358,7 +358,7 @@ async def pair_device(req: PairRequest):
     })
 
 # --- Google Auth Configuration & Session Management ---
-DEFAULT_ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@gmail.com")
+DEFAULT_ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "rangsarn@gmail.com")
 
 def get_auth_file_path(filename):
     local_dir = os.path.join(WORKSPACE_DIR, ".data")

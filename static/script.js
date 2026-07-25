@@ -1772,7 +1772,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const modalGoogleLoginBtn = document.getElementById("modalGoogleLoginBtn");
   const modalGoogleLogoutBtn = document.getElementById("modalGoogleLogoutBtn");
 
-  let adminEmail = "admin@gmail.com";
+  let adminEmail = "rangsarn@gmail.com";
 
   // Fetch Google Auth config & session on startup
   async function initGoogleAuth() {
@@ -1781,7 +1781,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (res.ok) {
         const data = await res.json();
         googleClientId = data.client_id || "";
-        adminEmail = data.admin_email || "admin@gmail.com";
+        adminEmail = data.admin_email || "rangsarn@gmail.com";
         if (settingsGoogleClientId) {
           settingsGoogleClientId.value = googleClientId;
         }
