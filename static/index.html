@@ -235,7 +235,7 @@
 
                    <div class="usage-body">
                      <!-- Gemini section -->
-                     <div class="usage-section">
+                     <div class="usage-section" id="usageGeminiSection">
                         <div class="usage-sec-title">
                           <span>Gemini Models <span class="info-icon" title="Rate limits applied to Gemini models">ⓘ</span></span>
                           <span class="usage-plan-badge">Your Plan: Google AI Ultra</span>
@@ -271,11 +271,12 @@
                      </div>
 
                      <!-- Claude section -->
-                     <div class="usage-section">
+                     <div class="usage-section" id="usageSecondarySection">
                         <div class="usage-sec-title">
-                          <span>Claude and GPT models <span class="info-icon" title="Rate limits applied to Anthropic and OpenAI models">ⓘ</span></span>
-                          <span class="usage-plan-badge secondary">Your Plan: Claude Pro</span>
+                          <span id="secondaryUsageTitle">Claude models <span class="info-icon" title="Rate limits applied to the selected model provider">ⓘ</span></span>
+                          <span class="usage-plan-badge secondary" id="secondaryUsageBadge">Your Plan: Claude Pro</span>
                         </div>
+                        <div class="usage-note hidden" id="secondaryUsageNote"></div>
 
                        <div class="usage-row-item">
                          <div class="usage-row-left">

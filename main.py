@@ -1849,6 +1849,8 @@ async def get_usage_limits(request: Request):
         "geminiHourlyPercent": 0.5,
         "claudeWeeklyPercent": 2.5,
         "claudeHourlyPercent": 1.8,
+        "gptWeeklyPercent": 0.0,
+        "gptHourlyPercent": 0.0,
         
         "geminiWeeklyUsed": 120000,
         "geminiWeeklyLimit": 10000000,
@@ -1858,7 +1860,13 @@ async def get_usage_limits(request: Request):
         "claudeWeeklyUsed": 2500000,
         "claudeWeeklyLimit": 100000000,
         "claudeHourlyUsed": 180000,
-        "claudeHourlyLimit": 10000000
+        "claudeHourlyLimit": 10000000,
+
+        "gptWeeklyUsed": 0,
+        "gptWeeklyLimit": 100000000,
+        "gptHourlyUsed": 0,
+        "gptHourlyLimit": 10000000,
+        "codexUsageNote": "Codex GPT models use the ChatGPT/Codex GPT budget. This local endpoint reports usage fields available from local tooling."
     }
     
     try:
@@ -1877,6 +1885,8 @@ async def get_usage_limits(request: Request):
             gemini_hourly = 0
             claude_weekly = 0
             claude_hourly = 0
+            gpt_weekly = 0
+            gpt_hourly = 0
             
             def parse_timestamp(la_str, period_str):
                 if la_str:
@@ -1914,6 +1924,7 @@ async def get_usage_limits(request: Request):
                 models = item.get('modelsUsed', [])
                 is_gemini = any('gemini' in m.lower() for m in models)
                 is_claude = any('claude' in m.lower() for m in models)
+                is_gpt = any(('gpt' in m.lower() or 'openai' in m.lower()) for m in models)
                 
                 if is_gemini:
                     if hours_ago <= 168:
@@ -1925,6 +1936,11 @@ async def get_usage_limits(request: Request):
                         claude_weekly += tokens
                     if hours_ago <= 5:
                         claude_hourly += tokens
+                if is_gpt:
+                    if hours_ago <= 168:
+                        gpt_weekly += tokens
+                    if hours_ago <= 5:
+                        gpt_hourly += tokens
                         
             # Limits
             gw_limit = 10000000
@@ -1936,11 +1952,15 @@ async def get_usage_limits(request: Request):
             result_data["geminiHourlyUsed"] = gemini_hourly
             result_data["claudeWeeklyUsed"] = claude_weekly
             result_data["claudeHourlyUsed"] = claude_hourly
+            result_data["gptWeeklyUsed"] = gpt_weekly
+            result_data["gptHourlyUsed"] = gpt_hourly
             
             result_data["geminiWeeklyPercent"] = round((gemini_weekly / gw_limit) * 100, 1) if gemini_weekly > 0 else 1.2
             result_data["geminiHourlyPercent"] = round((gemini_hourly / gh_limit) * 100, 1) if gemini_hourly > 0 else 0.5
             result_data["claudeWeeklyPercent"] = round((claude_weekly / cw_limit) * 100, 1) if claude_weekly > 0 else 2.5
             result_data["claudeHourlyPercent"] = round((claude_hourly / ch_limit) * 100, 1) if claude_hourly > 0 else 1.8
+            result_data["gptWeeklyPercent"] = round((gpt_weekly / cw_limit) * 100, 1) if gpt_weekly > 0 else 0.0
+            result_data["gptHourlyPercent"] = round((gpt_hourly / ch_limit) * 100, 1) if gpt_hourly > 0 else 0.0
             
     except Exception as e:
         logging.error(f"Failed to fetch usage limits from ccusage: {e}")

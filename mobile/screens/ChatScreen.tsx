@@ -81,6 +81,8 @@ type ThemeMode = 'system' | 'light' | 'dark';
 type AgentProvider = 'agy' | 'codex';
 type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
 type CodexSpeed = 'Standard' | 'Fast';
+type UsageBucketKey = 'gemini' | 'claude' | 'gpt';
+type UsagePeriodKey = 'Weekly' | 'Hourly';
 
 interface ModelOption {
   value: string;
@@ -165,6 +167,29 @@ const getCodexSpeeds = (modelName: string) => (
     : codexSpeedList.filter((item) => item.value !== "Fast")
 );
 
+const getUsageBucketForModel = (modelName: string): {
+  key: UsageBucketKey;
+  title: string;
+  note?: string;
+} => {
+  if (isCodexModel(modelName)) {
+    return {
+      key: 'gpt',
+      title: 'GPT Models (Codex / ChatGPT)',
+      note: 'Codex models draw from your ChatGPT/Codex GPT usage budget.',
+    };
+  }
+
+  const lowered = modelName.toLowerCase();
+  if (lowered.includes('gemini')) {
+    return { key: 'gemini', title: 'Gemini Models (Google AI Ultra)' };
+  }
+  if (lowered.includes('gpt')) {
+    return { key: 'gpt', title: 'GPT Models (Antigravity)' };
+  }
+  return { key: 'claude', title: 'Claude Models (Claude Pro)' };
+};
+
 const targetsList = [
   { value: "Sandbox", desc: "Execute in a secure local sandbox (recommended)" },
   { value: "Real", desc: "Execute directly on your host machine" }
@@ -204,6 +229,8 @@ const DEFAULT_USAGE_LIMIT_DATA = {
   geminiHourlyPercent: 0.5,
   claudeWeeklyPercent: 2.5,
   claudeHourlyPercent: 1.8,
+  gptWeeklyPercent: 0,
+  gptHourlyPercent: 0,
   geminiWeeklyUsed: 120000,
   geminiWeeklyLimit: 10000000,
   geminiHourlyUsed: 5000,
@@ -212,6 +239,11 @@ const DEFAULT_USAGE_LIMIT_DATA = {
   claudeWeeklyLimit: 100000000,
   claudeHourlyUsed: 180000,
   claudeHourlyLimit: 10000000,
+  gptWeeklyUsed: 0,
+  gptWeeklyLimit: 100000000,
+  gptHourlyUsed: 0,
+  gptHourlyLimit: 10000000,
+  codexUsageNote: "Codex GPT models use the ChatGPT/Codex GPT usage budget.",
 };
 
 const getSpeechRecognitionModule = () => {
@@ -1966,12 +1998,14 @@ allowQueue: false,
 
   const getActiveUsagePercentage = () => {
     if (!usageLimitData) return 0;
-    if (isCodexModel(selectedModel)) return 0;
-    const isGemini = selectedModel.toLowerCase().includes("gemini");
-    const activeHourlyPercent = isGemini
-      ? (usageLimitData.geminiHourlyPercent ?? 0)
-      : (usageLimitData.claudeHourlyPercent ?? 0);
+    const bucket = getUsageBucketForModel(selectedModel);
+    const activeHourlyPercent = Number(usageLimitData[`${bucket.key}HourlyPercent`] ?? 0);
     return usageMode === 'usage' ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent);
+  };
+
+  const getUsageMetric = (bucket: UsageBucketKey, period: UsagePeriodKey, metric: 'Used' | 'Limit' | 'Percent') => {
+    const value = usageLimitData?.[`${bucket}${period}${metric}`];
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
   };
 
   const renderCircularChart = (percent: number, color: string) => {
@@ -2006,6 +2040,33 @@ allowQueue: false,
             transform={`rotate(-90 ${size / 2} ${size / 2})`}
           />
         </Svg>
+      </View>
+    );
+  };
+
+  const renderUsageLimitRow = (
+    bucket: UsageBucketKey,
+    period: UsagePeriodKey,
+    label: string,
+  ) => {
+    const used = getUsageMetric(bucket, period, 'Used');
+    const limit = getUsageMetric(bucket, period, 'Limit');
+    const usedPercent = getUsageMetric(bucket, period, 'Percent');
+    const displayPercent = usageMode === 'usage' ? usedPercent : Math.max(0, 100 - usedPercent);
+    const remainingTokens = Math.max(0, limit - used);
+
+    return (
+      <View style={styles.usageRow}>
+        <View style={styles.usageRowLabel}>
+          <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>{label}</Text>
+          <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
+            {usageMode === 'usage'
+              ? `Used ${used.toLocaleString()} tokens (${usedPercent.toFixed(1)}%)`
+              : `${remainingTokens.toLocaleString()} tokens (${Math.max(0, 100 - usedPercent).toFixed(1)}%) remaining`
+            }
+          </Text>
+        </View>
+        {renderCircularChart(displayPercent, theme.statusGreen)}
       </View>
     );
   };
@@ -3127,82 +3188,17 @@ allowQueue: false,
             {usageLimitData ? (
               <>
               <ScrollView style={styles.popupScroll}>
-                {/* Gemini Models Section */}
                 <View style={styles.usageSection}>
-                  <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>Gemini Models (Google AI Ultra)</Text>
-
-                  {/* Gemini Weekly */}
-                  <View style={styles.usageRow}>
-                    <View style={styles.usageRowLabel}>
-                      <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>Weekly Limit</Text>
-                      <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
-                        {usageMode === 'usage'
-                          ? `Used ${usageLimitData.geminiWeeklyUsed?.toLocaleString()} tokens (${usageLimitData.geminiWeeklyPercent}%)`
-                          : `${Math.max(0, usageLimitData.geminiWeeklyLimit - usageLimitData.geminiWeeklyUsed)?.toLocaleString()} tokens (${Math.max(0, 100 - usageLimitData.geminiWeeklyPercent).toFixed(1)}%) remaining`
-                        }
-                      </Text>
-                    </View>
-                    {renderCircularChart(
-                      usageMode === 'usage' ? (usageLimitData.geminiWeeklyPercent ?? 0) : Math.max(0, 100 - (usageLimitData.geminiWeeklyPercent ?? 0)),
-                      theme.statusGreen
-                    )}
-                  </View>
-
-                  {/* Gemini Hourly */}
-                  <View style={styles.usageRow}>
-                    <View style={styles.usageRowLabel}>
-                      <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>Five Hour Limit</Text>
-                      <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
-                        {usageMode === 'usage'
-                          ? `Used ${usageLimitData.geminiHourlyUsed?.toLocaleString()} tokens (${usageLimitData.geminiHourlyPercent}%)`
-                          : `${Math.max(0, usageLimitData.geminiHourlyLimit - usageLimitData.geminiHourlyUsed)?.toLocaleString()} tokens (${Math.max(0, 100 - usageLimitData.geminiHourlyPercent).toFixed(1)}%) remaining`
-                        }
-                      </Text>
-                    </View>
-                    {renderCircularChart(
-                      usageMode === 'usage' ? (usageLimitData.geminiHourlyPercent ?? 0) : Math.max(0, 100 - (usageLimitData.geminiHourlyPercent ?? 0)),
-                      theme.statusGreen
-                    )}
-                  </View>
-                </View>
-
-                {/* Claude Models Section */}
-                <View style={[styles.usageSection, { borderTopWidth: 1, borderTopColor: theme.borderColor, marginTop: 16, paddingTop: 16 }]}>
-                  <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>Claude & GPT Models (Claude Pro)</Text>
-
-                  {/* Claude Weekly */}
-                  <View style={styles.usageRow}>
-                    <View style={styles.usageRowLabel}>
-                      <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>Weekly Limit</Text>
-                      <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
-                        {usageMode === 'usage'
-                          ? `Used ${usageLimitData.claudeWeeklyUsed?.toLocaleString()} tokens (${usageLimitData.claudeWeeklyPercent}%)`
-                          : `${Math.max(0, usageLimitData.claudeWeeklyLimit - usageLimitData.claudeWeeklyUsed)?.toLocaleString()} tokens (${Math.max(0, 100 - usageLimitData.claudeWeeklyPercent).toFixed(1)}%) remaining`
-                        }
-                      </Text>
-                    </View>
-                    {renderCircularChart(
-                      usageMode === 'usage' ? (usageLimitData.claudeWeeklyPercent ?? 0) : Math.max(0, 100 - (usageLimitData.claudeWeeklyPercent ?? 0)),
-                      theme.statusGreen
-                    )}
-                  </View>
-
-                  {/* Claude Hourly */}
-                  <View style={styles.usageRow}>
-                    <View style={styles.usageRowLabel}>
-                      <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>Five Hour Limit</Text>
-                      <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
-                        {usageMode === 'usage'
-                          ? `Used ${usageLimitData.claudeHourlyUsed?.toLocaleString()} tokens (${usageLimitData.claudeHourlyPercent}%)`
-                          : `${Math.max(0, usageLimitData.claudeHourlyLimit - usageLimitData.claudeHourlyUsed)?.toLocaleString()} tokens (${Math.max(0, 100 - usageLimitData.claudeHourlyPercent).toFixed(1)}%) remaining`
-                        }
-                      </Text>
-                    </View>
-                    {renderCircularChart(
-                      usageMode === 'usage' ? (usageLimitData.claudeHourlyPercent ?? 0) : Math.max(0, 100 - (usageLimitData.claudeHourlyPercent ?? 0)),
-                      theme.statusGreen
-                    )}
-                  </View>
+                  <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>
+                    {getUsageBucketForModel(selectedModel).title}
+                  </Text>
+                  {getUsageBucketForModel(selectedModel).note ? (
+                    <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textMuted }]}>
+                      {usageLimitData.codexUsageNote || getUsageBucketForModel(selectedModel).note}
+                    </Text>
+                  ) : null}
+                  {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Weekly', 'Weekly Limit')}
+                  {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Hourly', 'Five Hour Limit')}
                 </View>
               </ScrollView>
               {(loadingUsage || usageLimitError) && (
@@ -4473,6 +4469,10 @@ gap: 12,
     fontSize: 12,
     fontWeight: '800',
     marginBottom: 12,
+  },
+  usageSectionNote: {
+    marginBottom: 8,
+    paddingHorizontal: 4,
   },
   usageRow: {
     flexDirection: 'row',

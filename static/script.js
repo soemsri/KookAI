@@ -1322,6 +1322,8 @@ document.addEventListener("DOMContentLoaded", () => {
     geminiHourlyPercent: 0.5,
     claudeWeeklyPercent: 2.5,
     claudeHourlyPercent: 1.8,
+    gptWeeklyPercent: 0,
+    gptHourlyPercent: 0,
 
     geminiWeeklyUsed: 120000,
     geminiWeeklyLimit: 10000000,
@@ -1331,7 +1333,13 @@ document.addEventListener("DOMContentLoaded", () => {
     claudeWeeklyUsed: 2500000,
     claudeWeeklyLimit: 100000000,
     claudeHourlyUsed: 180000,
-    claudeHourlyLimit: 10000000
+    claudeHourlyLimit: 10000000,
+
+    gptWeeklyUsed: 0,
+    gptWeeklyLimit: 100000000,
+    gptHourlyUsed: 0,
+    gptHourlyLimit: 10000000,
+    codexUsageNote: "Codex GPT models use the ChatGPT/Codex GPT usage budget."
   };
 
   async function fetchUsageLimits() {
@@ -1372,30 +1380,63 @@ document.addEventListener("DOMContentLoaded", () => {
     updateUsageDataDisplay(mode);
   }
 
+  function getUsageBucketForCurrentModel() {
+    if (isCodexModel(currentModel)) {
+      return {
+        key: "gpt",
+        title: "GPT Models (Codex / ChatGPT)",
+        badge: "Codex GPT usage",
+        note: "Codex models draw from your ChatGPT/Codex GPT usage budget."
+      };
+    }
+
+    const lowerModel = currentModel.toLowerCase();
+    if (lowerModel.includes("gemini")) {
+      return {
+        key: "gemini",
+        title: "Gemini Models",
+        badge: "Your Plan: Google AI Ultra",
+        note: ""
+      };
+    }
+    if (lowerModel.includes("gpt")) {
+      return {
+        key: "gpt",
+        title: "GPT Models",
+        badge: "OpenAI GPT usage",
+        note: ""
+      };
+    }
+    return {
+      key: "claude",
+      title: "Claude Models",
+      badge: "Your Plan: Claude Pro",
+      note: ""
+    };
+  }
+
   function updateUsageDataDisplay(mode) {
     const isUsage = (mode === "usage");
+    const activeBucket = getUsageBucketForCurrentModel();
 
     // Update main button chart based on selected model
-    const isGemini = currentModel.toLowerCase().includes("gemini");
-    const activeHourlyPercent = isCodexModel(currentModel)
-      ? 0
-      : (isGemini ? usageData.geminiHourlyPercent : usageData.claudeHourlyPercent);
-    const mainVal = isUsage ? activeHourlyPercent : (100 - activeHourlyPercent);
+    const activeHourlyPercent = Number(usageData[`${activeBucket.key}HourlyPercent`] || 0);
+    const mainVal = isUsage ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent);
 
     const mainCircle = document.getElementById("mainUsageBtnChartCircle");
     if (mainCircle) {
       mainCircle.setAttribute("stroke-dasharray", `${mainVal}, 100`);
     }
 
-    function updateSection(prefix, limitName) {
-      const usedPercent = usageData[`${prefix}Percent`];
-      const usedTokens = usageData[`${prefix}Used`];
-      const limitTokens = usageData[`${prefix}Limit`];
+    function updateSection(dataPrefix, limitName, elementPrefix = dataPrefix) {
+      const usedPercent = Number(usageData[`${dataPrefix}Percent`] || 0);
+      const usedTokens = Number(usageData[`${dataPrefix}Used`] || 0);
+      const limitTokens = Number(usageData[`${dataPrefix}Limit`] || 0);
 
-      const val = isUsage ? usedPercent : (100 - usedPercent);
-      const percentEl = document.getElementById(`${prefix}Percent`);
-      const chartEl = document.getElementById(`${prefix}Chart`);
-      const descEl = document.getElementById(`${prefix}Desc`);
+      const val = isUsage ? usedPercent : Math.max(0, 100 - usedPercent);
+      const percentEl = document.getElementById(`${elementPrefix}Percent`);
+      const chartEl = document.getElementById(`${elementPrefix}Chart`);
+      const descEl = document.getElementById(`${elementPrefix}Desc`);
 
       if (percentEl) percentEl.textContent = `${val.toFixed(1)}%`;
       if (chartEl) chartEl.setAttribute("stroke-dasharray", `${val}, 100`);
@@ -1411,10 +1452,30 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    updateSection("geminiWeekly", "weekly");
-    updateSection("geminiHourly", "5-hour");
-    updateSection("claudeWeekly", "weekly");
-    updateSection("claudeHourly", "5-hour");
+    const geminiSection = document.getElementById("usageGeminiSection");
+    const secondarySection = document.getElementById("usageSecondarySection");
+    const showGemini = activeBucket.key === "gemini";
+    geminiSection?.classList.toggle("hidden", !showGemini);
+    secondarySection?.classList.toggle("hidden", showGemini);
+
+    if (showGemini) {
+      updateSection("geminiWeekly", "weekly");
+      updateSection("geminiHourly", "5-hour");
+      return;
+    }
+
+    const secondaryTitle = document.getElementById("secondaryUsageTitle");
+    const secondaryBadge = document.getElementById("secondaryUsageBadge");
+    const secondaryNote = document.getElementById("secondaryUsageNote");
+    if (secondaryTitle) secondaryTitle.textContent = activeBucket.title;
+    if (secondaryBadge) secondaryBadge.textContent = activeBucket.badge;
+    if (secondaryNote) {
+      const note = isCodexModel(currentModel) ? (usageData.codexUsageNote || activeBucket.note) : activeBucket.note;
+      secondaryNote.textContent = note;
+      secondaryNote.classList.toggle("hidden", !note);
+    }
+    updateSection(`${activeBucket.key}Weekly`, "weekly", "claudeWeekly");
+    updateSection(`${activeBucket.key}Hourly`, "5-hour", "claudeHourly");
   }
 
   // Initialize display on load
