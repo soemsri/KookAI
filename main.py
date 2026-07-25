@@ -30,6 +30,17 @@ from codex_backend import (
     resolve_codex_executable,
     resolve_provider,
 )
+from claude_backend import (
+    CLAUDE_CONVERSATION_PREFIX,
+    build_claude_command,
+    build_claude_environment,
+    classify_claude_progress_line,
+    claude_session_id,
+    make_claude_conversation_id,
+    normalize_claude_effort,
+    parse_claude_stream_json,
+    resolve_claude_executable,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -352,6 +363,7 @@ class ChatRequest(BaseModel):
     provider: Optional[str] = None
     effort: Optional[str] = "Medium"
     speed: Optional[str] = "Standard"
+    thinking: Optional[bool] = True
 
 # Temp UUID to actual conversation ID mapping
 convo_id_mapping = {}
@@ -362,6 +374,8 @@ in_memory_chats = {}
 # Persistent metadata/history for conversations started through Codex CLI.
 CODEX_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "codex_conversations.json")
 codex_conversations_lock = threading.Lock()
+CLAUDE_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "claude_conversations.json")
+claude_conversations_lock = threading.Lock()
 
 # Background chat task state for polling progress while agy is still running.
 chat_tasks = {}
@@ -545,6 +559,85 @@ def get_codex_conversations() -> List[dict]:
 def get_codex_conversation(conversation_id: str) -> Optional[dict]:
     with codex_conversations_lock:
         record = _load_codex_conversation_records().get(conversation_id)
+    return record if isinstance(record, dict) else None
+
+
+def _load_claude_conversation_records() -> dict:
+    if not os.path.exists(CLAUDE_CONVERSATIONS_FILE):
+        return {}
+    try:
+        with open(CLAUDE_CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logging.error(f"Failed to load Claude conversation history: {e}")
+        return {}
+
+
+def _save_claude_conversation_records(records: dict):
+    os.makedirs(os.path.dirname(CLAUDE_CONVERSATIONS_FILE), exist_ok=True)
+    temp_path = f"{CLAUDE_CONVERSATIONS_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, CLAUDE_CONVERSATIONS_FILE)
+
+
+def persist_claude_exchange(
+    conversation_id: str,
+    project: str,
+    model: str,
+    effort: str,
+    thinking: bool,
+    user_message: str,
+    assistant_message: str,
+):
+    if not conversation_id.startswith(CLAUDE_CONVERSATION_PREFIX):
+        return
+
+    now = datetime.datetime.now().timestamp()
+    with claude_conversations_lock:
+        records = _load_claude_conversation_records()
+        record = records.get(conversation_id, {})
+        messages = record.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        messages.extend([
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_message},
+        ])
+
+        clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", user_message).strip()
+        if not clean_title:
+            clean_title = "Claude conversation"
+        if len(clean_title) > 40:
+            clean_title = clean_title[:40] + "..."
+
+        records[conversation_id] = {
+            "id": conversation_id,
+            "session_id": claude_session_id(conversation_id),
+            "title": record.get("title") or clean_title,
+            "project": project,
+            "provider": "claude",
+            "model": model,
+            "effort": effort,
+            "thinking": thinking,
+            "timestamp": now,
+            "messages": messages,
+        }
+        _save_claude_conversation_records(records)
+
+
+def get_claude_conversations() -> List[dict]:
+    with claude_conversations_lock:
+        records = _load_claude_conversation_records()
+    conversations = [value for value in records.values() if isinstance(value, dict)]
+    conversations.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
+    return conversations
+
+
+def get_claude_conversation(conversation_id: str) -> Optional[dict]:
+    with claude_conversations_lock:
+        record = _load_claude_conversation_records().get(conversation_id)
     return record if isinstance(record, dict) else None
 
 
@@ -889,6 +982,7 @@ def run_agent_command(
     progress_line_classifier=classify_cli_progress_line,
     raw_line_callback=None,
     stdin_text=None,
+    env=None,
 ):
     proc = subprocess.Popen(
         cmd,
@@ -899,7 +993,9 @@ def run_agent_command(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
-        cwd=cwd_path
+        cwd=cwd_path,
+        env=env,
+        **hidden_subprocess_kwargs(),
     )
     output_queue = queue.Queue()
     stdout_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
@@ -1275,6 +1371,135 @@ def run_codex_cli(
         )
 
 
+def run_claude_cli(
+    message: str,
+    model_ui_name: str,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    effort: str = "Medium",
+    thinking: bool = True,
+    progress_callback=None,
+):
+    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    cwd_path = resolve_project_directory(project_id)
+    mapping_key = f"claude:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+    effort_display, _ = normalize_claude_effort(effort, model_ui_name)
+    message_with_context = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+
+    def execute(run_conversation_id: Optional[str]):
+        stream_result = {"session_id": None, "final_message": "", "errors": []}
+
+        def capture_claude_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_claude_stream_json(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["final_message"] = parsed_line["final_message"]
+            if parsed_line["errors"]:
+                stream_result["errors"].extend(parsed_line["errors"])
+
+        cmd = build_claude_command(
+            claude_path=resolve_claude_executable(),
+            prompt=message_with_context,
+            model_name=model_ui_name,
+            effort=effort_display,
+            target=target,
+            conversation_id=run_conversation_id,
+        )
+        logging.info(
+            "Executing Claude CLI in %s with model=%s effort=%s thinking=%s target=%s resume=%s",
+            cwd_path,
+            model_ui_name,
+            effort_display,
+            thinking,
+            target,
+            bool(claude_session_id(run_conversation_id)),
+        )
+        result = run_agent_command(
+            cmd,
+            cwd_path,
+            timeout=AGY_CLI_TIMEOUT,
+            progress_callback=progress_callback,
+            progress_line_classifier=classify_claude_progress_line,
+            raw_line_callback=capture_claude_line,
+            stdin_text=message_with_context,
+            env=build_claude_environment(thinking),
+        )
+        parsed = parse_claude_stream_json(result.stdout or "")
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": stream_result["final_message"] or parsed["final_message"],
+            "errors": stream_result["errors"] or parsed["errors"],
+        }
+
+    try:
+        result, parsed = execute(actual_cid)
+        combined_error = "\n".join(
+            part
+            for part in [
+                (result.stderr or "").strip(),
+                "\n".join(parsed["errors"]).strip(),
+            ]
+            if part
+        )
+        recoverable_resume_error = claude_session_id(actual_cid) and any(
+            phrase in combined_error.lower()
+            for phrase in (
+                "session not found",
+                "no conversation found",
+                "failed to resume",
+                "unable to resume",
+            )
+        )
+        if result.returncode != 0 and recoverable_resume_error:
+            if progress_callback:
+                progress_callback("progress", "Claude session was unavailable; starting a fresh session.")
+            result, parsed = execute(None)
+            combined_error = "\n".join(
+                part
+                for part in [
+                    (result.stderr or "").strip(),
+                    "\n".join(parsed["errors"]).strip(),
+                ]
+                if part
+            )
+
+        session_id = parsed["session_id"]
+        resolved_cid = make_claude_conversation_id(session_id) if session_id else actual_cid
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+
+        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
+            return parsed["final_message"].strip(), resolved_cid
+
+        error_message = combined_error or "Claude CLI did not return a final response."
+        return (
+            f"⚠️ **Claude CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```",
+            resolved_cid,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"⏱️ **Timeout Error**: The request to `claude` CLI exceeded "
+            f"the {AGY_CLI_TIMEOUT}-second limit.",
+            actual_cid,
+        )
+    except Exception as e:
+        return (
+            "❌ **Execution Error**: Failed to run `claude` CLI. "
+            f"Install/authenticate Claude Code or set `CLAUDE_CLI_PATH`. Details: `{str(e)}`",
+            actual_cid,
+        )
+
+
 def run_selected_cli(
     message: str,
     model_ui_name: str,
@@ -1284,6 +1509,7 @@ def run_selected_cli(
     provider: Optional[str] = None,
     effort: str = "Medium",
     speed: str = "Standard",
+    thinking: bool = True,
     image_paths: Optional[List[str]] = None,
     progress_callback=None,
 ):
@@ -1298,6 +1524,17 @@ def run_selected_cli(
             effort,
             speed,
             image_paths,
+            progress_callback,
+        )
+    if selected_provider == "claude":
+        return run_claude_cli(
+            message,
+            model_ui_name,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            thinking,
             progress_callback,
         )
     return run_agy_cli(
@@ -1355,7 +1592,8 @@ async def get_conversations(request: Request, project: Optional[str] = None):
     for convo in real_convos:
         convo.setdefault("provider", "agy")
     codex_convos = get_codex_conversations()
-    merged = list(real_convos) + codex_convos
+    claude_convos = get_claude_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -1376,7 +1614,8 @@ async def get_chat_history(request: Request):
     for convo in real_convos:
         convo.setdefault("provider", "agy")
     codex_convos = get_codex_conversations()
-    merged = list(real_convos) + codex_convos
+    claude_convos = get_claude_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -1395,7 +1634,9 @@ async def get_conversation_details(cid: str, request: Request):
     model = None
     effort = None
     speed = None
+    thinking = None
     codex_record = get_codex_conversation(cid)
+    claude_record = get_claude_conversation(cid)
 
     # First check memory cache
     if cid in in_memory_chats:
@@ -1406,6 +1647,12 @@ async def get_conversation_details(cid: str, request: Request):
             model = codex_record.get("model")
             effort = codex_record.get("effort")
             speed = codex_record.get("speed")
+        elif claude_record:
+            project = claude_record.get("project")
+            provider = "claude"
+            model = claude_record.get("model")
+            effort = claude_record.get("effort")
+            thinking = claude_record.get("thinking", True)
     elif codex_record:
         messages = codex_record.get("messages", [])
         project = codex_record.get("project")
@@ -1413,6 +1660,14 @@ async def get_conversation_details(cid: str, request: Request):
         model = codex_record.get("model")
         effort = codex_record.get("effort")
         speed = codex_record.get("speed")
+        in_memory_chats[cid] = messages
+    elif claude_record:
+        messages = claude_record.get("messages", [])
+        project = claude_record.get("project")
+        provider = "claude"
+        model = claude_record.get("model")
+        effort = claude_record.get("effort")
+        thinking = claude_record.get("thinking", True)
         in_memory_chats[cid] = messages
     else:
         # Check seed conversations
@@ -1474,6 +1729,7 @@ async def get_conversation_details(cid: str, request: Request):
         "model": model,
         "effort": effort,
         "speed": speed,
+        "thinking": thinking,
     })
 
 def build_chat_response(request: ChatRequest, progress_callback=None):
@@ -1485,14 +1741,22 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     provider = resolve_provider(request.provider, model)
     effort = request.effort or "Medium"
     speed = request.speed or "Standard"
+    thinking = request.thinking is not False
     if provider == "codex":
         effort, _ = normalize_codex_effort(effort, model)
         speed, _ = normalize_codex_speed(speed, model)
+    elif provider == "claude":
+        effort, _ = normalize_claude_effort(effort, model)
 
     project_id = clean_project_name(os.path.basename(workspace or "agy"))
     if provider == "codex":
         actual_cid = convo_id_mapping.get(
             f"codex:{project_id}:{conversation_id}",
+            conversation_id,
+        )
+    elif provider == "claude":
+        actual_cid = convo_id_mapping.get(
+            f"claude:{project_id}:{conversation_id}",
             conversation_id,
         )
     else:
@@ -1529,6 +1793,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             provider,
             effort,
             speed,
+            thinking,
             codex_images,
             progress_callback,
         )
@@ -1656,11 +1921,12 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         else:
             project_id = clean_project_name(os.path.basename(workspace or "agy"))
             cwd_path = resolve_project_directory(project_id)
-            agents_file = (
-                os.path.join(cwd_path, "AGENTS.md")
-                if provider == "codex"
-                else os.path.join(cwd_path, ".agents", "AGENTS.md")
-            )
+            if provider == "codex":
+                agents_file = os.path.join(cwd_path, "AGENTS.md")
+            elif provider == "claude":
+                agents_file = os.path.join(cwd_path, "CLAUDE.md")
+            else:
+                agents_file = os.path.join(cwd_path, ".agents", "AGENTS.md")
             agents_dir = os.path.dirname(agents_file)
             
             try:
@@ -1722,6 +1988,16 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             user_visible_message,
             reply,
         )
+    elif provider == "claude":
+        persist_claude_exchange(
+            resolved_cid,
+            project_id,
+            model,
+            effort,
+            thinking,
+            user_visible_message,
+            reply,
+        )
 
     processed_reply = reply.replace("file:///", "/api/media?path=/")
     return {
@@ -1730,8 +2006,9 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         "conversation_id": resolved_cid,
         "provider": provider,
         "model": model,
-        "effort": effort if provider == "codex" else None,
+        "effort": effort if provider in {"codex", "claude"} else None,
         "speed": speed if provider == "codex" else None,
+        "thinking": thinking if provider == "claude" else None,
     }
 
 

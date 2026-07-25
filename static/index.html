@@ -455,6 +455,35 @@
       </div>
     </div>
 
+    <div class="dropdown-header">Anthropic Claude CLI</div>
+    <div class="dropdown-item" data-value="Fable 5" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Fable 5</span><span class="model-desc">For your toughest challenges</span></div>
+    </div>
+    <div class="dropdown-item" data-value="Opus 5" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Opus 5</span><span class="model-desc">For complex tasks</span></div>
+    </div>
+    <div class="dropdown-item" data-value="Sonnet 5" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Sonnet 5</span><span class="model-desc">Most efficient for everyday tasks</span></div>
+    </div>
+    <div class="dropdown-item" data-value="Haiku 4.5" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Haiku 4.5</span><span class="model-desc">Fastest for quick answers</span></div>
+    </div>
+    <div class="dropdown-item" data-value="Opus 4.8" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Opus 4.8</span><span class="model-desc">Previous generation Opus</span></div>
+    </div>
+    <div class="dropdown-item" data-value="Opus 4.7" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Opus 4.7</span><span class="model-desc">Previous generation Opus</span></div>
+    </div>
+    <div class="dropdown-item" data-value="Opus 4.6" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Opus 4.6</span><span class="model-desc">Legacy Opus model</span></div>
+    </div>
+    <div class="dropdown-item" data-value="Opus 3" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Opus 3</span><span class="model-desc">Legacy Opus model</span></div>
+    </div>
+    <div class="dropdown-item" data-value="Sonnet 4.6" data-provider="claude">
+      <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Sonnet 4.6</span><span class="model-desc">Previous generation Sonnet</span></div>
+    </div>
+
     <div class="dropdown-item" data-value="5.6 Sol" data-provider="codex" data-ultra="true" data-fast="true">
       <span class="model-badge codex">Codex</span>
       <div class="model-info">
@@ -519,6 +548,15 @@
     <div class="dropdown-item" data-value="Fast" data-fast-only="true"><span>Fast</span><small>1.5x speed, more usage</small></div>
   </div>
 
+  <div class="dropdown-menu hidden" id="claudeEffortDropdown">
+    <div class="dropdown-header">Claude Effort</div>
+    <div class="dropdown-item" data-value="Low"><span>Low</span><small>Quick replies to simple questions</small></div>
+    <div class="dropdown-item active" data-value="Medium"><span>Medium</span><small>Light, casual tasks</small></div>
+    <div class="dropdown-item" data-value="High"><span>High</span><small>Balanced for everyday work</small></div>
+    <div class="dropdown-item" data-value="Extra" data-extra-only="true"><span>Extra</span><small>Complex, detailed work</small></div>
+    <div class="dropdown-item" data-value="Max"><span>Max</span><small>The hardest problems; takes longest</small></div>
+  </div>
+
   <!-- 3. Target Dropdown Menu -->
   <div class="dropdown-menu hidden" id="targetDropdown">
     <div class="dropdown-header">Execution Target</div>
@@ -562,6 +600,15 @@
               <option value="Claude Sonnet 4.6 (Thinking)">Claude Sonnet 4.6 (Thinking)</option>
               <option value="Claude Opus 4.6 (Thinking)">Claude Opus 4.6 (Thinking)</option>
               <option value="GPT-OSS 120B (Medium)">GPT-OSS 120B (Medium)</option>
+              <option value="Fable 5">Fable 5 (Claude CLI)</option>
+              <option value="Opus 5">Opus 5 (Claude CLI)</option>
+              <option value="Sonnet 5">Sonnet 5 (Claude CLI)</option>
+              <option value="Haiku 4.5">Haiku 4.5 (Claude CLI)</option>
+              <option value="Opus 4.8">Opus 4.8 (Claude CLI)</option>
+              <option value="Opus 4.7">Opus 4.7 (Claude CLI)</option>
+              <option value="Opus 4.6">Opus 4.6 (Claude CLI)</option>
+              <option value="Opus 3">Opus 3 (Claude CLI)</option>
+              <option value="Sonnet 4.6">Sonnet 4.6 (Claude CLI)</option>
               <option value="5.6 Sol">5.6 Sol (Codex)</option>
               <option value="5.6 Terra">5.6 Terra (Codex)</option>
               <option value="5.6 Luna">5.6 Luna (Codex)</option>
@@ -585,6 +632,23 @@
             <select id="settingsCodexSpeed">
               <option value="Standard">Standard</option>
               <option value="Fast">Fast — 1.5x speed, more usage</option>
+            </select>
+          </div>
+          <div class="settings-group hidden" id="settingsClaudeEffortGroup">
+            <label>Claude Effort</label>
+            <select id="settingsClaudeEffort">
+              <option value="Low">Low</option>
+              <option value="Medium">Medium</option>
+              <option value="High">High</option>
+              <option value="Extra">Extra</option>
+              <option value="Max">Max</option>
+            </select>
+          </div>
+          <div class="settings-group hidden" id="settingsClaudeThinkingGroup">
+            <label>Claude Thinking</label>
+            <select id="settingsClaudeThinking">
+              <option value="On">On</option>
+              <option value="Off">Off</option>
             </select>
           </div>
           <div class="settings-group">

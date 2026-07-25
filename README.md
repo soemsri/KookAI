@@ -13,6 +13,7 @@ The server acts as the backend broker and hosts the web chat console.
 - **Node.js** (for tunnel sharing)
 - **Antigravity CLI** for the existing Gemini/Claude/GPT-OSS models
 - **Codex CLI** for the Codex model family (`5.6 Sol`, `5.6 Terra`, `5.6 Luna`, `5.5`, `5.4`, and `5.4 Mini`)
+- **Anthropic Claude Code CLI** for the native Claude model family (`Fable 5`, `Opus 5`, `Sonnet 5`, `Haiku 4.5`, and earlier models)
 
 ### Installation
 1. Install the required Python packages:
@@ -51,7 +52,34 @@ The server acts as the backend broker and hosts the web chat console.
    ```
    If the server cannot find the runnable CLI (for example, when a Windows app
    alias shadows it), set `CODEX_CLI_PATH` to the full executable path.
-4. Start the server:
+4. To use native Anthropic Claude models, install Claude Code:
+
+   **macOS / Linux**
+   ```bash
+   curl -fsSL https://claude.ai/install.sh | bash
+   ```
+
+   **Windows PowerShell**
+   ```powershell
+   irm https://claude.ai/install.ps1 | iex
+   ```
+
+   Alternatively, install the npm package:
+   ```bash
+   npm install -g @anthropic-ai/claude-code
+   ```
+
+   Start Claude Code and complete the sign-in flow:
+   ```bash
+   claude
+   ```
+   Then verify the CLI:
+   ```bash
+   claude --version
+   ```
+   If auto-detection fails, set `CLAUDE_CLI_PATH` to the full path of the
+   `claude` executable.
+5. Start the server:
    ```bash
    python main.py
    ```
@@ -105,6 +133,17 @@ Selecting a Codex model exposes two additional controls:
 `Sandbox` maps to Codex workspace-write isolation. `Real` bypasses Codex
 approvals and sandboxing, so only use it with a trusted paired device and
 workspace.
+
+### Claude Code options
+
+Native Claude models run through Anthropic's `claude` CLI and keep resumable
+sessions separate from Antigravity and Codex conversations.
+
+- **Effort**: Low, Medium, High, Extra, or Max when supported by the model.
+- **Thinking**: Enables or disables Claude's extended thinking.
+- **Sandbox**: Runs non-interactively with permission prompts denied.
+- **Real**: Uses `--dangerously-skip-permissions`; only use this with a trusted
+  paired device and workspace.
 
 ---
 

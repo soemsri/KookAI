@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StatusBar, Animated, useColorScheme, Modal, Vibration, Easing, Keyboard, Image, Linking } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StatusBar, Animated, useColorScheme, Modal, Vibration, Easing, Keyboard, Image, Linking, Switch } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
@@ -37,8 +37,9 @@ interface Conversation {
   project: string;
   provider?: AgentProvider;
   model?: string;
-  effort?: CodexEffort;
+  effort?: CodexEffort | ClaudeEffort;
   speed?: CodexSpeed;
+  thinking?: boolean;
 }
 
 interface ChatScreenProps {
@@ -63,8 +64,9 @@ id: string;
 content: string;
 model: string;
 provider: AgentProvider;
-effort: CodexEffort;
+effort: CodexEffort | ClaudeEffort;
 speed: CodexSpeed;
+thinking: boolean;
 target: string;
 project: string;
 conversationId: string;
@@ -78,9 +80,10 @@ message: string;
 
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
-type AgentProvider = 'agy' | 'codex';
+type AgentProvider = 'agy' | 'codex' | 'claude';
 type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
 type CodexSpeed = 'Standard' | 'Fast';
+type ClaudeEffort = 'Low' | 'Medium' | 'High' | 'Extra' | 'Max';
 type UsageBucketKey = 'gemini' | 'claude' | 'gpt';
 type UsagePeriodKey = 'Weekly' | 'Hourly';
 
@@ -90,6 +93,9 @@ interface ModelOption {
   provider: AgentProvider;
   supportsUltra?: boolean;
   supportsFast?: boolean;
+  supportsClaudeEffort?: boolean;
+  supportsClaudeExtra?: boolean;
+  thinkingRequired?: boolean;
 }
 
 const colors = {
@@ -133,6 +139,15 @@ const modelsList: ModelOption[] = [
   { value: "Claude Sonnet 4.6 (Thinking)", desc: "Advanced reasoning with thinking trace", provider: "agy" },
   { value: "Claude Opus 4.6 (Thinking)", desc: "Highest reasoning capacity model", provider: "agy" },
   { value: "GPT-OSS 120B (Medium)", desc: "Open-source large scale LLM", provider: "agy" },
+  { value: "Fable 5", desc: "For your toughest challenges", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true, thinkingRequired: true },
+  { value: "Opus 5", desc: "For complex tasks", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
+  { value: "Sonnet 5", desc: "Most efficient for everyday tasks", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
+  { value: "Haiku 4.5", desc: "Fastest for quick answers", provider: "claude" },
+  { value: "Opus 4.8", desc: "Previous generation Opus", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
+  { value: "Opus 4.7", desc: "Previous generation Opus", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
+  { value: "Opus 4.6", desc: "Legacy Opus model", provider: "claude", supportsClaudeEffort: true },
+  { value: "Opus 3", desc: "Legacy Opus model", provider: "claude" },
+  { value: "Sonnet 4.6", desc: "Previous generation Sonnet", provider: "claude", supportsClaudeEffort: true },
   { value: "5.6 Sol", desc: "Codex for complex, open-ended work", provider: "codex", supportsUltra: true, supportsFast: true },
   { value: "5.6 Terra", desc: "Codex everyday all-rounder", provider: "codex", supportsUltra: true, supportsFast: true },
   { value: "5.6 Luna", desc: "Codex for clear, repeatable work", provider: "codex", supportsFast: true },
@@ -153,9 +168,24 @@ const codexSpeedList: { value: CodexSpeed; desc: string }[] = [
   { value: "Standard", desc: "Default speed" },
   { value: "Fast", desc: "1.5x speed, more usage" },
 ];
+const claudeEffortList: { value: ClaudeEffort; desc: string }[] = [
+  { value: "Low", desc: "Quick replies to simple questions" },
+  { value: "Medium", desc: "Light, casual tasks" },
+  { value: "High", desc: "Balanced for everyday work" },
+  { value: "Extra", desc: "Complex, detailed work" },
+  { value: "Max", desc: "The hardest problems; takes longest" },
+];
 
 const getModelOption = (modelName: string) => modelsList.find((model) => model.value === modelName);
 const isCodexModel = (modelName: string) => getModelOption(modelName)?.provider === "codex";
+const isClaudeModel = (modelName: string) => getModelOption(modelName)?.provider === "claude";
+const getClaudeEfforts = (modelName: string) => {
+  const model = getModelOption(modelName);
+  if (!model?.supportsClaudeEffort) return [];
+  return model.supportsClaudeExtra
+    ? claudeEffortList
+    : claudeEffortList.filter((item) => item.value !== "Extra");
+};
 const getCodexEfforts = (modelName: string) => (
   getModelOption(modelName)?.supportsUltra
     ? codexEffortList
@@ -214,6 +244,8 @@ const PREFERENCE_KEYS = {
   fontSize: 'settings_font_size',
   codexEffort: 'settings_codex_effort',
   codexSpeed: 'settings_codex_speed',
+  claudeEffort: 'settings_claude_effort',
+  claudeThinking: 'settings_claude_thinking',
 };
 
 const slashCommands: PromptSuggestion[] = [
@@ -284,6 +316,11 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
     return isDark
       ? { text: 'Codex', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }
       : { text: 'Codex', bg: '#d1fae5', color: '#047857' };
+  }
+  if (isClaudeModel(modelName)) {
+    return isDark
+      ? { text: 'Claude', bg: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' }
+      : { text: 'Claude', bg: '#f3e8ff', color: '#7c3aed' };
   }
   if (name.includes('flash')) {
     return isDark
@@ -759,6 +796,8 @@ const [conversations, setConversations] = useState<Conversation[]>([]);
 const [selectedModel, setSelectedModel] = useState("Gemini 3.5 Flash (High)");
 const [selectedCodexEffort, setSelectedCodexEffort] = useState<CodexEffort>("Medium");
 const [selectedCodexSpeed, setSelectedCodexSpeed] = useState<CodexSpeed>("Standard");
+const [selectedClaudeEffort, setSelectedClaudeEffort] = useState<ClaudeEffort>("Medium");
+const [selectedClaudeThinking, setSelectedClaudeThinking] = useState(true);
 const [selectedTarget, setSelectedTarget] = useState("Sandbox");
 const [selectedSpeechLang, setSelectedSpeechLang] = useState("th-TH");
 const [selectedThemeMode, setSelectedThemeMode] = useState<ThemeMode>("system");
@@ -816,6 +855,8 @@ const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
 const [draftSettingsModel, setDraftSettingsModel] = useState(selectedModel);
 const [draftSettingsCodexEffort, setDraftSettingsCodexEffort] = useState<CodexEffort>(selectedCodexEffort);
 const [draftSettingsCodexSpeed, setDraftSettingsCodexSpeed] = useState<CodexSpeed>(selectedCodexSpeed);
+const [draftSettingsClaudeEffort, setDraftSettingsClaudeEffort] = useState<ClaudeEffort>(selectedClaudeEffort);
+const [draftSettingsClaudeThinking, setDraftSettingsClaudeThinking] = useState(selectedClaudeThinking);
 const [draftSettingsTarget, setDraftSettingsTarget] = useState(selectedTarget);
 const [draftSettingsSpeechLang, setDraftSettingsSpeechLang] = useState(selectedSpeechLang);
 const [draftSettingsThemeMode, setDraftSettingsThemeMode] = useState<ThemeMode>(selectedThemeMode);
@@ -961,13 +1002,20 @@ setSelectedCodexEffort('Medium');
 if (!nextModel.supportsFast && selectedCodexSpeed === 'Fast') {
 setSelectedCodexSpeed('Standard');
 }
+if (!nextModel.supportsClaudeExtra && selectedClaudeEffort === 'Extra') {
+setSelectedClaudeEffort('High');
+}
+if (nextModel.thinkingRequired) {
+setSelectedClaudeThinking(true);
+}
 
 if (currentProvider !== nextModel.provider && activeConvoIdRef.current) {
 const newId = `temp_${selectedProjectRef.current}_${Math.random().toString(36).substring(2, 11)}`;
 updateActiveConversation(newId, selectedProjectRef.current, nextModel.provider);
 setQueuedPromptList([]);
 updateMessages([]);
-showToast(`Started a new ${nextModel.provider === 'codex' ? 'Codex' : 'KookAI'} conversation`);
+const providerLabel = nextModel.provider === 'codex' ? 'Codex' : (nextModel.provider === 'claude' ? 'Claude' : 'KookAI');
+showToast(`Started a new ${providerLabel} conversation`);
 }
 
 setSelectedModel(modelName);
@@ -1008,6 +1056,8 @@ selectedProjectRef.current = selectedProject;
         savedFontSize,
         savedCodexEffort,
         savedCodexSpeed,
+        savedClaudeEffort,
+        savedClaudeThinking,
       ] = await Promise.all([
         SecureStore.getItemAsync(PREFERENCE_KEYS.model),
         SecureStore.getItemAsync(PREFERENCE_KEYS.target),
@@ -1016,6 +1066,8 @@ selectedProjectRef.current = selectedProject;
         SecureStore.getItemAsync(PREFERENCE_KEYS.fontSize),
         SecureStore.getItemAsync(PREFERENCE_KEYS.codexEffort),
         SecureStore.getItemAsync(PREFERENCE_KEYS.codexSpeed),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.claudeEffort),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.claudeThinking),
       ]);
 
       const effectiveModel = savedModel && modelsList.some((model) => model.value === savedModel)
@@ -1035,6 +1087,15 @@ selectedProjectRef.current = selectedProject;
         && getCodexSpeeds(effectiveModel).some((item) => item.value === savedCodexSpeed)
       ) {
         setSelectedCodexSpeed(savedCodexSpeed as CodexSpeed);
+      }
+      if (
+        savedClaudeEffort
+        && getClaudeEfforts(effectiveModel).some((item) => item.value === savedClaudeEffort)
+      ) {
+        setSelectedClaudeEffort(savedClaudeEffort as ClaudeEffort);
+      }
+      if (savedClaudeThinking === 'true' || savedClaudeThinking === 'false') {
+        setSelectedClaudeThinking(savedClaudeThinking === 'true');
       }
       if (savedTarget && targetsList.some((target) => target.value === savedTarget)) {
         setSelectedTarget(savedTarget);
@@ -1191,6 +1252,8 @@ const openSettingsModal = () => {
 setDraftSettingsModel(selectedModel);
 setDraftSettingsCodexEffort(selectedCodexEffort);
 setDraftSettingsCodexSpeed(selectedCodexSpeed);
+setDraftSettingsClaudeEffort(selectedClaudeEffort);
+setDraftSettingsClaudeThinking(selectedClaudeThinking);
 setDraftSettingsTarget(selectedTarget);
 setDraftSettingsSpeechLang(selectedSpeechLang);
 setDraftSettingsThemeMode(selectedThemeMode);
@@ -1208,8 +1271,14 @@ const nextEffort = draftModelOption?.supportsUltra || draftSettingsCodexEffort !
 const nextSpeed = draftModelOption?.supportsFast || draftSettingsCodexSpeed !== 'Fast'
   ? draftSettingsCodexSpeed
   : 'Standard';
+const nextClaudeEffort = draftModelOption?.supportsClaudeExtra || draftSettingsClaudeEffort !== 'Extra'
+  ? draftSettingsClaudeEffort
+  : 'High';
+const nextClaudeThinking = draftModelOption?.thinkingRequired ? true : draftSettingsClaudeThinking;
 setSelectedCodexEffort(nextEffort);
 setSelectedCodexSpeed(nextSpeed);
+setSelectedClaudeEffort(nextClaudeEffort);
+setSelectedClaudeThinking(nextClaudeThinking);
 setSelectedTarget(draftSettingsTarget);
 setSelectedSpeechLang(draftSettingsSpeechLang);
 setSelectedThemeMode(draftSettingsThemeMode);
@@ -1220,6 +1289,8 @@ await Promise.all([
 SecureStore.setItemAsync(PREFERENCE_KEYS.model, draftSettingsModel),
 SecureStore.setItemAsync(PREFERENCE_KEYS.codexEffort, nextEffort),
 SecureStore.setItemAsync(PREFERENCE_KEYS.codexSpeed, nextSpeed),
+SecureStore.setItemAsync(PREFERENCE_KEYS.claudeEffort, nextClaudeEffort),
+SecureStore.setItemAsync(PREFERENCE_KEYS.claudeThinking, String(nextClaudeThinking)),
 SecureStore.setItemAsync(PREFERENCE_KEYS.target, draftSettingsTarget),
 SecureStore.setItemAsync(PREFERENCE_KEYS.speechLang, draftSettingsSpeechLang),
 SecureStore.setItemAsync(PREFERENCE_KEYS.themeMode, draftSettingsThemeMode),
@@ -1535,7 +1606,8 @@ setLoadingConvList(false);
 const selectConversation = async (cid: string, projectName?: string) => {
 const selectedConversation = conversations.find((convo) => convo.id === cid);
 const conversationProject = projectName || selectedConversation?.project;
-const conversationProvider = selectedConversation?.provider || (cid.startsWith('codex_') ? 'codex' : 'agy');
+const conversationProvider = selectedConversation?.provider
+  || (cid.startsWith('codex_') ? 'codex' : (cid.startsWith('claude_') ? 'claude' : 'agy'));
 if (conversationProject) {
 setSelectedProject(conversationProject);
 selectedProjectRef.current = conversationProject;
@@ -1549,7 +1621,9 @@ setLoadingState(true);
     try {
 const data = await callHostApi(`/api/conversation/${cid}`);
 const resolvedProject = data.project || conversationProject;
-const resolvedProvider: AgentProvider = data.provider === 'codex' ? 'codex' : conversationProvider;
+const resolvedProvider: AgentProvider = ['codex', 'claude'].includes(data.provider)
+  ? data.provider
+  : conversationProvider;
 if (resolvedProject) {
 setSelectedProject(resolvedProject);
 selectedProjectRef.current = resolvedProject;
@@ -1564,6 +1638,15 @@ if (getCodexSpeeds(data.model).some((item) => item.value === data.speed)) {
 setSelectedCodexSpeed(data.speed);
 }
 } else if (resolvedProvider === 'agy' && isCodexModel(selectedModel)) {
+setSelectedModel("Gemini 3.5 Flash (High)");
+}
+if (resolvedProvider === 'claude' && data.model && isClaudeModel(data.model)) {
+setSelectedModel(data.model);
+if (getClaudeEfforts(data.model).some((item) => item.value === data.effort)) {
+setSelectedClaudeEffort(data.effort);
+}
+setSelectedClaudeThinking(data.thinking !== false);
+} else if (resolvedProvider === 'agy' && isClaudeModel(selectedModel)) {
 setSelectedModel("Gemini 3.5 Flash (High)");
 }
 pendingConversationScrollRef.current = true;
@@ -1760,15 +1843,17 @@ setInputText('');
 }
 
 const conversationId = activeConvoIdRef.current || ensureActiveConversationForContext();
+const queuedProvider = getModelOption(selectedModel)?.provider || 'agy';
 const nextQueue = [
 ...queuedPromptsRef.current,
 {
 id: `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
 content: userMsg,
 model: selectedModel,
-provider: getModelOption(selectedModel)?.provider || 'agy',
-effort: selectedCodexEffort,
+provider: queuedProvider,
+effort: queuedProvider === 'claude' ? selectedClaudeEffort : selectedCodexEffort,
 speed: selectedCodexSpeed,
+thinking: selectedClaudeThinking,
 target: selectedTarget,
 project: selectedProjectRef.current,
 conversationId,
@@ -1802,6 +1887,7 @@ model: nextPrompt.model,
 provider: nextPrompt.provider,
 effort: nextPrompt.effort,
 speed: nextPrompt.speed,
+thinking: nextPrompt.thinking,
 target: nextPrompt.target,
 project: nextPrompt.project,
 conversationId: nextPrompt.conversationId,
@@ -1830,8 +1916,10 @@ allowQueue: false,
 
     const requestModel = options?.model || selectedModel;
     const requestProvider = options?.provider || getModelOption(requestModel)?.provider || 'agy';
-    const requestEffort = options?.effort || selectedCodexEffort;
+    const requestEffort = options?.effort
+      || (requestProvider === 'claude' ? selectedClaudeEffort : selectedCodexEffort);
     const requestSpeed = options?.speed || selectedCodexSpeed;
+    const requestThinking = options?.thinking ?? selectedClaudeThinking;
     const requestTarget = options?.target || selectedTarget;
     const requestProject = options?.project || selectedProjectRef.current;
 
@@ -1885,6 +1973,7 @@ allowQueue: false,
           provider: requestProvider,
           effort: requestEffort,
           speed: requestSpeed,
+          thinking: requestThinking,
           workspace: requestProject,
           target: requestTarget,
           conversation_id: convoId
@@ -2523,6 +2612,7 @@ allowQueue: false,
               <Text style={[styles.queuedPromptMeta, { color: theme.textMuted }]} numberOfLines={1}>
                 {item.model}
                 {item.provider === 'codex' ? ` · ${item.effort} · ${item.speed}` : ''}
+                {item.provider === 'claude' ? ` · ${item.effort} · Thinking ${item.thinking ? 'On' : 'Off'}` : ''}
                 {` · ${item.target}`}
               </Text>
             </View>
@@ -2665,24 +2755,52 @@ allowQueue: false,
                     </TouchableOpacity>
                   </View>
                 </View>
-                {isCodexModel(selectedModel) && (
+                {(isCodexModel(selectedModel) || isClaudeModel(selectedModel)) && (
                   <View style={styles.codexOptionsRow}>
-                    <TouchableOpacity
-                      style={[styles.codexOptionBtn, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}
-                      onPress={() => setIsEffortModalOpen(true)}
-                      disabled={isPromptDisabled}
-                    >
-                      <Text style={[styles.codexOptionLabel, { color: theme.textMuted }]}>Effort</Text>
-                      <Text style={[styles.codexOptionValue, { color: theme.textPrimary }]}>{selectedCodexEffort}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.codexOptionBtn, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}
-                      onPress={() => setIsSpeedModalOpen(true)}
-                      disabled={isPromptDisabled}
-                    >
-                      <Text style={[styles.codexOptionLabel, { color: theme.textMuted }]}>Speed</Text>
-                      <Text style={[styles.codexOptionValue, { color: theme.textPrimary }]}>{selectedCodexSpeed}</Text>
-                    </TouchableOpacity>
+                    {(isCodexModel(selectedModel) || getModelOption(selectedModel)?.supportsClaudeEffort) && (
+                      <TouchableOpacity
+                        style={[styles.codexOptionBtn, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}
+                        onPress={() => setIsEffortModalOpen(true)}
+                        disabled={isPromptDisabled}
+                      >
+                        <Text style={[styles.codexOptionLabel, { color: theme.textMuted }]}>Effort</Text>
+                        <Text style={[styles.codexOptionValue, { color: theme.textPrimary }]}>
+                          {isClaudeModel(selectedModel) ? selectedClaudeEffort : selectedCodexEffort}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    {isCodexModel(selectedModel) ? (
+                      <TouchableOpacity
+                        style={[styles.codexOptionBtn, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}
+                        onPress={() => setIsSpeedModalOpen(true)}
+                        disabled={isPromptDisabled}
+                      >
+                        <Text style={[styles.codexOptionLabel, { color: theme.textMuted }]}>Speed</Text>
+                        <Text style={[styles.codexOptionValue, { color: theme.textPrimary }]}>{selectedCodexSpeed}</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <View
+                        style={[
+                          styles.codexOptionBtn,
+                          styles.claudeThinkingOption,
+                          { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor },
+                        ]}
+                      >
+                        <View>
+                          <Text style={[styles.codexOptionLabel, { color: theme.textMuted }]}>Thinking</Text>
+                          <Text style={[styles.codexOptionValue, { color: theme.textPrimary }]}>
+                            {selectedClaudeThinking ? 'On' : 'Off'}
+                          </Text>
+                        </View>
+                        <Switch
+                          value={selectedClaudeThinking}
+                          onValueChange={setSelectedClaudeThinking}
+                          disabled={isPromptDisabled || Boolean(getModelOption(selectedModel)?.thinkingRequired)}
+                          trackColor={{ false: theme.borderColor, true: theme.accent }}
+                          thumbColor="#ffffff"
+                        />
+                      </View>
+                    )}
                   </View>
                 )}
               </>
@@ -2867,26 +2985,35 @@ allowQueue: false,
         </View>
       </Modal>
 
-      {/* Codex effort picker */}
+      {/* Codex / Claude effort picker */}
       <Modal visible={isEffortModalOpen} transparent animationType="slide" onRequestClose={() => setIsEffortModalOpen(false)}>
         <View style={styles.modalOverlay}>
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsEffortModalOpen(false)} />
           <View style={[styles.bottomSheet, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
             <View style={[styles.bottomSheetHeader, { borderBottomColor: theme.borderColor }]}>
-              <Text style={[styles.bottomSheetTitle, { color: theme.textPrimary }]}>Codex Effort</Text>
+              <Text style={[styles.bottomSheetTitle, { color: theme.textPrimary }]}>
+                {isClaudeModel(selectedModel) ? 'Claude Effort' : 'Codex Effort'}
+              </Text>
               <TouchableOpacity onPress={() => setIsEffortModalOpen(false)} style={styles.closeModalX}>
                 <Text style={{ color: theme.textSecondary, fontSize: 18 }}>✕</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.bottomSheetContent}>
-              {getCodexEfforts(selectedModel).map((item) => {
-                const isActive = selectedCodexEffort === item.value;
+              {(isClaudeModel(selectedModel) ? getClaudeEfforts(selectedModel) : getCodexEfforts(selectedModel)).map((item) => {
+                const isClaudeEffort = isClaudeModel(selectedModel);
+                const isActive = isClaudeEffort
+                  ? selectedClaudeEffort === item.value
+                  : selectedCodexEffort === item.value;
                 return (
                   <TouchableOpacity
                     key={item.value}
                     style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
                     onPress={() => {
-                      setSelectedCodexEffort(item.value);
+                      if (isClaudeEffort) {
+                        setSelectedClaudeEffort(item.value as ClaudeEffort);
+                      } else {
+                        setSelectedCodexEffort(item.value as CodexEffort);
+                      }
                       setIsEffortModalOpen(false);
                     }}
                   >
@@ -3128,6 +3255,56 @@ allowQueue: false,
                         </TouchableOpacity>
                       );
                     })}
+                  </>
+                )}
+
+                {isClaudeModel(draftSettingsModel) && (
+                  <>
+                    {getModelOption(draftSettingsModel)?.supportsClaudeEffort && (
+                      <>
+                        <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>Claude Effort</Text>
+                        {getClaudeEfforts(draftSettingsModel).map((item) => {
+                          const isActive = draftSettingsClaudeEffort === item.value;
+                          return (
+                            <TouchableOpacity
+                              key={item.value}
+                              style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
+                              onPress={() => setDraftSettingsClaudeEffort(item.value)}
+                            >
+                              <View style={styles.modelInfo}>
+                                <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{item.value}</Text>
+                                <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>{item.desc}</Text>
+                              </View>
+                              {isActive && <Text style={{ color: theme.accent, fontSize: 16, fontWeight: '700' }}>✓</Text>}
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </>
+                    )}
+
+                    <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>Claude Thinking</Text>
+                    <View
+                      style={[
+                        styles.settingsToggleRow,
+                        { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor },
+                      ]}
+                    >
+                      <View style={styles.modelInfo}>
+                        <Text style={[styles.modelName, { color: theme.textPrimary }]}>Thinking</Text>
+                        <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>
+                          Can think for more complex tasks
+                        </Text>
+                      </View>
+                      <Switch
+                        value={getModelOption(draftSettingsModel)?.thinkingRequired
+                          ? true
+                          : draftSettingsClaudeThinking}
+                        onValueChange={setDraftSettingsClaudeThinking}
+                        disabled={Boolean(getModelOption(draftSettingsModel)?.thinkingRequired)}
+                        trackColor={{ false: theme.borderColor, true: theme.accent }}
+                        thumbColor="#ffffff"
+                      />
+                    </View>
                   </>
                 )}
 
@@ -4047,6 +4224,22 @@ queuedPromptBubble: {
     fontSize: 12,
     fontWeight: '600',
     marginTop: 2,
+  },
+  claudeThinkingOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  settingsToggleRow: {
+    minHeight: 66,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
   },
   sendBtnRound: {
     width: 28,

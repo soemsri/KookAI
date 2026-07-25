@@ -18,6 +18,8 @@ import queue
 from functools import lru_cache
 from typing import Any, Optional
 
+from claude_backend import is_claude_model
+
 
 CODEX_MODEL_MAP = {
     "5.6 Sol": "gpt-5.6-sol",
@@ -83,15 +85,23 @@ def is_codex_model(model_name: str) -> bool:
 
 def resolve_provider(provider: Optional[str], model_name: str) -> str:
     normalized = (provider or "").strip().lower()
-    if normalized and normalized not in {"agy", "codex"}:
+    if normalized and normalized not in {"agy", "codex", "claude"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
     if normalized == "codex" and not is_codex_model(model_name):
         raise ValueError(f"Model {model_name} is not a Codex model")
+    if normalized == "claude" and not is_claude_model(model_name):
+        raise ValueError(f"Model {model_name} is not a Claude CLI model")
     if normalized == "agy" and is_codex_model(model_name):
         raise ValueError(f"Model {model_name} must use the Codex provider")
+    if normalized == "agy" and is_claude_model(model_name):
+        raise ValueError(f"Model {model_name} must use the Claude provider")
     if normalized:
         return normalized
-    return "codex" if is_codex_model(model_name) else "agy"
+    if is_codex_model(model_name):
+        return "codex"
+    if is_claude_model(model_name):
+        return "claude"
+    return "agy"
 
 
 def codex_model_slug(model_name: str) -> str:
