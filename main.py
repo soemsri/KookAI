@@ -5,6 +5,7 @@ import logging
 import glob
 import re
 import json
+import base64
 import uuid
 import queue
 import urllib.parse
@@ -13,10 +14,8 @@ import datetime
 from collections import deque
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
-from google.auth.transport import requests as google_auth_requests
-from google.oauth2 import id_token as google_id_token
-from pydantic import BaseModel, ConfigDict
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from pydantic import BaseModel
 from typing import List, Optional
 from codex_backend import (
     CODEX_CONVERSATION_PREFIX,
@@ -92,6 +91,93 @@ AGY_CLI_MAX_CAPTURE_CHARS = int(os.environ.get("AGY_CLI_MAX_CAPTURE_CHARS", "200
 AGY_RELOAD = os.environ.get("AGY_RELOAD", "0").lower() in ("1", "true", "yes", "on")
 
 app = FastAPI(title="KookAI Workspace Chat Client")
+
+
+TUNNEL_ALLOWED_EXACT_PATHS = {
+    "/api/pair",
+    "/api/projects",
+    "/api/chat-history",
+    "/api/chat",
+    "/api/chat-tasks",
+    "/api/upload-media",
+    "/api/usage-limits",
+    "/api/media",
+}
+
+TUNNEL_ALLOWED_PREFIXES = (
+    "/api/conversation/",
+    "/api/chat-tasks/",
+)
+
+
+def is_tunnel_host(host: str) -> bool:
+    return "trycloudflare.com" in (host or "").lower()
+
+
+def is_tunnel_allowed_path(path: str) -> bool:
+    if path in TUNNEL_ALLOWED_EXACT_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in TUNNEL_ALLOWED_PREFIXES)
+
+
+_tunnel_block_page_cache = None
+
+
+def get_tunnel_block_page() -> str:
+    """Return a silent branded page for blocked tunnel web requests."""
+    global _tunnel_block_page_cache
+    if _tunnel_block_page_cache is not None:
+        return _tunnel_block_page_cache
+
+    icon_data_uri = ""
+    icon_path = os.path.join(WORKSPACE_DIR, "static", "kookai-icon.png")
+    try:
+        with open(icon_path, "rb") as f:
+            icon_data_uri = "data:image/png;base64," + base64.b64encode(f.read()).decode("ascii")
+    except Exception as e:
+        logging.warning(f"Failed to load tunnel block icon: {e}")
+
+    _tunnel_block_page_cache = f'''<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <style>
+    html, body {{
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      background: #0f172a;
+    }}
+    body {{
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }}
+    img {{
+      width: 96px;
+      height: 96px;
+      object-fit: contain;
+      opacity: 0.92;
+    }}
+  </style>
+</head>
+<body>{f'<img src="{icon_data_uri}" alt="">' if icon_data_uri else ''}</body>
+</html>'''
+    return _tunnel_block_page_cache
+
+
+@app.middleware("http")
+async def block_web_client_from_tunnel(request: Request, call_next):
+    """Expose Cloudflare Quick Tunnel to paired mobile API calls only."""
+    host = request.headers.get("host", "")
+    if is_tunnel_host(host) and not is_tunnel_allowed_path(request.url.path):
+        response = HTMLResponse(content=get_tunnel_block_page(), status_code=404)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+    return await call_next(request)
 
 # Ensure static directory exists
 os.makedirs("static", exist_ok=True)
@@ -280,6 +366,7 @@ def verify_authorization(request: Request):
     client_host = request.client.host if request.client else ""
     if client_host in ["127.0.0.1", "localhost", "::1"]:
         return True
+
     
     raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
 
@@ -329,7 +416,7 @@ async def get_pairing_code():
     except Exception as e:
         logging.error(f"Failed to register pairing PIN: {e}")
         
-    return JSONResponse(content={"pin": pin, "host_id": host_id, "pairing_url": host_url})
+    return JSONResponse(content={"pin": pin, "host_id": host_id, "pairing_url": host_url, "pairing_deep_link": f"kookai://pair?pin={pin}"})
 
 @app.post("/api/pair")
 async def pair_device(req: PairRequest):
@@ -356,216 +443,6 @@ async def pair_device(req: PairRequest):
         "token": token,
         "host_id": get_or_create_host_id()
     })
-
-# --- Google Auth Configuration & Session Management ---
-DEFAULT_ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "rangsarn@gmail.com")
-
-def get_auth_file_path(filename):
-    local_dir = os.path.join(WORKSPACE_DIR, ".data")
-    primary = os.path.join(local_dir, filename)
-    fallback = os.path.join(ANTIGRAVITY_DATA_DIR, filename)
-    return primary, fallback
-
-def load_google_auth_config():
-    default_config = {
-        "client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
-        "admin_email": DEFAULT_ADMIN_EMAIL
-    }
-    primary, fallback = get_auth_file_path("google_auth_config.json")
-    for path in [primary, fallback]:
-        if os.path.exists(path):
-            try:
-                with open(path, "r") as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        if not data.get("admin_email"):
-                            data["admin_email"] = default_config["admin_email"]
-                        if not data.get("client_id"):
-                            data["client_id"] = default_config["client_id"]
-                        return data
-            except Exception as e:
-                logging.error(f"Failed to load google auth config from {path}: {e}")
-    return default_config
-
-def is_admin_email(email: Optional[str]) -> bool:
-    if not email:
-        return False
-    config = load_google_auth_config()
-    admin_emails_str = config.get("admin_email", DEFAULT_ADMIN_EMAIL)
-    if not admin_emails_str:
-        return False
-    allowed_emails = [e.strip().lower() for e in admin_emails_str.split(",") if e.strip()]
-    return email.strip().lower() in allowed_emails
-
-def save_google_auth_config(config):
-    primary, fallback = get_auth_file_path("google_auth_config.json")
-    for path in [primary, fallback]:
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                json.dump(config, f, indent=2)
-            return
-        except Exception as e:
-            logging.warning(f"Failed to save google auth config to {path}: {e}")
-
-def load_google_auth_session():
-    primary, fallback = get_auth_file_path("google_auth_session.json")
-    for path in [primary, fallback]:
-        if os.path.exists(path):
-            try:
-                with open(path, "r") as f:
-                    data = json.load(f)
-                    if data and isinstance(data, dict) and data.get("id"):
-                        data["is_admin"] = is_admin_email(data.get("email"))
-                        data["role"] = "admin" if data["is_admin"] else "user"
-                        return data
-            except Exception as e:
-                pass
-    return None
-
-def save_google_auth_session(user_info):
-    primary, fallback = get_auth_file_path("google_auth_session.json")
-    for path in [primary, fallback]:
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                if user_info is None:
-                    f.write("{}")
-                else:
-                    json.dump(user_info, f, indent=2)
-            return
-        except Exception as e:
-            logging.warning(f"Failed to save google auth session to {path}: {e}")
-
-class GoogleAuthConfigRequest(BaseModel):
-    client_id: Optional[str] = None
-    admin_email: Optional[str] = None
-
-class AdminEmailRequest(BaseModel):
-    admin_email: str
-
-class GoogleAuthVerifyRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    credential: str
-
-@app.get("/api/auth/google/config")
-async def get_google_auth_config():
-    config = load_google_auth_config()
-    session = load_google_auth_session()
-    return JSONResponse(content={
-        "client_id": config.get("client_id", ""),
-        "admin_email": config.get("admin_email", DEFAULT_ADMIN_EMAIL),
-        "user": session
-    })
-
-@app.post("/api/auth/google/config")
-async def update_google_auth_config(req: GoogleAuthConfigRequest):
-    config = load_google_auth_config()
-    if req.client_id is not None:
-        config["client_id"] = req.client_id.strip()
-    if req.admin_email is not None:
-        config["admin_email"] = req.admin_email.strip()
-    save_google_auth_config(config)
-    session = load_google_auth_session()
-    return JSONResponse(content={
-        "status": "success",
-        "client_id": config.get("client_id", ""),
-        "admin_email": config.get("admin_email", ""),
-        "user": session
-    })
-
-@app.get("/api/admin/email")
-async def get_admin_email():
-    config = load_google_auth_config()
-    return JSONResponse(content={
-        "admin_email": config.get("admin_email", DEFAULT_ADMIN_EMAIL)
-    })
-
-@app.post("/api/admin/email")
-async def update_admin_email(req: AdminEmailRequest):
-    config = load_google_auth_config()
-    config["admin_email"] = req.admin_email.strip()
-    save_google_auth_config(config)
-    session = load_google_auth_session()
-    return JSONResponse(content={
-        "status": "success",
-        "admin_email": config["admin_email"],
-        "user": session
-    })
-
-@app.get("/api/admin/status")
-async def get_admin_status():
-    config = load_google_auth_config()
-    session = load_google_auth_session()
-    admin_email = config.get("admin_email", DEFAULT_ADMIN_EMAIL)
-    is_admin = session.get("is_admin", False) if session else False
-    return JSONResponse(content={
-        "admin_email": admin_email,
-        "is_admin": is_admin,
-        "role": "admin" if is_admin else "user",
-        "user": session
-    })
-
-@app.post("/api/auth/google/verify")
-async def verify_google_auth(req: GoogleAuthVerifyRequest):
-    credential = req.credential.strip()
-    client_id = load_google_auth_config().get("client_id", "").strip()
-    if not credential:
-        raise HTTPException(status_code=400, detail="Google credential is required")
-    if not client_id:
-        raise HTTPException(status_code=503, detail="Google Sign-In is not configured")
-
-    try:
-        token_data = google_id_token.verify_oauth2_token(
-            credential,
-            google_auth_requests.Request(),
-            client_id,
-        )
-    except Exception as e:
-        logging.warning(f"Google ID token verification failed: {e}")
-        raise HTTPException(status_code=401, detail="Invalid Google credential")
-
-    now = int(datetime.datetime.now().timestamp())
-    issuer = token_data.get("iss")
-    audience = token_data.get("aud")
-    email_verified = str(token_data.get("email_verified", "")).lower() == "true"
-    if (
-        audience != client_id
-        or issuer not in ("accounts.google.com", "https://accounts.google.com")
-        or not token_data.get("sub")
-        or not token_data.get("email")
-        or not email_verified
-    ):
-        raise HTTPException(status_code=401, detail="Invalid Google credential claims")
-
-    user_info = {
-        "id": token_data["sub"],
-        "email": token_data["email"],
-        "name": token_data.get("name", token_data["email"]),
-        "picture": token_data.get("picture", ""),
-        "email_verified": True,
-        "authenticated_at": now
-    }
-
-    user_info["is_admin"] = is_admin_email(user_info.get("email"))
-    user_info["role"] = "admin" if user_info["is_admin"] else "user"
-
-    save_google_auth_session(user_info)
-    return JSONResponse(content={
-        "status": "success",
-        "user": user_info
-    })
-
-@app.get("/api/auth/me")
-async def get_current_user():
-    session = load_google_auth_session()
-    return JSONResponse(content={"user": session})
-
-@app.post("/api/auth/logout")
-async def logout_user():
-    save_google_auth_session(None)
-    return JSONResponse(content={"status": "success"})
 
 class ChatRequest(BaseModel):
     message: str

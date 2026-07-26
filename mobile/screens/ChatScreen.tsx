@@ -221,9 +221,11 @@ const getUsageBucketForModel = (modelName: string): {
 };
 
 const targetsList = [
-  { value: "Sandbox", desc: "Execute in a secure local sandbox (recommended)" },
-  { value: "Real", desc: "Execute directly on your host machine" }
+  { value: "Sandbox", desc: "Execute in a secure local sandbox" },
+  { value: "Real", desc: "Execute directly on your host machine (default)" }
 ];
+
+const DEFAULT_EXECUTION_TARGET = "Real";
 
 const speechLanguageList = [
   { value: "th-TH", desc: "Thai" },
@@ -798,7 +800,7 @@ const [selectedCodexEffort, setSelectedCodexEffort] = useState<CodexEffort>("Med
 const [selectedCodexSpeed, setSelectedCodexSpeed] = useState<CodexSpeed>("Standard");
 const [selectedClaudeEffort, setSelectedClaudeEffort] = useState<ClaudeEffort>("Medium");
 const [selectedClaudeThinking, setSelectedClaudeThinking] = useState(true);
-const [selectedTarget, setSelectedTarget] = useState("Sandbox");
+const [selectedTarget, setSelectedTarget] = useState(DEFAULT_EXECUTION_TARGET);
 const [selectedSpeechLang, setSelectedSpeechLang] = useState("th-TH");
 const [selectedThemeMode, setSelectedThemeMode] = useState<ThemeMode>("system");
 const [selectedFontSize, setSelectedFontSize] = useState<number>(14);

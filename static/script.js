@@ -293,60 +293,124 @@ document.addEventListener("DOMContentLoaded", () => {
     applyThemeMode();
   }
 
-  function initApp() {
-    loadAppPreferences();
+  function isLocalWebOrigin() {
+    return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  }
+
+  function canUseProtectedWorkspaceApis() {
+    return isLocalWebOrigin();
+  }
+
+  function handleProtectedApiUnauthorized() {
+    console.warn("Workspace API access is localhost-only for the web client.");
+  }
+
+  function loadProtectedWorkspaceData() {
     fetchUsageLimits();
     refreshUsageDisplay();
-    startNewConversation(); // Generate initial UUID
     loadProjectsAndConversations();
     fetchWorkspaceFiles();
-    initGoogleAuth();
+  }
+
+  async function initApp() {
+    loadAppPreferences();
+    initLocalAccessUI();
+    startNewConversation(); // Generate initial UUID
+    if (canUseProtectedWorkspaceApis()) {
+      loadProtectedWorkspaceData();
+    }
   }
 
   // --- Fetch Data ---
-  function fetchWorkspaceFiles() {
-    fetch("/api/files")
-      .then(res => res.json())
-      .then(data => {
-        workspaceFiles = data.files || [];
-      })
-      .catch(err => console.error("Error loading files:", err));
+  async function fetchWorkspaceFiles() {
+    if (!canUseProtectedWorkspaceApis()) return;
+    try {
+      const res = await fetch("/api/files");
+      if (res.status === 401) {
+        workspaceFiles = [];
+        handleProtectedApiUnauthorized();
+        return;
+      }
+      if (!res.ok) throw new Error(`Failed to load files (${res.status})`);
+      const data = await res.json();
+      workspaceFiles = Array.isArray(data.files) ? data.files : [];
+    } catch (err) {
+      console.error("Error loading files:", err);
+      workspaceFiles = [];
+    }
   }
 
-  function loadProjectsAndConversations() {
-    // 1. Load Projects List
-    fetch("/api/projects")
-      .then(res => res.json())
-      .then(projData => {
-        projectsList = projData.projects;
-        if (projData.workspace_dir) {
-          const diagWorkspace = document.getElementById("diagWorkspace");
-          if (diagWorkspace) {
-            diagWorkspace.textContent = projData.workspace_dir;
-          }
-        }
-
-        // 2. Load Conversations List
-        return fetch("/api/conversations");
-      })
-      .then(res => res.json())
-      .then(convoData => {
-        conversationsList = convoData.conversations;
-
+  async function loadProjectsAndConversations() {
+    if (!canUseProtectedWorkspaceApis()) {
+      projectsList = [];
+      conversationsList = [];
+      renderProjectsTree();
+      renderWorkspaceDropdown();
+      return;
+    }
+    try {
+      const projRes = await fetch("/api/projects");
+      if (projRes.status === 401) {
+        projectsList = [];
+        conversationsList = [];
+        handleProtectedApiUnauthorized();
         renderProjectsTree();
         renderWorkspaceDropdown();
-      })
-      .catch(err => console.error("Error loading workspace metadata:", err));
+        return;
+      }
+      if (!projRes.ok) throw new Error(`Failed to load projects (${projRes.status})`);
+      const projData = await projRes.json();
+      projectsList = Array.isArray(projData.projects) ? projData.projects : [];
+      if (projData.workspace_dir) {
+        const diagWorkspace = document.getElementById("diagWorkspace");
+        if (diagWorkspace) {
+          diagWorkspace.textContent = projData.workspace_dir;
+        }
+      }
+
+      const convoRes = await fetch("/api/conversations");
+      if (convoRes.status === 401) {
+        conversationsList = [];
+        handleProtectedApiUnauthorized();
+        renderProjectsTree();
+        renderWorkspaceDropdown();
+        return;
+      }
+      if (!convoRes.ok) throw new Error(`Failed to load conversations (${convoRes.status})`);
+      const convoData = await convoRes.json();
+      conversationsList = Array.isArray(convoData.conversations) ? convoData.conversations : [];
+
+      renderProjectsTree();
+      renderWorkspaceDropdown();
+    } catch (err) {
+      console.error("Error loading workspace metadata:", err);
+      projectsList = Array.isArray(projectsList) ? projectsList : [];
+      conversationsList = Array.isArray(conversationsList) ? conversationsList : [];
+      renderProjectsTree();
+      renderWorkspaceDropdown();
+    }
   }
 
   // --- Render Projects Sidebar ---
   function renderProjectsTree() {
     const treeContainer = document.getElementById("projectsTree");
+    if (!treeContainer) return;
     treeContainer.innerHTML = "";
+    const projects = Array.isArray(projectsList) ? projectsList : [];
+    const conversations = Array.isArray(conversationsList) ? conversationsList : [];
+
+    if (projects.length === 0) {
+      treeContainer.innerHTML = `
+        <div style="padding: 16px; color: var(--text-muted); font-size: 13px; line-height: 1.45;">
+          ${canUseProtectedWorkspaceApis() ? "No workspaces found." : "Open http://localhost:8080 to load workspaces."}
+        </div>
+      `;
+      return;
+    }
 
     // Group conversations by project
     const convoByProject = {};
-    conversationsList.forEach(c => {
+    conversations.forEach(c => {
       if (!convoByProject[c.project]) {
         convoByProject[c.project] = [];
       }
@@ -354,7 +418,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Populate each project node
-    projectsList.forEach(project => {
+    projects.forEach(project => {
       const isAgy = project === "agy";
       const isVO = project === "VirtualOffice";
       const projectConversations = convoByProject[project] || [];
@@ -450,8 +514,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Render Top Picker Workspace list ---
   function renderWorkspaceDropdown() {
+    if (!workspaceDropdown) return;
     workspaceDropdown.innerHTML = `<div class="dropdown-header">Workspaces</div>`;
-    projectsList.forEach(project => {
+    const projects = Array.isArray(projectsList) ? projectsList : [];
+    if (projects.length === 0) {
+      const item = document.createElement("div");
+      item.className = "dropdown-item disabled";
+      item.innerHTML = `<span>${canUseProtectedWorkspaceApis() ? "No workspaces found" : "Sign in to load workspaces"}</span>`;
+      workspaceDropdown.appendChild(item);
+      return;
+    }
+    projects.forEach(project => {
       const item = document.createElement("div");
       item.className = `dropdown-item ${project === currentWorkspace ? 'active' : ''}`;
       item.setAttribute("data-value", project);
@@ -465,6 +538,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Load Conversation ---
   function loadConversation(cid, project) {
+    if (!canUseProtectedWorkspaceApis()) {
+      handleProtectedApiUnauthorized();
+      return;
+    }
     autoCloseMobileSidebar();
     activeConversationId = cid;
     currentWorkspace = project;
@@ -586,10 +663,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Render Conversation History Panel (Screenshot 2) ---
   function renderHistoryList(filterQuery = "") {
+    if (!canUseProtectedWorkspaceApis()) {
+      historyList.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--text-muted);">Open http://localhost:8080 to load history.</div>`;
+      handleProtectedApiUnauthorized();
+      return;
+    }
     historyList.innerHTML = "";
 
     fetch("/api/chat-history")
-      .then(res => res.json())
+      .then(res => {
+        if (res.status === 401) {
+          handleProtectedApiUnauthorized();
+          return { conversations: [] };
+        }
+        if (!res.ok) throw new Error(`Failed to load chat history (${res.status})`);
+        return res.json();
+      })
       .then(data => {
         const convos = data.conversations || [];
 
@@ -660,6 +749,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function sendDirectMessage(message) {
+    if (!canUseProtectedWorkspaceApis()) {
+      handleProtectedApiUnauthorized();
+      appendMessage("assistant", "⚠️ Please sign in with Google before sending messages from the Cloudflare URL.");
+      return;
+    }
     if (!welcomeScreen.classList.contains("hidden")) {
       welcomeScreen.classList.add("hidden");
     }
@@ -1278,6 +1372,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   mediaFileInput.addEventListener("change", async () => {
     if (mediaFileInput.files.length === 0) return;
+    if (!canUseProtectedWorkspaceApis()) {
+      handleProtectedApiUnauthorized();
+      alert("Media upload from the web client is localhost-only. Open http://localhost:8080.");
+      mediaFileInput.value = "";
+      return;
+    }
     const file = mediaFileInput.files[0];
 
     try {
@@ -1289,6 +1389,11 @@ document.addEventListener("DOMContentLoaded", () => {
         body: file
       });
       const res = await response.json();
+      if (response.status === 401) {
+        handleProtectedApiUnauthorized();
+        alert("Media upload from the web client is localhost-only. Open http://localhost:8080.");
+        return;
+      }
       if (res.status === "success") {
         // Successfully uploaded! Reload conversation details to show the attachment
         loadConversation(activeConversationId, currentWorkspace);
@@ -1452,29 +1557,7 @@ document.addEventListener("DOMContentLoaded", () => {
       recognition.lang = settingsSpeechLang.value;
     }
 
-    if (settingsGoogleClientId || settingsAdminEmail) {
-      const newClientId = settingsGoogleClientId ? settingsGoogleClientId.value.trim() : googleClientId;
-      const newAdminEmail = settingsAdminEmail ? settingsAdminEmail.value.trim() : adminEmail;
-      
-      if (newClientId !== googleClientId || newAdminEmail !== adminEmail) {
-        googleClientId = newClientId;
-        adminEmail = newAdminEmail;
-        fetch("/api/auth/google/config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ client_id: newClientId, admin_email: newAdminEmail })
-        })
-        .then(res => res.json())
-        .then(data => {
-          if (data.user) {
-            currentUser = data.user;
-            updateGoogleAuthUI();
-          }
-          setupGoogleIdentitySDK();
-        });
-      }
-    }
-
+    
     currentThemeMode = settingsThemeMode.querySelector(".theme-segment.active")?.getAttribute("data-theme-mode") || "system";
     applyThemeMode();
     saveAppPreferences();
@@ -1515,8 +1598,16 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   async function fetchUsageLimits() {
+    if (!canUseProtectedWorkspaceApis()) {
+      handleProtectedApiUnauthorized();
+      return;
+    }
     try {
       const response = await fetch("/api/usage-limits");
+      if (response.status === 401) {
+        handleProtectedApiUnauthorized();
+        return;
+      }
       if (response.ok) {
         usageData = await response.json();
         refreshUsageDisplay();
@@ -1760,12 +1851,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const data = await response.json();
         const pin = data.pin;
-        const pairingBaseUrl = (data.pairing_url || window.location.origin).replace(/\/$/, "");
-
         pairingPinText.textContent = pin;
-        // Generate QR code using the free qrserver API. iPhone Camera opens HTTPS more reliably;
-        // the landing page redirects into the app with kookai://pair?pin=...
-        const pairingLink = `${pairingBaseUrl}/pair.html?pin=${encodeURIComponent(pin)}`;
+        // The QR contains only the mobile deep link. Pairing codes are generated
+        // from localhost and Cloudflare does not serve the web landing page.
+        const pairingLink = data.pairing_deep_link || `kookai://pair?pin=${encodeURIComponent(pin)}`;
         pairingQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(pairingLink)}&size=200x200&color=0f172a`;
       } catch (err) {
         console.error(err);
@@ -1792,11 +1881,7 @@ document.addEventListener("DOMContentLoaded", () => {
       .replace(/'/g, '&#039;');
   }
 
-  // --- Google Auth State & Logic ---
-  let currentUser = null;
-  let googleClientId = "";
-
-  const sidebarGoogleLoginBtn = document.getElementById("sidebarGoogleLoginBtn");
+  // --- Local Access State & Logic ---
   const authLoggedOut = document.getElementById("authLoggedOut");
   const authLoggedIn = document.getElementById("authLoggedIn");
   const userProfileBadge = document.getElementById("userProfileBadge");
@@ -1804,212 +1889,21 @@ document.addEventListener("DOMContentLoaded", () => {
   const userAvatar = document.getElementById("userAvatar");
   const userName = document.getElementById("userName");
   const userEmail = document.getElementById("userEmail");
-  const openAuthSettingsBtn = document.getElementById("openAuthSettingsBtn");
-  const sidebarGoogleLogoutBtn = document.getElementById("sidebarGoogleLogoutBtn");
-
-  const googleAuthModal = document.getElementById("googleAuthModal");
-  const closeGoogleAuthModalBtn = document.getElementById("closeGoogleAuthModalBtn");
-
-  const settingsGoogleClientId = document.getElementById("settingsGoogleClientId");
-  const settingsAdminEmail = document.getElementById("settingsAdminEmail");
   const userRoleBadge = document.getElementById("userRoleBadge");
-  const dropdownAdminBadge = document.getElementById("dropdownAdminBadge");
-  const authStatusCard = document.getElementById("authStatusCard");
-  const authStatusContent = document.getElementById("authStatusContent");
-  const modalGoogleLoginBtn = document.getElementById("modalGoogleLoginBtn");
-  const modalGoogleLogoutBtn = document.getElementById("modalGoogleLogoutBtn");
 
-  let adminEmail = "rangsarn@gmail.com";
-
-  // Fetch Google Auth config & session on startup
-  async function initGoogleAuth() {
-    try {
-      const res = await fetch("/api/auth/google/config");
-      if (res.ok) {
-        const data = await res.json();
-        googleClientId = data.client_id || "";
-        adminEmail = data.admin_email || "rangsarn@gmail.com";
-        if (settingsGoogleClientId) {
-          settingsGoogleClientId.value = googleClientId;
-        }
-        if (settingsAdminEmail) {
-          settingsAdminEmail.value = adminEmail;
-        }
-
-        // Trust only the server-side session created from a verified Google token.
-        // Remove identities cached by the retired Quick Auth flow.
-        localStorage.removeItem("kookai_google_user");
-        const sessionUser = data.user;
-        if (sessionUser) {
-          setGoogleUser(sessionUser);
-        } else {
-          updateGoogleAuthUI();
-        }
-
-        // Initialize official Google Identity Services SDK if Client ID is configured
-        setupGoogleIdentitySDK();
-      }
-    } catch (err) {
-      console.warn("Failed to initialize Google Auth:", err);
-      updateGoogleAuthUI();
+  function initLocalAccessUI() {
+    if (authLoggedOut) authLoggedOut.classList.add("hidden");
+    if (authLoggedIn) authLoggedIn.classList.remove("hidden");
+    if (userName) userName.textContent = "Local Workspace";
+    if (userEmail) userEmail.textContent = "localhost only";
+    if (userRoleBadge) {
+      userRoleBadge.classList.remove("hidden");
+      userRoleBadge.textContent = "Local";
     }
-  }
-
-  function setupGoogleIdentitySDK() {
-    if (window.google && window.google.accounts && window.google.accounts.id && googleClientId) {
-      try {
-        window.google.accounts.id.initialize({
-          client_id: googleClientId,
-          callback: handleGoogleCredentialResponse,
-          auto_select: false
-        });
-
-        const gsiContainer = document.getElementById("gsiButtonContainer");
-        if (gsiContainer) {
-          gsiContainer.innerHTML = "";
-          window.google.accounts.id.renderButton(gsiContainer, {
-            theme: (document.documentElement.dataset.theme === "dark" || currentThemeMode === "dark") ? "filled_blue" : "outline",
-            size: "large",
-            shape: "pill",
-            width: 280
-          });
-        }
-      } catch (e) {
-        console.warn("GSI initialization error:", e);
-      }
+    if (userAvatar) {
+      userAvatar.src = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><rect width='32' height='32' rx='16' fill='%232563eb'/><text x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold' font-size='13'>L</text></svg>";
+      userAvatar.style.display = "block";
     }
-  }
-
-  async function handleGoogleCredentialResponse(response) {
-    if (!response || !response.credential) return;
-    try {
-      const res = await fetch("/api/auth/google/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: response.credential })
-      });
-      const data = await res.json();
-      if (res.ok && data.status === "success" && data.user) {
-        setGoogleUser(data.user);
-        if (googleAuthModal) googleAuthModal.classList.add("hidden");
-      } else {
-        alert("Google Sign-In failed: " + (data.detail || "Invalid token"));
-      }
-    } catch (err) {
-      console.error("Error verifying Google credential:", err);
-      alert("Failed to connect to authentication server.");
-    }
-  }
-
-  function setGoogleUser(userObj) {
-    currentUser = userObj;
-    if (userObj) {
-      localStorage.setItem("kookai_google_user", JSON.stringify(userObj));
-    } else {
-      localStorage.removeItem("kookai_google_user");
-    }
-    updateGoogleAuthUI();
-  }
-
-  function updateGoogleAuthUI() {
-    if (currentUser) {
-      if (authLoggedOut) authLoggedOut.classList.add("hidden");
-      if (authLoggedIn) authLoggedIn.classList.remove("hidden");
-
-      if (userName) userName.textContent = currentUser.name || "Google User";
-      if (userEmail) userEmail.textContent = currentUser.email || "";
-
-      const isAdmin = !!(currentUser && (currentUser.is_admin || currentUser.role === "admin"));
-      if (userRoleBadge) {
-        if (isAdmin) userRoleBadge.classList.remove("hidden");
-        else userRoleBadge.classList.add("hidden");
-      }
-      if (dropdownAdminBadge) {
-        if (isAdmin) dropdownAdminBadge.classList.remove("hidden");
-        else dropdownAdminBadge.classList.add("hidden");
-      }
-
-      if (userAvatar) {
-        if (currentUser.picture) {
-          userAvatar.src = currentUser.picture;
-          userAvatar.style.display = "block";
-        } else {
-          const initial = (currentUser.name || currentUser.email || "G").charAt(0).toUpperCase();
-          const avatarBg = isAdmin ? "%23F59E0B" : "%234285F4";
-          const svgAvatar = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" rx="16" fill="${avatarBg}"/><text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" fill="white" font-family="sans-serif" font-weight="bold" font-size="14">${initial}</text></svg>`;
-          userAvatar.src = svgAvatar;
-          userAvatar.style.display = "block";
-        }
-      }
-
-      if (modalGoogleLoginBtn) modalGoogleLoginBtn.classList.add("hidden");
-      if (modalGoogleLogoutBtn) modalGoogleLogoutBtn.classList.remove("hidden");
-
-      if (authStatusContent) {
-        const roleBadgeHtml = isAdmin
-          ? `<span class="admin-pill" style="margin-top: 4px;">👑 Administrator</span>`
-          : `<span class="badge-verified" style="margin-top: 4px;">✓ Standard User</span>`;
-
-        authStatusContent.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <img src="${userAvatar?.src || ''}" style="width: 40px; height: 40px; border-radius: 50%; border: 2px solid ${isAdmin ? '#f59e0b' : 'var(--accent-color)'};" />
-            <div>
-              <div style="font-weight: 600; font-size: 14px; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
-                ${escapeHtml(currentUser.name || 'Google User')}
-                ${isAdmin ? '<span style="font-size: 11px; color: #f59e0b;">(Admin)</span>' : ''}
-              </div>
-              <div style="font-size: 12px; color: var(--text-muted);">${escapeHtml(currentUser.email || '')}</div>
-              <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
-                ${roleBadgeHtml}
-                <span style="font-size: 11px; color: var(--text-muted);">Admin Email: <b>${escapeHtml(adminEmail)}</b></span>
-              </div>
-            </div>
-          </div>
-        `;
-      }
-
-      // Hide auth modal and show close button for future modal opens (e.g. from settings)
-      if (googleAuthModal) googleAuthModal.classList.add("hidden");
-      if (closeGoogleAuthModalBtn) closeGoogleAuthModalBtn.style.display = "block";
-    } else {
-      if (authLoggedOut) authLoggedOut.classList.remove("hidden");
-      if (authLoggedIn) authLoggedIn.classList.add("hidden");
-      if (userMenuDropdown) userMenuDropdown.classList.add("hidden");
-
-      if (modalGoogleLoginBtn) modalGoogleLoginBtn.classList.remove("hidden");
-      if (modalGoogleLogoutBtn) modalGoogleLogoutBtn.classList.add("hidden");
-
-      if (authStatusContent) {
-        authStatusContent.innerHTML = `
-          <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div>
-              <div style="font-weight: 600; font-size: 13.5px; color: var(--text-primary);">Google Login Required</div>
-              <div style="font-size: 12px; color: var(--text-muted);">Sign in with Google to unlock and access the web workspace.</div>
-            </div>
-            <span style="font-size: 11px; padding: 3px 8px; background: rgba(239, 68, 68, 0.1); color: var(--status-red); border-radius: 12px; font-weight: 500;">Authentication Gate</span>
-          </div>
-        `;
-      }
-
-      // Show mandatory Google Auth login gate overlay on Web frontend
-      setupGoogleIdentitySDK();
-      if (googleAuthModal) googleAuthModal.classList.remove("hidden");
-      if (closeGoogleAuthModalBtn) closeGoogleAuthModalBtn.style.display = "none"; // Hide close button when not logged in
-    }
-  }
-
-  // Open Google Auth Modal
-  function openGoogleAuthModal() {
-    setupGoogleIdentitySDK();
-    if (googleAuthModal) googleAuthModal.classList.remove("hidden");
-    if (closeGoogleAuthModalBtn) closeGoogleAuthModalBtn.style.display = currentUser ? "block" : "none";
-  }
-
-  // Event Listeners for Google Auth
-  if (sidebarGoogleLoginBtn) {
-    sidebarGoogleLoginBtn.addEventListener("click", () => {
-      openGoogleAuthModal();
-    });
   }
 
   if (userProfileBadge) {
@@ -2026,47 +1920,6 @@ document.addEventListener("DOMContentLoaded", () => {
       userMenuDropdown.classList.add("hidden");
     }
   });
-
-  if (openAuthSettingsBtn) {
-    openAuthSettingsBtn.addEventListener("click", () => {
-      if (userMenuDropdown) userMenuDropdown.classList.add("hidden");
-      if (settingsBtn) settingsBtn.click();
-      const authTab = settingsModal?.querySelector('.settings-tab[data-target="settingsAuth"]');
-      if (authTab) authTab.click();
-    });
-  }
-
-  async function performGoogleLogout() {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } catch (e) {
-      console.warn("Logout endpoint error:", e);
-    }
-    setGoogleUser(null);
-    if (window.google?.accounts?.id) {
-      try { window.google.accounts.id.disableAutoSelect(); } catch (e) {}
-    }
-  }
-
-  if (sidebarGoogleLogoutBtn) sidebarGoogleLogoutBtn.addEventListener("click", performGoogleLogout);
-  if (modalGoogleLogoutBtn) modalGoogleLogoutBtn.addEventListener("click", performGoogleLogout);
-  if (modalGoogleLoginBtn) modalGoogleLoginBtn.addEventListener("click", openGoogleAuthModal);
-
-  if (closeGoogleAuthModalBtn) {
-    closeGoogleAuthModalBtn.addEventListener("click", () => {
-      if (currentUser && googleAuthModal) {
-        googleAuthModal.classList.add("hidden");
-      }
-    });
-  }
-
-  if (googleAuthModal) {
-    googleAuthModal.addEventListener("click", (e) => {
-      if (e.target === googleAuthModal && currentUser) {
-        googleAuthModal.classList.add("hidden");
-      }
-    });
-  }
 
   // Run initializations
   initApp();
