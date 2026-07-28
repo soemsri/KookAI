@@ -135,6 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextClaudeModels = {};
     const groups = [
       ["agy", "Antigravity Models"],
+      ["kimi", "Moonshot Kimi Code CLI"],
       ["claude", "Anthropic Claude CLI"],
       ["codex", "OpenAI Codex CLI"]
     ];
@@ -144,7 +145,7 @@ document.addEventListener("DOMContentLoaded", () => {
         !model
         || typeof model.id !== "string"
         || typeof model.label !== "string"
-        || !["agy", "claude", "codex"].includes(model.provider)
+        || !["agy", "claude", "codex", "kimi"].includes(model.provider)
       ) {
         return;
       }
@@ -180,12 +181,20 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!providerModels.length) return "";
       const items = providerModels.map(model => {
         const badge = escapeHtml(model.badge || (
-          provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : "AI"
+          provider === "codex"
+            ? "Codex"
+            : provider === "claude"
+              ? "Claude"
+              : provider === "kimi"
+                ? "Kimi"
+                : "AI"
         ));
         const badgeClass = provider === "codex"
           ? "codex"
           : provider === "claude"
             ? "claude"
+            : provider === "kimi"
+              ? "kimi"
             : badge.toLowerCase().replace(/[^a-z0-9_-]/g, "") || "gpt";
         return `
           <div class="dropdown-item" data-value="${escapeHtml(model.id)}">
@@ -233,7 +242,11 @@ document.addEventListener("DOMContentLoaded", () => {
   function updateCodexControls() {
     const capability = CODEX_MODELS[currentModel];
     const claudeCapability = CLAUDE_MODELS[currentModel];
+    const selectedItem = Array.from(
+      modelDropdown?.querySelectorAll(".dropdown-item") || []
+    ).find(item => item.dataset.value === currentModel);
     currentProvider = getCatalogModel(currentModel)?.provider
+      || selectedItem?.dataset.provider
       || (capability ? "codex" : (claudeCapability ? "claude" : "agy"));
 
     if (capability && !capability.ultra && currentCodexEffort === "Ultra") {
@@ -1579,6 +1592,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const cliConnectionsList = document.getElementById("cliConnectionsList");
   const cliRequirementsSummary = document.getElementById("cliRequirementsSummary");
   const cliRefreshBtn = document.getElementById("cliRefreshBtn");
+  const CLI_STATUS_TIMEOUT_MS = 15000;
   let cliStatusLoading = false;
 
   function setModelCatalogMessage(message, isError = false) {
@@ -1656,6 +1670,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const CLI_ICON_LABELS = {
     agy: "AG",
+    kimi: "KI",
     claude: "CL",
     codex: "CX"
   };
@@ -1740,20 +1755,28 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadCliStatuses() {
     if (cliStatusLoading) return;
     cliStatusLoading = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CLI_STATUS_TIMEOUT_MS);
     if (cliRefreshBtn) {
       cliRefreshBtn.disabled = true;
       cliRefreshBtn.textContent = "Checking…";
     }
     try {
-      const response = await fetch("/api/cli/status");
+      const response = await fetch("/api/cli/status", {
+        signal: controller.signal
+      });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.detail || "Failed to load CLI status");
       }
       renderCliStatuses(data);
     } catch (error) {
-      renderCliStatusError(error.message || "Failed to load CLI status");
+      const message = error?.name === "AbortError"
+        ? "CLI status check timed out. Click Refresh to try again."
+        : (error.message || "Failed to load CLI status");
+      renderCliStatusError(message);
     } finally {
+      clearTimeout(timeoutId);
       cliStatusLoading = false;
       if (cliRefreshBtn) {
         cliRefreshBtn.disabled = false;
@@ -1822,6 +1845,34 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  const DEFAULT_SETTINGS_TAB = "settingsGeneral";
+
+  function activateSettingsTab(targetId = DEFAULT_SETTINGS_TAB) {
+    const settingsTabs = settingsModal.querySelector(".settings-tabs");
+    const targetTab = settingsModal.querySelector(
+      `.settings-tab[data-target="${CSS.escape(targetId)}"]`
+    );
+    const targetContent = document.getElementById(targetId);
+    if (!targetTab || !targetContent) return;
+
+    settingsModal.querySelectorAll(".settings-tab").forEach(tab => {
+      tab.classList.toggle("active", tab === targetTab);
+    });
+    settingsModal.querySelectorAll(".settings-tab-content").forEach(content => {
+      content.classList.toggle("hidden", content !== targetContent);
+    });
+    targetContent.scrollTop = 0;
+    if (targetId === DEFAULT_SETTINGS_TAB && settingsTabs) {
+      settingsTabs.scrollLeft = 0;
+    }
+
+    if (targetId === "settingsCli") {
+      loadCliStatuses();
+    } else if (targetId === "settingsModels") {
+      loadModelCatalogEditor();
+    }
+  }
+
   settingsBtn.addEventListener("click", () => {
     // Populate with current configurations
     settingsDefaultModel.value = currentModel;
@@ -1835,8 +1886,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (recognition) {
       settingsSpeechLang.value = recognition.lang || "th-TH";
     }
+    activateSettingsTab();
     settingsModal.classList.remove("hidden");
-    loadCliStatuses();
   });
 
   settingsDefaultModel.addEventListener("change", () => {
@@ -1886,17 +1937,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Settings tab selection
   settingsModal.querySelectorAll(".settings-tab").forEach(tab => {
     tab.addEventListener("click", () => {
-      settingsModal.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
-      settingsModal.querySelectorAll(".settings-tab-content").forEach(c => c.classList.add("hidden"));
-
-      tab.classList.add("active");
       const targetId = tab.getAttribute("data-target");
-      document.getElementById(targetId).classList.remove("hidden");
-      if (targetId === "settingsCli") {
-        loadCliStatuses();
-      } else if (targetId === "settingsModels") {
-        loadModelCatalogEditor();
-      }
+      activateSettingsTab(targetId);
     });
   });
 
@@ -2037,7 +2079,15 @@ document.addEventListener("DOMContentLoaded", () => {
         note: ""
       };
     }
-    if (catalogBucket === "gpt" || lowerModel.includes("gpt")) {
+    if (catalogBucket === "gpt" || lowerModel.includes("gpt") || lowerModel.includes("kimi")) {
+      if (lowerModel.includes("kimi")) {
+        return {
+          key: "gpt",
+          title: "Kimi Models",
+          badge: "KookAI Kimi usage",
+          note: "Kimi usage is grouped in the KookAI model usage budget."
+        };
+      }
       return {
         key: "gpt",
         title: "GPT Models",

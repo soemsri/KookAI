@@ -1,6 +1,6 @@
 import { File, Paths } from 'expo-file-system';
 
-export type CatalogProvider = 'agy' | 'codex' | 'claude';
+export type CatalogProvider = 'agy' | 'codex' | 'claude' | 'kimi';
 
 export interface CatalogCapabilities {
   effort: string[];
@@ -48,7 +48,7 @@ export function isModelCatalog(value: unknown): value is ModelCatalog {
     && typeof model.id === 'string'
     && typeof model.label === 'string'
     && typeof model.description === 'string'
-    && ['agy', 'codex', 'claude'].includes(model.provider)
+    && ['agy', 'codex', 'claude', 'kimi'].includes(model.provider)
     && ['gemini', 'claude', 'gpt'].includes(model.usage_bucket)
     && typeof model.enabled === 'boolean'
     && model.capabilities

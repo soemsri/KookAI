@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-07-28.1",
+  "catalog_version": "2026-07-28.2",
   "default_model": "Gemini 3.5 Flash (High)",
   "models": [
     {
@@ -123,6 +123,17 @@
       "usage_bucket": "gpt",
       "enabled": true,
       "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Kimi K3",
+      "label": "Kimi K3",
+      "description": "Native multimodal model for long-horizon coding",
+      "provider": "kimi",
+      "cli_model": "kimi-for-coding/k3",
+      "badge": "Kimi",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
     },
     {
       "id": "Fable 5",

@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
   <div class="app-layout">
@@ -513,6 +513,15 @@
       </div>
     </div>
 
+    <div class="dropdown-header">Moonshot Kimi Code CLI</div>
+    <div class="dropdown-item" data-value="Kimi K3" data-provider="kimi">
+      <span class="model-badge kimi">Kimi</span>
+      <div class="model-info">
+        <span class="model-name">Kimi K3</span>
+        <span class="model-desc">Native multimodal model for long-horizon coding</span>
+      </div>
+    </div>
+
     <div class="dropdown-header">Anthropic Claude CLI</div>
     <div class="dropdown-item" data-value="Fable 5" data-provider="claude">
       <span class="model-badge claude">Claude</span><div class="model-info"><span class="model-name">Fable 5</span><span class="model-desc">For your toughest challenges</span></div>
@@ -640,7 +649,7 @@
         <div class="settings-tabs">
           <div class="settings-tab active" data-target="settingsGeneral">General</div>
           <div class="settings-tab" data-target="settingsModels">Models</div>
-          <div class="settings-tab" data-target="settingsCli">CLI Connections</div>
+          <div class="settings-tab" data-target="settingsCli">Connections</div>
           <div class="settings-tab" data-target="settingsSystem">Diagnostics</div>
         </div>
 
@@ -660,6 +669,7 @@
               <option value="Claude Sonnet 4.6 (Thinking)">Claude Sonnet 4.6 (Thinking)</option>
               <option value="Claude Opus 4.6 (Thinking)">Claude Opus 4.6 (Thinking)</option>
               <option value="GPT-OSS 120B (Medium)">GPT-OSS 120B (Medium)</option>
+              <option value="Kimi K3">Kimi K3</option>
               <option value="Fable 5">Fable 5 (Claude CLI)</option>
               <option value="Opus 5">Opus 5 (Claude CLI)</option>
               <option value="Sonnet 5">Sonnet 5 (Claude CLI)</option>
@@ -764,7 +774,7 @@
         <div class="settings-tab-content hidden" id="settingsCli">
           <div class="cli-settings-header">
             <div>
-              <h3>CLI Connections</h3>
+              <h3>Connections</h3>
               <p id="cliRequirementsSummary">Checking software requirements…</p>
             </div>
             <button type="button" class="cli-refresh-btn" id="cliRefreshBtn">Refresh</button>
@@ -849,6 +859,6 @@
 
   <!-- Markdown parser library -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="script.js?v=8"></script>
+  <script src="script.js?v=10"></script>
 </body>
 </html>

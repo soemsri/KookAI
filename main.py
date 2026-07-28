@@ -50,6 +50,16 @@ from claude_backend import (
     parse_claude_stream_json,
     resolve_claude_executable,
 )
+from kimi_backend import (
+    KIMI_CONVERSATION_PREFIX,
+    build_kimi_command,
+    classify_kimi_progress_line,
+    configure_kimi_catalog,
+    kimi_session_id,
+    make_kimi_conversation_id,
+    parse_kimi_stream_json,
+    resolve_kimi_executable,
+)
 from cli_manager import (
     auto_install_missing,
     get_cli_statuses,
@@ -111,6 +121,7 @@ def load_runtime_model_catalog() -> dict:
     catalog = load_model_catalog(catalog_path)
     configure_codex_catalog(catalog["models"])
     configure_claude_catalog(catalog["models"])
+    configure_kimi_catalog(catalog["models"])
     return catalog
 
 def migrate_legacy_data_dir(old_path: str, new_path: str):
@@ -130,6 +141,9 @@ migrate_legacy_data_dir(LEGACY_ANTIGRAVITY_CLI_DIR, ANTIGRAVITY_CLI_DIR)
 AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "600"))
 AGY_CLI_MAX_CAPTURE_CHARS = int(os.environ.get("AGY_CLI_MAX_CAPTURE_CHARS", "200000"))
 AGY_RELOAD = os.environ.get("AGY_RELOAD", "0").lower() in ("1", "true", "yes", "on")
+CLI_STATUS_TIMEOUT_SECONDS = float(
+    os.environ.get("KOOKAI_CLI_STATUS_TIMEOUT", "15")
+)
 
 app = FastAPI(title="KookAI Workspace Chat Client")
 
@@ -523,10 +537,16 @@ def verify_cli_admin(request: Request):
 async def get_cli_status(request: Request):
     verify_cli_admin(request)
     requirements_path = os.path.join(WORKSPACE_DIR, "requirements.txt")
-    statuses = await asyncio.to_thread(
-        get_cli_statuses,
-        requirements_path,
-    )
+    try:
+        statuses = await asyncio.wait_for(
+            asyncio.to_thread(get_cli_statuses, requirements_path),
+            timeout=CLI_STATUS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="CLI status check timed out. Retry after the current CLI process finishes.",
+        ) from exc
     return JSONResponse(
         content={
             "clis": statuses,
@@ -543,11 +563,12 @@ async def get_cli_status(request: Request):
 @app.post("/api/cli/{cli_id}/install")
 async def install_cli_requirement(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
     status = await asyncio.to_thread(install_cli, cli_id)
     resolve_codex_executable.cache_clear()
     resolve_claude_executable.cache_clear()
+    resolve_kimi_executable.cache_clear()
     return JSONResponse(
         status_code=200 if status["installed"] else 500,
         content={"cli": status},
@@ -557,7 +578,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
 @app.post("/api/cli/{cli_id}/connect")
 async def connect_cli_account(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
 
     statuses = {
@@ -613,6 +634,7 @@ async def update_models(request: Request):
         catalog = save_model_catalog(MODEL_CATALOG_PATH, payload)
         configure_codex_catalog(catalog["models"])
         configure_claude_catalog(catalog["models"])
+        configure_kimi_catalog(catalog["models"])
     except (ModelCatalogError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(
@@ -667,6 +689,8 @@ CODEX_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "codex_conversatio
 codex_conversations_lock = threading.Lock()
 CLAUDE_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "claude_conversations.json")
 claude_conversations_lock = threading.Lock()
+KIMI_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "kimi_conversations.json")
+kimi_conversations_lock = threading.Lock()
 CONVERSATION_METADATA_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "conversation_metadata.json")
 conversation_metadata_lock = threading.Lock()
 
@@ -977,6 +1001,82 @@ def get_claude_conversations() -> List[dict]:
 def get_claude_conversation(conversation_id: str) -> Optional[dict]:
     with claude_conversations_lock:
         record = _load_claude_conversation_records().get(conversation_id)
+    return record if isinstance(record, dict) else None
+
+
+def _load_kimi_conversation_records() -> dict:
+    if not os.path.exists(KIMI_CONVERSATIONS_FILE):
+        return {}
+    try:
+        with open(KIMI_CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logging.error(f"Failed to load Kimi conversation history: {e}")
+        return {}
+
+
+def _save_kimi_conversation_records(records: dict):
+    os.makedirs(os.path.dirname(KIMI_CONVERSATIONS_FILE), exist_ok=True)
+    temp_path = f"{KIMI_CONVERSATIONS_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, KIMI_CONVERSATIONS_FILE)
+
+
+def persist_kimi_exchange(
+    conversation_id: str,
+    project: str,
+    model: str,
+    user_message: str,
+    assistant_message: str,
+):
+    if not conversation_id.startswith(KIMI_CONVERSATION_PREFIX):
+        return
+
+    now = datetime.datetime.now().timestamp()
+    with kimi_conversations_lock:
+        records = _load_kimi_conversation_records()
+        record = records.get(conversation_id, {})
+        messages = record.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        messages.extend([
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_message},
+        ])
+
+        clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", user_message).strip()
+        if not clean_title:
+            clean_title = "Kimi conversation"
+        if len(clean_title) > 40:
+            clean_title = clean_title[:40] + "..."
+
+        records[conversation_id] = {
+            "id": conversation_id,
+            "session_id": kimi_session_id(conversation_id),
+            "title": record.get("title") or clean_title,
+            "project": project,
+            "provider": "kimi",
+            "model": model,
+            "thinking": True,
+            "timestamp": now,
+            "messages": messages,
+        }
+        _save_kimi_conversation_records(records)
+
+
+def get_kimi_conversations() -> List[dict]:
+    with kimi_conversations_lock:
+        records = _load_kimi_conversation_records()
+    conversations = [value for value in records.values() if isinstance(value, dict)]
+    conversations.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
+    return conversations
+
+
+def get_kimi_conversation(conversation_id: str) -> Optional[dict]:
+    with kimi_conversations_lock:
+        record = _load_kimi_conversation_records().get(conversation_id)
     return record if isinstance(record, dict) else None
 
 
@@ -1851,6 +1951,131 @@ def run_claude_cli(
         )
 
 
+def run_kimi_cli(
+    message: str,
+    model_ui_name: str,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    progress_callback=None,
+):
+    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    cwd_path = resolve_project_directory(project_id)
+    mapping_key = f"kimi:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+    message_with_context = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+
+    def execute(run_conversation_id: Optional[str]):
+        stream_result = {"session_id": None, "parts": [], "errors": []}
+
+        def capture_kimi_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_kimi_stream_json(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["parts"].append(parsed_line["final_message"])
+            if parsed_line["errors"]:
+                stream_result["errors"].extend(parsed_line["errors"])
+
+        cmd = build_kimi_command(
+            kimi_path=resolve_kimi_executable(),
+            prompt=message_with_context,
+            model_name=model_ui_name,
+            target=target,
+            conversation_id=run_conversation_id,
+        )
+        logging.info(
+            "Executing Kimi Code CLI in %s with model=%s target=%s resume=%s",
+            cwd_path,
+            model_ui_name,
+            target,
+            bool(kimi_session_id(run_conversation_id)),
+        )
+        result = run_agent_command(
+            cmd,
+            cwd_path,
+            timeout=AGY_CLI_TIMEOUT,
+            progress_callback=progress_callback,
+            progress_line_classifier=classify_kimi_progress_line,
+            raw_line_callback=capture_kimi_line,
+        )
+        parsed = parse_kimi_stream_json(result.stdout or "")
+        streamed_message = "\n".join(stream_result["parts"])
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": streamed_message or parsed["final_message"],
+            "errors": stream_result["errors"] or parsed["errors"],
+        }
+
+    try:
+        result, parsed = execute(actual_cid)
+        combined_error = "\n".join(
+            part
+            for part in [
+                (result.stderr or "").strip(),
+                "\n".join(parsed["errors"]).strip(),
+            ]
+            if part
+        )
+        recoverable_resume_error = kimi_session_id(actual_cid) and any(
+            phrase in combined_error.lower()
+            for phrase in (
+                "session not found",
+                "failed to resume",
+                "unable to resume",
+                "no session found",
+            )
+        )
+        if result.returncode != 0 and recoverable_resume_error:
+            if progress_callback:
+                progress_callback(
+                    "progress",
+                    "Kimi session was unavailable; starting a fresh session.",
+                )
+            result, parsed = execute(None)
+            combined_error = "\n".join(
+                part
+                for part in [
+                    (result.stderr or "").strip(),
+                    "\n".join(parsed["errors"]).strip(),
+                ]
+                if part
+            )
+
+        session_id = parsed["session_id"]
+        resolved_cid = make_kimi_conversation_id(session_id) if session_id else actual_cid
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+
+        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
+            return parsed["final_message"].strip(), resolved_cid
+
+        error_message = combined_error or "Kimi Code CLI did not return a final response."
+        return (
+            f"⚠️ **Kimi Code CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```",
+            resolved_cid,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"⏱️ **Timeout Error**: The request to `kimi` CLI exceeded "
+            f"the {AGY_CLI_TIMEOUT}-second limit.",
+            actual_cid,
+        )
+    except Exception as e:
+        return (
+            "❌ **Execution Error**: Failed to run `kimi` CLI. "
+            f"Install/authenticate Kimi Code or set `KIMI_CLI_PATH`. Details: `{str(e)}`",
+            actual_cid,
+        )
+
+
 def run_selected_cli(
     message: str,
     model_ui_name: str,
@@ -1867,7 +2092,7 @@ def run_selected_cli(
     selected_provider = (provider or "").strip().lower()
     if not selected_provider:
         selected_provider = resolve_provider(None, model_ui_name)
-    if selected_provider not in {"agy", "codex", "claude"}:
+    if selected_provider not in {"agy", "codex", "claude", "kimi"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
     if selected_provider == "codex":
         return run_codex_cli(
@@ -1890,6 +2115,15 @@ def run_selected_cli(
             workspace,
             effort,
             thinking,
+            progress_callback,
+        )
+    if selected_provider == "kimi":
+        return run_kimi_cli(
+            message,
+            model_ui_name,
+            conversation_id,
+            target,
+            workspace,
             progress_callback,
         )
     return run_agy_cli(
@@ -1948,7 +2182,8 @@ async def get_conversations(request: Request, project: Optional[str] = None):
         convo.setdefault("provider", "agy")
     codex_convos = get_codex_conversations()
     claude_convos = get_claude_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos
+    kimi_convos = get_kimi_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -1970,7 +2205,8 @@ async def get_chat_history(request: Request):
         convo.setdefault("provider", "agy")
     codex_convos = get_codex_conversations()
     claude_convos = get_claude_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos
+    kimi_convos = get_kimi_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -1992,6 +2228,7 @@ async def get_conversation_details(cid: str, request: Request):
     thinking = None
     codex_record = get_codex_conversation(cid)
     claude_record = get_claude_conversation(cid)
+    kimi_record = get_kimi_conversation(cid)
 
     # First check memory cache
     if cid in in_memory_chats:
@@ -2008,6 +2245,11 @@ async def get_conversation_details(cid: str, request: Request):
             model = claude_record.get("model")
             effort = claude_record.get("effort")
             thinking = claude_record.get("thinking", True)
+        elif kimi_record:
+            project = kimi_record.get("project")
+            provider = "kimi"
+            model = kimi_record.get("model")
+            thinking = True
     elif codex_record:
         messages = codex_record.get("messages", [])
         project = codex_record.get("project")
@@ -2023,6 +2265,13 @@ async def get_conversation_details(cid: str, request: Request):
         model = claude_record.get("model")
         effort = claude_record.get("effort")
         thinking = claude_record.get("thinking", True)
+        in_memory_chats[cid] = messages
+    elif kimi_record:
+        messages = kimi_record.get("messages", [])
+        project = kimi_record.get("project")
+        provider = "kimi"
+        model = kimi_record.get("model")
+        thinking = True
         in_memory_chats[cid] = messages
     else:
         # Check seed conversations
@@ -2147,6 +2396,11 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     elif provider == "claude":
         actual_cid = convo_id_mapping.get(
             f"claude:{project_id}:{conversation_id}",
+            conversation_id,
+        )
+    elif provider == "kimi":
+        actual_cid = convo_id_mapping.get(
+            f"kimi:{project_id}:{conversation_id}",
             conversation_id,
         )
     else:
@@ -2311,7 +2565,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         else:
             project_id = clean_project_name(os.path.basename(workspace or "agy"))
             cwd_path = resolve_project_directory(project_id)
-            if provider == "codex":
+            if provider in {"codex", "kimi"}:
                 agents_file = os.path.join(cwd_path, "AGENTS.md")
             elif provider == "claude":
                 agents_file = os.path.join(cwd_path, "CLAUDE.md")
@@ -2382,7 +2636,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         provider,
         effort if provider in {"codex", "claude"} else None,
         speed if provider == "codex" else None,
-        thinking if provider == "claude" else None,
+        thinking if provider in {"claude", "kimi"} else None,
     )
 
     if provider == "codex":
@@ -2405,6 +2659,14 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             user_visible_message,
             reply,
         )
+    elif provider == "kimi":
+        persist_kimi_exchange(
+            resolved_cid,
+            project_id,
+            model,
+            user_visible_message,
+            reply,
+        )
 
     processed_reply = reply.replace("file:///", "/api/media?path=/")
     return {
@@ -2415,7 +2677,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         "model": model,
         "effort": effort if provider in {"codex", "claude"} else None,
         "speed": speed if provider == "codex" else None,
-        "thinking": thinking if provider == "claude" else None,
+        "thinking": thinking if provider in {"claude", "kimi"} else None,
     }
 
 
@@ -2575,7 +2837,10 @@ async def get_usage_limits(request: Request):
     }
 
     try:
-        codex_rate_limits = fetch_codex_rate_limits(timeout_seconds=8)
+        codex_rate_limits = await asyncio.to_thread(
+            fetch_codex_rate_limits,
+            timeout_seconds=8,
+        )
         if codex_rate_limits:
             result_data["codexRateLimits"] = codex_rate_limits
             primary = codex_rate_limits.get("primary") or {}
@@ -2592,7 +2857,8 @@ async def get_usage_limits(request: Request):
         logging.error(f"Failed to fetch Codex account rate limits: {e}")
     
     try:
-        res = subprocess.run(
+        res = await asyncio.to_thread(
+            subprocess.run,
             ["npx", "ccusage", "session", "--json"],
             capture_output=True,
             text=True,

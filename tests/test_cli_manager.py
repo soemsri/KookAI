@@ -2,6 +2,7 @@ import asyncio
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -32,6 +33,7 @@ class CliManagerTests(unittest.TestCase):
                 "# kookai-cli: agy\n"
                 "# kookai-cli: claude\n"
                 "# kookai-cli: codex\n"
+                "# kookai-cli: kimi\n"
                 "# kookai-cli: unknown\n"
                 "# kookai-cli: codex\n"
             )
@@ -39,7 +41,7 @@ class CliManagerTests(unittest.TestCase):
         try:
             self.assertEqual(
                 cli_manager.parse_cli_requirements(path),
-                ["agy", "claude", "codex"],
+                ["agy", "claude", "codex", "kimi"],
             )
         finally:
             os.unlink(path)
@@ -96,7 +98,10 @@ class CliManagerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         fallback_command = run_installer.call_args_list[1].args[0]
         self.assertIn("--prefix", fallback_command)
-        self.assertIn(os.path.expanduser("~/.local"), fallback_command)
+        self.assertIn(
+            os.path.normpath(os.path.expanduser("~/.local")),
+            fallback_command,
+        )
 
     def test_launch_codex_login_opens_a_terminal(self):
         with (
@@ -111,6 +116,7 @@ class CliManagerTests(unittest.TestCase):
                 "which",
                 side_effect=lambda name: "/usr/bin/xterm" if name == "xterm" else None,
             ),
+            mock.patch.object(cli_manager.os, "name", "posix"),
             mock.patch.object(cli_manager.subprocess, "Popen") as popen,
             mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False),
         ):
@@ -160,6 +166,22 @@ class CliApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"can_manage":true', response.body)
+
+    def test_cli_status_endpoint_times_out_instead_of_hanging(self):
+        def slow_status(_requirements_path):
+            time.sleep(0.05)
+            return []
+
+        with (
+            mock.patch.object(main, "CLI_STATUS_TIMEOUT_SECONDS", 0.01),
+            mock.patch.object(main, "get_cli_statuses", side_effect=slow_status),
+        ):
+            with self.assertRaises(HTTPException) as context:
+                asyncio.run(
+                    main.get_cli_status(self.request("127.0.0.1"))
+                )
+        self.assertEqual(context.exception.status_code, 504)
+        self.assertIn("timed out", context.exception.detail)
 
 
 if __name__ == "__main__":

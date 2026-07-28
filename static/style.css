@@ -1236,6 +1236,7 @@ body {
 .model-badge.pro { background-color: #dbeafe; color: #2563eb; }
 .model-badge.claude { background-color: #ffedd5; color: #ea580c; }
 .model-badge.gpt { background-color: #d1fae5; color: #059669; }
+.model-badge.kimi { background-color: #cffafe; color: #0e7490; }
 .model-badge.codex { background-color: #d1fae5; color: #047857; }
 .model-badge.legacy { background-color: #f3f4f6; color: #4b5563; }
 
@@ -1651,16 +1652,31 @@ body {
 }
 
 /* Tabs inside Settings */
+#settingsModal .modal-header,
+#settingsModal .modal-footer {
+  flex: 0 0 auto;
+}
+
+#settingsModal .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .settings-tabs {
   display: flex;
+  flex: 0 0 auto;
   gap: 12px;
+  min-height: 37px;
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 8px;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
 }
 
 .settings-tab {
+  flex: 0 0 auto;
   padding: 8px 16px;
   font-size: 13.5px;
   font-weight: 500;
@@ -1682,8 +1698,12 @@ body {
 
 .settings-tab-content {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .settings-tab-content.hidden {
