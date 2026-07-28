@@ -4,6 +4,12 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import { apiCall, clearConnection, uploadMedia, loadConnection, getActiveBaseUrl } from '../utils/api';
+import {
+  isModelCatalog,
+  ModelCatalog,
+  readCachedModelCatalog,
+  writeCachedModelCatalog,
+} from '../utils/modelCatalog';
 import Svg, { Circle } from 'react-native-svg';
 import * as DocumentPicker from 'expo-document-picker';
 // Mock Audio namespaces and classes to avoid importing deprecated expo-av
@@ -89,8 +95,11 @@ type UsagePeriodKey = 'Weekly' | 'Hourly';
 
 interface ModelOption {
   value: string;
+  label?: string;
   desc: string;
   provider: AgentProvider;
+  badge?: string;
+  usageBucket?: UsageBucketKey;
   supportsUltra?: boolean;
   supportsFast?: boolean;
   supportsClaudeEffort?: boolean;
@@ -127,7 +136,7 @@ const colors = {
   }
 };
 
-const modelsList: ModelOption[] = [
+const FALLBACK_MODELS: ModelOption[] = [
   { value: "Gemini 3.6 Flash (High)", desc: "Fastest response, ideal for coding tasks", provider: "agy" },
   { value: "Gemini 3.6 Flash (Medium)", desc: "Balanced speed and performance", provider: "agy" },
   { value: "Gemini 3.6 Flash (Low)", desc: "Fast, low resource usage", provider: "agy" },
@@ -156,6 +165,27 @@ const modelsList: ModelOption[] = [
   { value: "5.4 Mini", desc: "Compact Codex model", provider: "codex" },
 ];
 
+let activeModelsList: ModelOption[] = FALLBACK_MODELS;
+let activeDefaultModel = "Gemini 3.5 Flash (High)";
+
+const catalogToModelOptions = (catalog: ModelCatalog): ModelOption[] => (
+  catalog.models
+    .filter((model) => model.enabled)
+    .map((model) => ({
+      value: model.id,
+      label: model.label,
+      desc: model.description,
+      provider: model.provider,
+      badge: model.badge,
+      usageBucket: model.usage_bucket,
+      supportsUltra: model.capabilities.effort.includes('Ultra'),
+      supportsFast: model.capabilities.speed.includes('Fast'),
+      supportsClaudeEffort: model.provider === 'claude' && model.capabilities.effort.length > 0,
+      supportsClaudeExtra: model.capabilities.effort.includes('Extra'),
+      thinkingRequired: model.capabilities.thinking_required,
+    }))
+);
+
 const codexEffortList: { value: CodexEffort; desc: string }[] = [
   { value: "Light", desc: "Quick, well-scoped tasks" },
   { value: "Medium", desc: "Balanced speed and depth" },
@@ -176,7 +206,10 @@ const claudeEffortList: { value: ClaudeEffort; desc: string }[] = [
   { value: "Max", desc: "The hardest problems; takes longest" },
 ];
 
-const getModelOption = (modelName: string) => modelsList.find((model) => model.value === modelName);
+const getModelOption = (modelName: string) => activeModelsList.find(
+  (model) => model.value === modelName || model.label === modelName
+);
+const getModelLabel = (modelName: string) => getModelOption(modelName)?.label || modelName;
 const isCodexModel = (modelName: string) => getModelOption(modelName)?.provider === "codex";
 const isClaudeModel = (modelName: string) => getModelOption(modelName)?.provider === "claude";
 const getClaudeEfforts = (modelName: string) => {
@@ -202,6 +235,7 @@ const getUsageBucketForModel = (modelName: string): {
   title: string;
   note?: string;
 } => {
+  const catalogBucket = getModelOption(modelName)?.usageBucket;
   if (isCodexModel(modelName)) {
     return {
       key: 'gpt',
@@ -210,11 +244,11 @@ const getUsageBucketForModel = (modelName: string): {
     };
   }
 
-  const lowered = modelName.toLowerCase();
-  if (lowered.includes('gemini')) {
+  const lowered = getModelLabel(modelName).toLowerCase();
+  if (catalogBucket === 'gemini' || lowered.includes('gemini')) {
     return { key: 'gemini', title: 'Gemini Models (Google AI Ultra)' };
   }
-  if (lowered.includes('gpt')) {
+  if (catalogBucket === 'gpt' || lowered.includes('gpt')) {
     return { key: 'gpt', title: 'GPT Models (KookAI)' };
   }
   return { key: 'claude', title: 'Claude Models (Claude Pro)' };
@@ -313,16 +347,17 @@ const parseQuestionPayload = (content: string): QuestionPayload | null => {
 };
 
 const getBadgeStyles = (modelName: string, isDark: boolean) => {
-  const name = modelName.toLowerCase();
+  const catalogBadge = getModelOption(modelName)?.badge;
+  const name = getModelLabel(modelName).toLowerCase();
   if (isCodexModel(modelName)) {
     return isDark
-      ? { text: 'Codex', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }
-      : { text: 'Codex', bg: '#d1fae5', color: '#047857' };
+      ? { text: catalogBadge || 'Codex', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }
+      : { text: catalogBadge || 'Codex', bg: '#d1fae5', color: '#047857' };
   }
   if (isClaudeModel(modelName)) {
     return isDark
-      ? { text: 'Claude', bg: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' }
-      : { text: 'Claude', bg: '#f3e8ff', color: '#7c3aed' };
+      ? { text: catalogBadge || 'Claude', bg: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' }
+      : { text: catalogBadge || 'Claude', bg: '#f3e8ff', color: '#7c3aed' };
   }
   if (name.includes('flash')) {
     return isDark
@@ -345,8 +380,8 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
       : { text: 'GPT', bg: '#ecfdf5', color: '#059669' };
   }
   return isDark
-    ? { text: 'AI', bg: 'rgba(107, 114, 128, 0.15)', color: '#9ca3af' }
-    : { text: 'AI', bg: '#e5e7eb', color: '#4b5563' };
+    ? { text: catalogBadge || 'AI', bg: 'rgba(107, 114, 128, 0.15)', color: '#9ca3af' }
+    : { text: catalogBadge || 'AI', bg: '#e5e7eb', color: '#4b5563' };
 };
 
 const getMediaType = (url: string) => {
@@ -795,6 +830,8 @@ const [conversations, setConversations] = useState<Conversation[]>([]);
   const voiceWaveAnim = useRef(new Animated.Value(0)).current;
 
 // Model, Target & Project Pickers
+const [modelsList, setModelsList] = useState<ModelOption[]>(FALLBACK_MODELS);
+const [modelCatalogVersion, setModelCatalogVersion] = useState('built-in');
 const [selectedModel, setSelectedModel] = useState("Gemini 3.5 Flash (High)");
 const [selectedCodexEffort, setSelectedCodexEffort] = useState<CodexEffort>("Medium");
 const [selectedCodexSpeed, setSelectedCodexSpeed] = useState<CodexSpeed>("Standard");
@@ -1019,6 +1056,36 @@ if (currentProvider !== nextModel.provider && activeConvoIdRef.current) {
 setSelectedModel(modelName);
 };
 
+const applyModelCatalog = (catalog: ModelCatalog) => {
+  const nextModels = catalogToModelOptions(catalog);
+  if (!nextModels.length) return;
+  activeModelsList = nextModels;
+  activeDefaultModel = nextModels.some((model) => model.value === catalog.default_model)
+    ? catalog.default_model
+    : nextModels[0].value;
+  setModelsList(nextModels);
+  setModelCatalogVersion(catalog.catalog_version);
+  if (!nextModels.some((model) => model.value === selectedModel)) {
+    setSelectedModel(activeDefaultModel);
+    setDraftSettingsModel(activeDefaultModel);
+  }
+};
+
+const refreshModelCatalog = async () => {
+  try {
+    const freshCatalog = await apiCall('/api/models');
+    if (!isModelCatalog(freshCatalog)) {
+      throw new Error('Host returned an invalid model catalog');
+    }
+    applyModelCatalog(freshCatalog);
+    await writeCachedModelCatalog(freshCatalog);
+    return true;
+  } catch (catalogError) {
+    console.warn("Using cached or built-in model catalog:", catalogError);
+    return false;
+  }
+};
+
 useEffect(() => {
 messagesRef.current = messages;
 }, [messages]);
@@ -1068,11 +1135,13 @@ selectedProjectRef.current = selectedProject;
         SecureStore.getItemAsync(PREFERENCE_KEYS.claudeThinking),
       ]);
 
-      const effectiveModel = savedModel && modelsList.some((model) => model.value === savedModel)
+      const effectiveModel = savedModel && activeModelsList.some((model) => model.value === savedModel)
         ? savedModel
-        : selectedModel;
-      if (savedModel && modelsList.some((model) => model.value === savedModel)) {
+        : activeDefaultModel;
+      if (savedModel && activeModelsList.some((model) => model.value === savedModel)) {
         setSelectedModel(savedModel);
+      } else {
+        setSelectedModel(effectiveModel);
       }
       if (
         savedCodexEffort
@@ -1121,6 +1190,13 @@ selectedProjectRef.current = selectedProject;
     const initializeChat = async () => {
       setIsInitializingChat(true);
       try {
+        const cachedCatalog = await readCachedModelCatalog();
+        if (cachedCatalog && isMounted) {
+          applyModelCatalog(cachedCatalog);
+        }
+        if (isMounted) {
+          await refreshModelCatalog();
+        }
         await loadSavedPreferences();
         const conn = await loadConnection();
         if (conn) {
@@ -1152,6 +1228,15 @@ selectedProjectRef.current = selectedProject;
       }
     };
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (isConnected) {
+        refreshModelCatalog();
+      }
+    }, 10 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [isConnected]);
 
   useEffect(() => {
     const showSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
@@ -1192,6 +1277,7 @@ selectedProjectRef.current = selectedProject;
               // Reload projects and conversations list
               loadConversations(true);
               fetchUsageLimits();
+              refreshModelCatalog();
             }
           }
         }
@@ -2719,7 +2805,9 @@ allowQueue: false,
                       disabled={isPromptDisabled}
                     >
                       <Text style={[styles.modelPickerText, { color: theme.textPrimary }]}>
-                        {isCodexModel(selectedModel) ? `${selectedModel} ${selectedCodexEffort}` : selectedModel}
+                        {isCodexModel(selectedModel)
+                          ? `${getModelLabel(selectedModel)} ${selectedCodexEffort}`
+                          : getModelLabel(selectedModel)}
                       </Text>
                       <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
                     </TouchableOpacity>
@@ -2967,7 +3055,7 @@ allowQueue: false,
                         <Text style={[styles.badgeText, { color: badge.color }]}>{badge.text}</Text>
                       </View>
                       <View style={styles.modelInfo}>
-                        <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{model.value}</Text>
+                        <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{model.label || model.value}</Text>
                         <Text style={[styles.modelDesc, { color: theme.textSecondary }]} numberOfLines={1}>{model.desc}</Text>
                       </View>
                     </View>
@@ -3204,7 +3292,7 @@ allowQueue: false,
                           <Text style={[styles.badgeText, { color: badge.color }]}>{badge.text}</Text>
                         </View>
                         <View style={styles.modelInfo}>
-                          <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{model.value}</Text>
+                          <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{model.label || model.value}</Text>
                           <Text style={[styles.modelDesc, { color: theme.textSecondary }]} numberOfLines={1}>{model.desc}</Text>
                         </View>
                       </View>
@@ -3361,6 +3449,10 @@ allowQueue: false,
                 <View style={styles.diagnosticRow}>
                   <Text style={[styles.diagnosticLabel, { color: theme.textSecondary }]}>Current Project</Text>
                   <Text style={[styles.diagnosticValue, { color: theme.textPrimary }]}>{selectedProject}</Text>
+                </View>
+                <View style={styles.diagnosticRow}>
+                  <Text style={[styles.diagnosticLabel, { color: theme.textSecondary }]}>Model Catalog</Text>
+                  <Text style={[styles.diagnosticValue, { color: theme.textPrimary }]}>{modelCatalogVersion}</Text>
                 </View>
                 <View style={styles.diagnosticRow}>
                   <Text style={[styles.diagnosticLabel, { color: theme.textSecondary }]}>Theme</Text>

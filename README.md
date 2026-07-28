@@ -99,6 +99,40 @@ The server acts as the backend broker and hosts the web chat console.
 
 The server automatically launches a Cloudflare Quick Tunnel so your mobile phone can reach your local workspace.
 
+### Dynamic Model Catalog
+
+KookAI serves a versioned model catalog from `GET /api/models`. The web client
+and paired mobile app use that response instead of requiring model names to be
+compiled into the app. The mobile app caches the latest valid catalog and falls
+back to its built-in list when the host is temporarily unavailable.
+
+From the server computer, open **Settings → Models** to add, disable, reorder,
+or update models. The editor validates the complete JSON document before
+saving it. Runtime changes are stored persistently at:
+
+```text
+~/.gemini/kookai/model_catalog.json
+```
+
+The bundled [`model_catalog.json`](model_catalog.json) is used until a
+persistent override is saved. Each model separates:
+
+- `id`: stable value sent by clients and stored with conversations
+- `label`: user-facing name
+- `cli_model`: exact model name or slug passed to the provider CLI
+- `provider`: `agy`, `claude`, or `codex`
+- `capabilities`: supported effort, speed, and thinking controls
+- `enabled`: removes a model from clients without deleting its configuration
+
+Set `KOOKAI_MODEL_CATALOG_PATH` to use a different persistent catalog file.
+Catalog management is localhost-only, while paired mobile devices can read
+enabled models through their existing authorization token.
+
+Adding models that use the existing `agy`, `claude`, or `codex` controls does
+not require a new mobile build. A genuinely new provider, input type, or UI
+capability still requires an app update because older clients do not know how
+to render or execute that new interaction.
+
 ### Restarting the Server
 
 If you change backend code, provider settings, or CLI paths, restart the server so `localhost:8080` loads the latest code:

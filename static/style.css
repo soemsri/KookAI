@@ -1924,6 +1924,43 @@ body {
   color: var(--status-red);
 }
 
+.model-catalog-editor {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  tab-size: 2;
+}
+
+.model-catalog-editor:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 45%, transparent);
+  border-color: var(--accent-color);
+}
+
+.model-catalog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.model-catalog-message {
+  min-height: 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-catalog-message.error {
+  color: var(--status-red);
+}
+
 .theme-segmented {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

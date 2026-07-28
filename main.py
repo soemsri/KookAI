@@ -27,6 +27,7 @@ from codex_backend import (
     build_codex_command,
     classify_codex_progress_line,
     codex_session_id,
+    configure_codex_catalog,
     fetch_codex_rate_limits,
     hidden_subprocess_kwargs,
     is_codex_model,
@@ -43,6 +44,7 @@ from claude_backend import (
     build_claude_environment,
     classify_claude_progress_line,
     claude_session_id,
+    configure_claude_catalog,
     make_claude_conversation_id,
     normalize_claude_effort,
     parse_claude_stream_json,
@@ -54,6 +56,13 @@ from cli_manager import (
     install_cli,
     launch_cli_login,
     resolve_cli_executable as resolve_managed_cli_executable,
+)
+from model_catalog import (
+    ModelCatalogError,
+    load_model_catalog,
+    public_model_catalog,
+    resolve_catalog_model,
+    save_model_catalog,
 )
 
 # Configure logging
@@ -83,6 +92,26 @@ if os.name == "nt":
     except Exception as e:
         logging.error(f"Failed to resolve Windows Desktop user shell folder: {e}")
 WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
+BUILTIN_MODEL_CATALOG_PATH = os.path.join(
+    WORKSPACE_DIR,
+    "model_catalog.json",
+)
+MODEL_CATALOG_PATH = os.environ.get(
+    "KOOKAI_MODEL_CATALOG_PATH",
+    os.path.join(ANTIGRAVITY_DATA_DIR, "model_catalog.json"),
+)
+
+
+def load_runtime_model_catalog() -> dict:
+    catalog_path = (
+        MODEL_CATALOG_PATH
+        if os.path.isfile(MODEL_CATALOG_PATH)
+        else BUILTIN_MODEL_CATALOG_PATH
+    )
+    catalog = load_model_catalog(catalog_path)
+    configure_codex_catalog(catalog["models"])
+    configure_claude_catalog(catalog["models"])
+    return catalog
 
 def migrate_legacy_data_dir(old_path: str, new_path: str):
     if old_path == new_path or os.path.exists(new_path) or not os.path.exists(old_path):
@@ -107,6 +136,7 @@ app = FastAPI(title="KookAI Workspace Chat Client")
 
 TUNNEL_ALLOWED_EXACT_PATHS = {
     "/api/pair",
+    "/api/models",
     "/api/projects",
     "/api/chat-history",
     "/api/chat",
@@ -389,6 +419,12 @@ class PairRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
+    catalog = load_runtime_model_catalog()
+    logging.info(
+        "Loaded model catalog %s with %s enabled models",
+        catalog["catalog_version"],
+        sum(1 for model in catalog["models"] if model["enabled"]),
+    )
     requirements_path = os.path.join(WORKSPACE_DIR, "requirements.txt")
     cli_statuses = await asyncio.to_thread(
         auto_install_missing,
@@ -549,6 +585,44 @@ async def connect_cli_account(cli_id: str, request: Request):
     )
 
 
+@app.get("/api/models")
+async def get_models(request: Request, include_disabled: bool = False):
+    verify_authorization(request)
+    if include_disabled and not can_manage_cli_connections(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Local access is required to view disabled models",
+        )
+    try:
+        catalog = load_runtime_model_catalog()
+    except ModelCatalogError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse(
+        content=public_model_catalog(
+            catalog,
+            include_disabled=include_disabled,
+        )
+    )
+
+
+@app.put("/api/models")
+async def update_models(request: Request):
+    verify_cli_admin(request)
+    try:
+        payload = await request.json()
+        catalog = save_model_catalog(MODEL_CATALOG_PATH, payload)
+        configure_codex_catalog(catalog["models"])
+        configure_claude_catalog(catalog["models"])
+    except (ModelCatalogError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(
+        content={
+            "status": "success",
+            **public_model_catalog(catalog, include_disabled=True),
+        }
+    )
+
+
 class ChatRequest(BaseModel):
     message: str
     model: str
@@ -559,6 +633,28 @@ class ChatRequest(BaseModel):
     effort: Optional[str] = "Medium"
     speed: Optional[str] = "Standard"
     thinking: Optional[bool] = True
+
+
+def resolve_chat_model(request: ChatRequest) -> dict:
+    catalog = load_runtime_model_catalog()
+    model = resolve_catalog_model(catalog, request.model)
+    if not model:
+        raise ValueError(
+            f"Unknown or disabled model: {request.model}. Refresh the model catalog."
+        )
+    requested_provider = (request.provider or "").strip().lower()
+    if requested_provider and requested_provider != model["provider"]:
+        raise ValueError(
+            f"Model {model['id']} must use the {model['provider']} provider"
+        )
+    return model
+
+
+def verify_chat_model_request(request: ChatRequest) -> None:
+    try:
+        resolve_chat_model(request)
+    except (ModelCatalogError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 # Temp UUID to actual conversation ID mapping
 convo_id_mapping = {}
@@ -1154,8 +1250,11 @@ def get_real_conversations():
 
 # Map model string to agy supported string
 def map_model_name(model_ui_name: str) -> str:
-    # agy CLI accepts exact model names (e.g. "Gemini 3.5 Flash (High)", "Claude Sonnet 4.6 (Thinking)")
-    return model_ui_name
+    catalog = load_runtime_model_catalog()
+    model = resolve_catalog_model(catalog, model_ui_name)
+    if not model:
+        raise ValueError(f"Unknown or disabled model: {model_ui_name}")
+    return model["cli_model"]
 
 # Helper: Kill processes locking the sqlite database or executing agy for this conversation
 def kill_processes_locking_db(conversation_id: str):
@@ -1765,7 +1864,11 @@ def run_selected_cli(
     image_paths: Optional[List[str]] = None,
     progress_callback=None,
 ):
-    selected_provider = resolve_provider(provider, model_ui_name)
+    selected_provider = (provider or "").strip().lower()
+    if not selected_provider:
+        selected_provider = resolve_provider(None, model_ui_name)
+    if selected_provider not in {"agy", "codex", "claude"}:
+        raise ValueError(f"Unsupported agent provider: {provider}")
     if selected_provider == "codex":
         return run_codex_cli(
             message,
@@ -2004,19 +2107,36 @@ async def get_conversation_details(cid: str, request: Request):
 
 def build_chat_response(request: ChatRequest, progress_callback=None):
     message = request.message
-    model = request.model
+    model_entry = resolve_chat_model(request)
+    model = model_entry["id"]
     workspace = request.workspace
     target = request.target
     conversation_id = request.conversation_id
-    provider = resolve_provider(request.provider, model)
+    provider = model_entry["provider"]
+    capabilities = model_entry["capabilities"]
     effort = request.effort or "Medium"
     speed = request.speed or "Standard"
-    thinking = request.thinking is not False
+    thinking = request.thinking is not False and capabilities["thinking"]
+    if capabilities["thinking_required"]:
+        thinking = True
     if provider == "codex":
+        if effort not in capabilities["effort"]:
+            raise ValueError(
+                f"Effort {effort} is not supported by model {model}"
+            )
+        if speed not in capabilities["speed"]:
+            raise ValueError(
+                f"Speed {speed} is not supported by model {model}"
+            )
         effort, _ = normalize_codex_effort(effort, model)
         speed, _ = normalize_codex_speed(speed, model)
     elif provider == "claude":
-        effort, _ = normalize_claude_effort(effort, model)
+        if capabilities["effort"]:
+            if effort not in capabilities["effort"]:
+                raise ValueError(
+                    f"Effort {effort} is not supported by model {model}"
+                )
+            effort, _ = normalize_claude_effort(effort, model)
 
     project_id = clean_project_name(os.path.basename(workspace or "agy"))
     if provider == "codex":
@@ -2357,12 +2477,14 @@ def run_chat_task(task_id: str, request_data: dict):
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest, req_raw: Request):
     verify_authorization(req_raw)
+    verify_chat_model_request(request)
     return JSONResponse(content=build_chat_response(request))
 
 
 @app.post("/api/chat-tasks")
 async def start_chat_task_endpoint(request: ChatRequest, req_raw: Request):
     verify_authorization(req_raw)
+    verify_chat_model_request(request)
     task_id = uuid.uuid4().hex
     with chat_tasks_lock:
         chat_tasks[task_id] = {

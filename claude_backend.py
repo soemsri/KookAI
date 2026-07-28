@@ -50,6 +50,37 @@ CLAUDE_MODEL_EFFORTS = {
 CLAUDE_CONVERSATION_PREFIX = "claude_"
 
 
+def configure_claude_catalog(models: list[dict[str, Any]]) -> None:
+    """Register enabled catalog aliases and capabilities for Claude models."""
+    for model in models:
+        if model.get("provider") != "claude" or not model.get("enabled", True):
+            continue
+        model_id = str(model.get("id", "")).strip()
+        label = str(model.get("label", "")).strip()
+        cli_model = str(model.get("cli_model", "")).strip()
+        if not model_id or not cli_model:
+            continue
+        CLAUDE_MODEL_MAP[model_id] = cli_model
+        if label:
+            CLAUDE_MODEL_MAP[label] = cli_model
+
+        capabilities = model.get("capabilities", {})
+        effort_values = capabilities.get("effort", [])
+        supported_efforts = {
+            CLAUDE_EFFORT_MAP[effort.lower()]
+            for effort in effort_values
+            if isinstance(effort, str) and effort.lower() in CLAUDE_EFFORT_MAP
+        }
+        if supported_efforts:
+            CLAUDE_MODEL_EFFORTS[model_id] = supported_efforts
+            if label:
+                CLAUDE_MODEL_EFFORTS[label] = supported_efforts
+        else:
+            CLAUDE_MODEL_EFFORTS.pop(model_id, None)
+            if label:
+                CLAUDE_MODEL_EFFORTS.pop(label, None)
+
+
 def _hidden_subprocess_kwargs() -> dict[str, Any]:
     if os.name != "nt":
         return {}

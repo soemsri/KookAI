@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2026-07-28.1",
+  "default_model": "Gemini 3.5 Flash (High)",
+  "models": [
+    {
+      "id": "Gemini 3.6 Flash (High)",
+      "label": "Gemini 3.6 Flash (High)",
+      "description": "Fastest response, ideal for coding tasks",
+      "provider": "agy",
+      "cli_model": "Gemini 3.6 Flash (High)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.6 Flash (Medium)",
+      "label": "Gemini 3.6 Flash (Medium)",
+      "description": "Balanced speed and performance",
+      "provider": "agy",
+      "cli_model": "Gemini 3.6 Flash (Medium)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.6 Flash (Low)",
+      "label": "Gemini 3.6 Flash (Low)",
+      "description": "Fast, low resource usage",
+      "provider": "agy",
+      "cli_model": "Gemini 3.6 Flash (Low)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.5 Flash (High)",
+      "label": "Gemini 3.5 Flash (High)",
+      "description": "Fastest response, ideal for coding tasks",
+      "provider": "agy",
+      "cli_model": "Gemini 3.5 Flash (High)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.5 Flash (Medium)",
+      "label": "Gemini 3.5 Flash (Medium)",
+      "description": "Balanced speed and performance",
+      "provider": "agy",
+      "cli_model": "Gemini 3.5 Flash (Medium)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.5 Flash (Low)",
+      "label": "Gemini 3.5 Flash (Low)",
+      "description": "Fast, low resource usage",
+      "provider": "agy",
+      "cli_model": "Gemini 3.5 Flash (Low)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.1 Pro (High)",
+      "label": "Gemini 3.1 Pro (High)",
+      "description": "Deep reasoning, complex tasks",
+      "provider": "agy",
+      "cli_model": "Gemini 3.1 Pro (High)",
+      "badge": "Pro",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.1 Pro (Low)",
+      "label": "Gemini 3.1 Pro (Low)",
+      "description": "Enhanced logic reasoning",
+      "provider": "agy",
+      "cli_model": "Gemini 3.1 Pro (Low)",
+      "badge": "Pro",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Claude Sonnet 4.6 (Thinking)",
+      "label": "Claude Sonnet 4.6 (Thinking)",
+      "description": "Advanced reasoning with thinking trace",
+      "provider": "agy",
+      "cli_model": "Claude Sonnet 4.6 (Thinking)",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Claude Opus 4.6 (Thinking)",
+      "label": "Claude Opus 4.6 (Thinking)",
+      "description": "Highest reasoning capacity model",
+      "provider": "agy",
+      "cli_model": "Claude Opus 4.6 (Thinking)",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "GPT-OSS 120B (Medium)",
+      "label": "GPT-OSS 120B (Medium)",
+      "description": "Open-source large scale LLM",
+      "provider": "agy",
+      "cli_model": "GPT-OSS 120B (Medium)",
+      "badge": "GPT",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Fable 5",
+      "label": "Fable 5",
+      "description": "For your toughest challenges",
+      "provider": "claude",
+      "cli_model": "fable",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": true}
+    },
+    {
+      "id": "Opus 5",
+      "label": "Opus 5",
+      "description": "For complex tasks",
+      "provider": "claude",
+      "cli_model": "opus",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "Sonnet 5",
+      "label": "Sonnet 5",
+      "description": "Most efficient for everyday tasks",
+      "provider": "claude",
+      "cli_model": "sonnet",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "Haiku 4.5",
+      "label": "Haiku 4.5",
+      "description": "Fastest for quick answers",
+      "provider": "claude",
+      "cli_model": "haiku",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "Opus 4.8",
+      "label": "Opus 4.8",
+      "description": "Previous generation Opus",
+      "provider": "claude",
+      "cli_model": "claude-opus-4-8",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "Opus 4.7",
+      "label": "Opus 4.7",
+      "description": "Previous generation Opus",
+      "provider": "claude",
+      "cli_model": "claude-opus-4-7",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "Opus 4.6",
+      "label": "Opus 4.6",
+      "description": "Legacy Opus model",
+      "provider": "claude",
+      "cli_model": "claude-opus-4-6",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "Opus 3",
+      "label": "Opus 3",
+      "description": "Legacy Opus model",
+      "provider": "claude",
+      "cli_model": "claude-3-opus-20240229",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "Sonnet 4.6",
+      "label": "Sonnet 4.6",
+      "description": "Previous generation Sonnet",
+      "provider": "claude",
+      "cli_model": "claude-sonnet-4-6",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "5.6 Sol",
+      "label": "5.6 Sol",
+      "description": "Codex for complex, open-ended work",
+      "provider": "codex",
+      "cli_model": "gpt-5.6-sol",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "5.6 Terra",
+      "label": "5.6 Terra",
+      "description": "Codex everyday all-rounder",
+      "provider": "codex",
+      "cli_model": "gpt-5.6-terra",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "5.6 Luna",
+      "label": "5.6 Luna",
+      "description": "Codex for clear, repeatable work",
+      "provider": "codex",
+      "cli_model": "gpt-5.6-luna",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "5.5",
+      "label": "5.5",
+      "description": "Codex GPT-5.5",
+      "provider": "codex",
+      "cli_model": "gpt-5.5",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "5.4",
+      "label": "5.4",
+      "description": "Codex GPT-5.4",
+      "provider": "codex",
+      "cli_model": "gpt-5.4",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "5.4 Mini",
+      "label": "5.4 Mini",
+      "description": "Compact Codex model",
+      "provider": "codex",
+      "cli_model": "gpt-5.4-mini",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard"], "thinking": false, "thinking_required": false}
+    }
+  ]
+}

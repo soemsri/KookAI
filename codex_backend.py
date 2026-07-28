@@ -67,6 +67,42 @@ CODEX_MODEL_EFFORTS = {
 CODEX_CONVERSATION_PREFIX = "codex_"
 
 
+def configure_codex_catalog(models: list[dict[str, Any]]) -> None:
+    """Register enabled catalog aliases and capabilities for Codex models."""
+    for model in models:
+        if model.get("provider") != "codex" or not model.get("enabled", True):
+            continue
+        model_id = str(model.get("id", "")).strip()
+        label = str(model.get("label", "")).strip()
+        cli_model = str(model.get("cli_model", "")).strip()
+        if not model_id or not cli_model:
+            continue
+        CODEX_MODEL_MAP[model_id] = cli_model
+        if label:
+            CODEX_MODEL_MAP[label] = cli_model
+
+        capabilities = model.get("capabilities", {})
+        effort_values = capabilities.get("effort", [])
+        supported_efforts = {
+            CODEX_EFFORT_MAP[effort.lower()]
+            for effort in effort_values
+            if isinstance(effort, str) and effort.lower() in CODEX_EFFORT_MAP
+        }
+        CODEX_MODEL_EFFORTS[model_id] = supported_efforts
+        if label:
+            CODEX_MODEL_EFFORTS[label] = supported_efforts
+
+        speed_values = capabilities.get("speed", [])
+        if "Fast" in speed_values:
+            CODEX_FAST_MODELS.add(model_id)
+            if label:
+                CODEX_FAST_MODELS.add(label)
+        else:
+            CODEX_FAST_MODELS.discard(model_id)
+            if label:
+                CODEX_FAST_MODELS.discard(label)
+
+
 def hidden_subprocess_kwargs() -> dict[str, Any]:
     """Return Windows flags that prevent spawned console tools from flashing."""
     if os.name != "nt":

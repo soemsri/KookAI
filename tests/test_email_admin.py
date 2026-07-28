@@ -13,6 +13,7 @@ class TunnelAccessPolicyTests(unittest.TestCase):
     def test_tunnel_allows_only_mobile_api_paths(self):
         allowed_paths = [
             "/api/pair",
+            "/api/models",
             "/api/projects",
             "/api/chat-history",
             "/api/chat",

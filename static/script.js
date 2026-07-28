@@ -96,7 +96,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let isRecording = false;
   let recognition = null;
 
-  const CODEX_MODELS = {
+  let CODEX_MODELS = {
     "5.6 Sol": { ultra: true, fast: true },
     "5.6 Terra": { ultra: true, fast: true },
     "5.6 Luna": { ultra: false, fast: true },
@@ -104,7 +104,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "5.4": { ultra: false, fast: true },
     "5.4 Mini": { ultra: false, fast: false }
   };
-  const CLAUDE_MODELS = {
+  let CLAUDE_MODELS = {
     "Fable 5": { effort: true, extra: true, thinkingRequired: true },
     "Opus 5": { effort: true, extra: true },
     "Sonnet 5": { effort: true, extra: true },
@@ -115,14 +115,126 @@ document.addEventListener("DOMContentLoaded", () => {
     "Opus 3": { effort: false, extra: false },
     "Sonnet 4.6": { effort: true, extra: false }
   };
+  let MODEL_CATALOG = {};
+  let modelCatalogVersion = "built-in";
+  let defaultCatalogModel = currentModel;
 
   const isCodexModel = model => Object.prototype.hasOwnProperty.call(CODEX_MODELS, model);
   const isClaudeModel = model => Object.prototype.hasOwnProperty.call(CLAUDE_MODELS, model);
+  const getCatalogModel = model => MODEL_CATALOG[model] || null;
+  const getModelLabel = model => getCatalogModel(model)?.label || model;
+
+  function renderModelCatalog(payload) {
+    const models = Array.isArray(payload?.models)
+      ? payload.models.filter(model => model?.enabled !== false)
+      : [];
+    if (!models.length) return false;
+
+    const nextCatalog = {};
+    const nextCodexModels = {};
+    const nextClaudeModels = {};
+    const groups = [
+      ["agy", "Antigravity Models"],
+      ["claude", "Anthropic Claude CLI"],
+      ["codex", "OpenAI Codex CLI"]
+    ];
+
+    models.forEach(model => {
+      if (
+        !model
+        || typeof model.id !== "string"
+        || typeof model.label !== "string"
+        || !["agy", "claude", "codex"].includes(model.provider)
+      ) {
+        return;
+      }
+      const capabilities = model.capabilities || {};
+      const efforts = Array.isArray(capabilities.effort) ? capabilities.effort : [];
+      const speeds = Array.isArray(capabilities.speed) ? capabilities.speed : [];
+      nextCatalog[model.id] = model;
+      if (model.provider === "codex") {
+        nextCodexModels[model.id] = {
+          ultra: efforts.includes("Ultra"),
+          fast: speeds.includes("Fast")
+        };
+      } else if (model.provider === "claude") {
+        nextClaudeModels[model.id] = {
+          effort: efforts.length > 0,
+          extra: efforts.includes("Extra"),
+          thinkingRequired: capabilities.thinking_required === true
+        };
+      }
+    });
+
+    if (!Object.keys(nextCatalog).length) return false;
+    MODEL_CATALOG = nextCatalog;
+    CODEX_MODELS = nextCodexModels;
+    CLAUDE_MODELS = nextClaudeModels;
+    modelCatalogVersion = String(payload.catalog_version || "dynamic");
+    defaultCatalogModel = nextCatalog[payload.default_model]
+      ? payload.default_model
+      : Object.keys(nextCatalog)[0];
+
+    modelDropdown.innerHTML = groups.map(([provider, title]) => {
+      const providerModels = models.filter(model => model.provider === provider && nextCatalog[model.id]);
+      if (!providerModels.length) return "";
+      const items = providerModels.map(model => {
+        const badge = escapeHtml(model.badge || (
+          provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : "AI"
+        ));
+        const badgeClass = provider === "codex"
+          ? "codex"
+          : provider === "claude"
+            ? "claude"
+            : badge.toLowerCase().replace(/[^a-z0-9_-]/g, "") || "gpt";
+        return `
+          <div class="dropdown-item" data-value="${escapeHtml(model.id)}">
+            <span class="model-badge ${badgeClass}">${badge}</span>
+            <div class="model-info">
+              <span class="model-name">${escapeHtml(model.label)}</span>
+              <span class="model-desc">${escapeHtml(model.description || "")}</span>
+            </div>
+          </div>
+        `;
+      }).join("");
+      return `<div class="dropdown-header">${escapeHtml(title)}</div>${items}`;
+    }).join("");
+
+    settingsDefaultModel.innerHTML = models
+      .filter(model => nextCatalog[model.id])
+      .map(model => (
+        `<option value="${escapeHtml(model.id)}">${escapeHtml(model.label)}</option>`
+      ))
+      .join("");
+
+    if (!nextCatalog[currentModel]) {
+      currentModel = defaultCatalogModel;
+    }
+    settingsDefaultModel.value = currentModel;
+    const diagModelCatalog = document.getElementById("diagModelCatalog");
+    if (diagModelCatalog) {
+      diagModelCatalog.textContent = `${modelCatalogVersion} · ${models.length} models`;
+    }
+    updateCodexControls();
+    return true;
+  }
+
+  async function loadModelCatalog() {
+    if (!canUseProtectedWorkspaceApis()) return;
+    try {
+      const response = await fetch("/api/models");
+      if (!response.ok) throw new Error(`Failed to load model catalog (${response.status})`);
+      renderModelCatalog(await response.json());
+    } catch (error) {
+      console.warn("Using built-in model catalog:", error);
+    }
+  }
 
   function updateCodexControls() {
     const capability = CODEX_MODELS[currentModel];
     const claudeCapability = CLAUDE_MODELS[currentModel];
-    currentProvider = capability ? "codex" : (claudeCapability ? "claude" : "agy");
+    currentProvider = getCatalogModel(currentModel)?.provider
+      || (capability ? "codex" : (claudeCapability ? "claude" : "agy"));
 
     if (capability && !capability.ultra && currentCodexEffort === "Ultra") {
       currentCodexEffort = "Medium";
@@ -138,9 +250,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     codexInlineControls?.classList.toggle("hidden", !capability && !claudeCapability);
     if (currentModelText) {
+      const modelLabel = getModelLabel(currentModel);
       currentModelText.textContent = capability
-        ? `${currentModel} ${currentCodexEffort}`
-        : (claudeCapability?.effort ? `${currentModel} ${currentClaudeEffort}` : currentModel);
+        ? `${modelLabel} ${currentCodexEffort}`
+        : (claudeCapability?.effort ? `${modelLabel} ${currentClaudeEffort}` : modelLabel);
     }
     if (currentCodexEffortText) {
       currentCodexEffortText.textContent = claudeCapability ? currentClaudeEffort : currentCodexEffort;
@@ -189,7 +302,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function applyModelSelection(model, startFreshOnProviderChange = false) {
-    currentModel = model;
+    currentModel = Object.keys(MODEL_CATALOG).length && !MODEL_CATALOG[model]
+      ? defaultCatalogModel
+      : model;
     updateCodexControls();
     if (startFreshOnProviderChange && activeConversationId) {
       startNewConversation();
@@ -263,7 +378,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currentClaudeThinking = savedClaudeThinking === "true";
     }
 
-    if (savedModel) {
+    if (savedModel && (!Object.keys(MODEL_CATALOG).length || MODEL_CATALOG[savedModel])) {
       applyModelSelection(savedModel, false);
       modelDropdown.querySelectorAll(".dropdown-item").forEach(item => {
         if (item.getAttribute("data-value") === currentModel) {
@@ -272,6 +387,8 @@ document.addEventListener("DOMContentLoaded", () => {
           item.classList.remove("active");
         }
       });
+    } else if (Object.keys(MODEL_CATALOG).length) {
+      applyModelSelection(defaultCatalogModel, false);
     }
     updateCodexControls();
 
@@ -313,6 +430,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function initApp() {
+    await loadModelCatalog();
     loadAppPreferences();
     initLocalAccessUI();
     startNewConversation(); // Generate initial UUID
@@ -587,7 +705,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
           applyModelSelection(data.model, false);
         } else if (data.provider === "agy" && currentProvider !== "agy") {
-          applyModelSelection("Gemini 3.5 Flash (High)", false);
+          applyModelSelection(defaultCatalogModel, false);
         }
         const messages = data.messages || [];
         if (messages.length === 0) {
@@ -1453,10 +1571,88 @@ document.addEventListener("DOMContentLoaded", () => {
   const settingsDefaultTarget = document.getElementById("settingsDefaultTarget");
   const settingsSpeechLang = document.getElementById("settingsSpeechLang");
   const settingsThemeMode = document.getElementById("settingsThemeMode");
+  const modelCatalogEditor = document.getElementById("modelCatalogEditor");
+  const modelCatalogSummary = document.getElementById("modelCatalogSummary");
+  const modelCatalogMessage = document.getElementById("modelCatalogMessage");
+  const modelCatalogRefreshBtn = document.getElementById("modelCatalogRefreshBtn");
+  const modelCatalogSaveBtn = document.getElementById("modelCatalogSaveBtn");
   const cliConnectionsList = document.getElementById("cliConnectionsList");
   const cliRequirementsSummary = document.getElementById("cliRequirementsSummary");
   const cliRefreshBtn = document.getElementById("cliRefreshBtn");
   let cliStatusLoading = false;
+
+  function setModelCatalogMessage(message, isError = false) {
+    if (!modelCatalogMessage) return;
+    modelCatalogMessage.textContent = message;
+    modelCatalogMessage.classList.toggle("error", isError);
+  }
+
+  async function loadModelCatalogEditor() {
+    if (!modelCatalogEditor || !canUseProtectedWorkspaceApis()) return;
+    if (modelCatalogRefreshBtn) modelCatalogRefreshBtn.disabled = true;
+    setModelCatalogMessage("Loading…");
+    try {
+      const response = await fetch("/api/models?include_disabled=true");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to load model catalog");
+      }
+      modelCatalogEditor.value = JSON.stringify(data, null, 2);
+      if (modelCatalogSummary) {
+        modelCatalogSummary.textContent =
+          `Version ${data.catalog_version} · ${data.models.length} configured models`;
+      }
+      setModelCatalogMessage("");
+    } catch (error) {
+      setModelCatalogMessage(error.message || "Failed to load model catalog", true);
+    } finally {
+      if (modelCatalogRefreshBtn) modelCatalogRefreshBtn.disabled = false;
+    }
+  }
+
+  async function saveModelCatalogEditor() {
+    if (!modelCatalogEditor || !modelCatalogSaveBtn) return;
+    let payload;
+    try {
+      payload = JSON.parse(modelCatalogEditor.value);
+    } catch (error) {
+      setModelCatalogMessage(`Invalid JSON: ${error.message}`, true);
+      return;
+    }
+
+    modelCatalogSaveBtn.disabled = true;
+    setModelCatalogMessage("Validating and saving…");
+    try {
+      const response = await fetch("/api/models", {
+        method: "PUT",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to save model catalog");
+      }
+      renderModelCatalog(data);
+      modelCatalogEditor.value = JSON.stringify({
+        schema_version: data.schema_version,
+        catalog_version: data.catalog_version,
+        default_model: data.default_model,
+        models: data.models
+      }, null, 2);
+      if (modelCatalogSummary) {
+        modelCatalogSummary.textContent =
+          `Version ${data.catalog_version} · ${data.models.length} configured models`;
+      }
+      setModelCatalogMessage("Saved. Web and mobile clients will refresh automatically.");
+    } catch (error) {
+      setModelCatalogMessage(error.message || "Failed to save model catalog", true);
+    } finally {
+      modelCatalogSaveBtn.disabled = false;
+    }
+  }
+
+  modelCatalogRefreshBtn?.addEventListener("click", loadModelCatalogEditor);
+  modelCatalogSaveBtn?.addEventListener("click", saveModelCatalogEditor);
 
   const CLI_ICON_LABELS = {
     agy: "AG",
@@ -1698,6 +1894,8 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById(targetId).classList.remove("hidden");
       if (targetId === "settingsCli") {
         loadCliStatuses();
+      } else if (targetId === "settingsModels") {
+        loadModelCatalogEditor();
       }
     });
   });
@@ -1829,8 +2027,9 @@ document.addEventListener("DOMContentLoaded", () => {
       };
     }
 
-    const lowerModel = currentModel.toLowerCase();
-    if (lowerModel.includes("gemini")) {
+    const catalogBucket = getCatalogModel(currentModel)?.usage_bucket;
+    const lowerModel = getModelLabel(currentModel).toLowerCase();
+    if (catalogBucket === "gemini" || lowerModel.includes("gemini")) {
       return {
         key: "gemini",
         title: "Gemini Models",
@@ -1838,7 +2037,7 @@ document.addEventListener("DOMContentLoaded", () => {
         note: ""
       };
     }
-    if (lowerModel.includes("gpt")) {
+    if (catalogBucket === "gpt" || lowerModel.includes("gpt")) {
       return {
         key: "gpt",
         title: "GPT Models",

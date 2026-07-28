@@ -639,6 +639,7 @@
         <!-- Tab Navigation inside settings -->
         <div class="settings-tabs">
           <div class="settings-tab active" data-target="settingsGeneral">General</div>
+          <div class="settings-tab" data-target="settingsModels">Models</div>
           <div class="settings-tab" data-target="settingsCli">CLI Connections</div>
           <div class="settings-tab" data-target="settingsSystem">Diagnostics</div>
         </div>
@@ -734,7 +735,32 @@
           </div>
         </div>
 
-        <!-- Tab Content 2: CLI installation and account connections -->
+        <!-- Tab Content 2: Dynamic model catalog -->
+        <div class="settings-tab-content hidden" id="settingsModels">
+          <div class="cli-settings-header">
+            <div>
+              <h3>Model Catalog</h3>
+              <p id="modelCatalogSummary">Loading versioned catalog…</p>
+            </div>
+            <button type="button" class="cli-refresh-btn" id="modelCatalogRefreshBtn">Reload</button>
+          </div>
+          <div class="cli-auto-install-note">
+            Add, disable, or update models here. Paired mobile apps load this catalog
+            automatically and retain the latest valid copy for offline fallback.
+          </div>
+          <textarea
+            id="modelCatalogEditor"
+            class="model-catalog-editor"
+            spellcheck="false"
+            aria-label="Model catalog JSON"
+          ></textarea>
+          <div class="model-catalog-actions">
+            <span id="modelCatalogMessage" class="model-catalog-message" aria-live="polite"></span>
+            <button type="button" class="cli-action-btn primary" id="modelCatalogSaveBtn">Validate &amp; Save</button>
+          </div>
+        </div>
+
+        <!-- Tab Content 3: CLI installation and account connections -->
         <div class="settings-tab-content hidden" id="settingsCli">
           <div class="cli-settings-header">
             <div>
@@ -753,7 +779,7 @@
           </div>
         </div>
 
-        <!-- Tab Content 3: System Info & Diagnostics -->
+        <!-- Tab Content 4: System Info & Diagnostics -->
         <div class="settings-tab-content hidden" id="settingsSystem">
           <div class="diagnostic-row">
             <span class="diagnostic-label">CLI Version:</span>
@@ -766,6 +792,10 @@
           <div class="diagnostic-row">
             <span class="diagnostic-label">Server Status:</span>
             <span class="diagnostic-value green" style="font-weight: 600;">ACTIVE (127.0.0.1:8080)</span>
+          </div>
+          <div class="diagnostic-row">
+            <span class="diagnostic-label">Model Catalog:</span>
+            <span class="diagnostic-value" id="diagModelCatalog">built-in</span>
           </div>
           <div class="diagnostic-row">
             <span class="diagnostic-label">Database Path:</span>
