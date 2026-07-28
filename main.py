@@ -1,4 +1,9 @@
 import os
+from dependency_bootstrap import ensure_python_requirements
+
+ensure_python_requirements(os.path.dirname(os.path.abspath(__file__)))
+
+import asyncio
 import uvicorn
 import subprocess
 import logging
@@ -42,6 +47,13 @@ from claude_backend import (
     normalize_claude_effort,
     parse_claude_stream_json,
     resolve_claude_executable,
+)
+from cli_manager import (
+    auto_install_missing,
+    get_cli_statuses,
+    install_cli,
+    launch_cli_login,
+    resolve_cli_executable as resolve_managed_cli_executable,
 )
 
 # Configure logging
@@ -377,6 +389,19 @@ class PairRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
+    requirements_path = os.path.join(WORKSPACE_DIR, "requirements.txt")
+    cli_statuses = await asyncio.to_thread(
+        auto_install_missing,
+        requirements_path,
+    )
+    for cli_status in cli_statuses:
+        log_method = logging.info if cli_status["installed"] else logging.warning
+        log_method(
+            "CLI requirement %s: %s%s",
+            cli_status["id"],
+            cli_status["status"],
+            f" ({cli_status['message']})" if cli_status["message"] else "",
+        )
     start_localtunnel()
     threading.Thread(target=periodic_registry_update, daemon=True).start()
 
@@ -443,6 +468,86 @@ async def pair_device(req: PairRequest):
         "token": token,
         "host_id": get_or_create_host_id()
     })
+
+
+def can_manage_cli_connections(request: Request) -> bool:
+    client_host = request.client.host if request.client else ""
+    return client_host in {"127.0.0.1", "localhost", "::1"}
+
+
+def verify_cli_admin(request: Request):
+    if not can_manage_cli_connections(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Local access is required to manage CLI connections",
+        )
+
+
+@app.get("/api/cli/status")
+async def get_cli_status(request: Request):
+    verify_cli_admin(request)
+    requirements_path = os.path.join(WORKSPACE_DIR, "requirements.txt")
+    statuses = await asyncio.to_thread(
+        get_cli_statuses,
+        requirements_path,
+    )
+    return JSONResponse(
+        content={
+            "clis": statuses,
+            "can_manage": True,
+            "auto_install": os.environ.get(
+                "KOOKAI_AUTO_INSTALL_CLIS",
+                "1",
+            ).lower()
+            in {"1", "true", "yes", "on"},
+        }
+    )
+
+
+@app.post("/api/cli/{cli_id}/install")
+async def install_cli_requirement(cli_id: str, request: Request):
+    verify_cli_admin(request)
+    if cli_id not in {"agy", "claude", "codex"}:
+        raise HTTPException(status_code=404, detail="Unknown CLI")
+    status = await asyncio.to_thread(install_cli, cli_id)
+    resolve_codex_executable.cache_clear()
+    resolve_claude_executable.cache_clear()
+    return JSONResponse(
+        status_code=200 if status["installed"] else 500,
+        content={"cli": status},
+    )
+
+
+@app.post("/api/cli/{cli_id}/connect")
+async def connect_cli_account(cli_id: str, request: Request):
+    verify_cli_admin(request)
+    if cli_id not in {"agy", "claude", "codex"}:
+        raise HTTPException(status_code=404, detail="Unknown CLI")
+
+    statuses = {
+        status["id"]: status
+        for status in await asyncio.to_thread(
+            get_cli_statuses,
+            os.path.join(WORKSPACE_DIR, "requirements.txt"),
+        )
+    }
+    status = statuses.get(cli_id)
+    if not status or not status["installed"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{cli_id} is not installed. Install it before connecting.",
+        )
+
+    result = await asyncio.to_thread(
+        launch_cli_login,
+        cli_id,
+        WORKSPACE_DIR,
+    )
+    return JSONResponse(
+        status_code=200 if result["launched"] else 503,
+        content=result,
+    )
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -1288,8 +1393,10 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
             logging.info(f"Conversation {actual_cid} belongs to {existing_project}; starting new conversation in {project_id}.")
             use_continue = False
 
-    import shutil
-    agy_path = shutil.which("agy") or os.path.expanduser("~/.local/bin/agy")
+    agy_path = (
+        resolve_managed_cli_executable("agy")
+        or os.path.expanduser("~/.local/bin/agy")
+    )
 
     cmd = [
         agy_path, "--print", message_with_context,

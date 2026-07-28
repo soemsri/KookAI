@@ -15,17 +15,30 @@ The server acts as the backend broker and hosts the web chat console.
 - **Antigravity CLI (`agy`)** for Gemini / Claude / GPT-OSS models through Antigravity
 - **Codex CLI** for Codex models (`5.6 Sol`, `5.6 Terra`, `5.6 Luna`, `5.5`, `5.4`, `5.4 Mini`)
 - **Anthropic Claude Code CLI (`claude`)** for native Claude models (`Fable 5`, `Opus 5`, `Sonnet 5`, `Haiku 4.5`, etc.)
-  - The npm install path for Claude Code recommends **Node.js 22+**.
+  - The npm install path requires **Node.js / npm**.
 
 ### Installation
 
-1. Install the required Python packages:
+1. Start the server:
 
    ```bash
-   pip install -r requirements.txt
+   # macOS / Linux
+   ./run_server.sh
+
+   # Windows
+   run_server.bat
    ```
 
-2. Download and install the Antigravity CLI (`agy`):
+   On first launch, KookAI creates the Python virtual environment when needed,
+   installs missing Python packages from `requirements.txt`, and checks the
+   `agy`, `claude`, and `codex` declarations in the same file. Missing CLIs are
+   downloaded and installed automatically before the server starts.
+
+   Set `KOOKAI_AUTO_INSTALL_CLIS=0` to disable automatic CLI installation.
+   A failed install remains visible in **Settings → CLI Connections**, where an
+   administrator can retry it.
+
+2. The automatic Antigravity CLI (`agy`) installation uses:
 
    **macOS / Linux**
    ```bash
@@ -42,14 +55,14 @@ The server acts as the backend broker and hosts the web chat console.
    curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd
    ```
 
-   Login and verify:
+   Launch and verify:
 
    ```bash
-   agy login
+   agy
    agy --version
    ```
 
-3. To use Codex models, install and authenticate the Codex CLI:
+3. The automatic Codex installation uses:
 
    ```bash
    npm install -g @openai/codex
@@ -59,7 +72,7 @@ The server acts as the backend broker and hosts the web chat console.
 
    If the server cannot find the runnable CLI, set `CODEX_CLI_PATH` to the full executable path.
 
-4. To use native Claude models, install Claude Code:
+4. The automatic Claude Code installation uses:
 
    ```bash
    npm install -g @anthropic-ai/claude-code
@@ -79,13 +92,12 @@ The server acts as the backend broker and hosts the web chat console.
 
    If the server cannot find the runnable CLI, set `CLAUDE_CLI_PATH` to the full executable path.
 
-5. Start the server:
+5. Open **Settings → CLI Connections** and select **Connect** for each provider.
+   KookAI opens that provider's interactive sign-in in a terminal on the server
+   computer. For security, CLI installation and connection management are
+   available only from localhost.
 
-   ```bash
-   python main.py
-   ```
-
-   The server automatically launches a Cloudflare Quick Tunnel so your mobile phone can reach your local workspace.
+The server automatically launches a Cloudflare Quick Tunnel so your mobile phone can reach your local workspace.
 
 ### Restarting the Server
 
@@ -232,6 +244,8 @@ If it works in your terminal but not in KookAI, set `CODEX_CLI_PATH` to the full
 
 - [Google Antigravity CLI installation and auth](https://antigravity.google/docs/cli/install)
 - [Google Antigravity download page](https://antigravity.google/download)
+- [OpenAI Codex CLI](https://developers.openai.com/codex/cli)
+- [OpenAI Codex authentication](https://learn.chatgpt.com/docs/auth)
 - [Claude Code setup](https://docs.anthropic.com/en/docs/claude-code/setup)
 - [Claude Code authentication](https://docs.anthropic.com/en/docs/claude-code/iam)
 

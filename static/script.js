@@ -1453,6 +1453,178 @@ document.addEventListener("DOMContentLoaded", () => {
   const settingsDefaultTarget = document.getElementById("settingsDefaultTarget");
   const settingsSpeechLang = document.getElementById("settingsSpeechLang");
   const settingsThemeMode = document.getElementById("settingsThemeMode");
+  const cliConnectionsList = document.getElementById("cliConnectionsList");
+  const cliRequirementsSummary = document.getElementById("cliRequirementsSummary");
+  const cliRefreshBtn = document.getElementById("cliRefreshBtn");
+  let cliStatusLoading = false;
+
+  const CLI_ICON_LABELS = {
+    agy: "AG",
+    claude: "CL",
+    codex: "CX"
+  };
+
+  function renderCliStatuses(payload) {
+    if (!cliConnectionsList) return;
+    const clis = Array.isArray(payload?.clis) ? payload.clis : [];
+    const canManage = payload?.can_manage === true;
+    const installedCount = clis.filter(cli => cli.installed).length;
+
+    if (cliRequirementsSummary) {
+      const accessNote = canManage ? "" : " · Admin access required to manage";
+      cliRequirementsSummary.textContent =
+        `${installedCount} of ${clis.length} required tools installed${accessNote}`;
+    }
+
+    if (!clis.length) {
+      cliConnectionsList.innerHTML =
+        '<div class="cli-empty">No CLI requirements were found in requirements.txt.</div>';
+      return;
+    }
+
+    cliConnectionsList.innerHTML = clis.map(cli => {
+      const status = ["installed", "installing", "error"].includes(cli.status)
+        ? cli.status
+        : (cli.installed ? "installed" : "missing");
+      const statusLabel = {
+        installed: "Installed",
+        installing: "Installing",
+        error: "Install failed",
+        missing: "Missing"
+      }[status];
+      const detail = cli.message || cli.version || cli.connect_help || "";
+      const detailClass = status === "error" ? " error" : "";
+      const installLabel = status === "error" ? "Retry install" : "Install";
+      const disableInstall = !canManage || status === "installing";
+      const disableConnect = !canManage || !cli.installed || status === "installing";
+
+      return `
+        <div class="cli-connection-card" data-cli-card="${escapeHtml(cli.id)}">
+          <div class="cli-provider-icon">${escapeHtml(CLI_ICON_LABELS[cli.id] || cli.id.slice(0, 2).toUpperCase())}</div>
+          <div class="cli-provider-info">
+            <div class="cli-provider-title-row">
+              <span class="cli-provider-name">${escapeHtml(cli.name)}</span>
+              <span class="cli-status-pill ${status}">${statusLabel}</span>
+            </div>
+            <div class="cli-provider-detail${detailClass}">${escapeHtml(detail)}</div>
+          </div>
+          <div class="cli-actions">
+            <button
+              type="button"
+              class="cli-action-btn"
+              data-cli-action="install"
+              data-cli-id="${escapeHtml(cli.id)}"
+              ${cli.installed ? "hidden" : ""}
+              ${disableInstall ? "disabled" : ""}
+            >${installLabel}</button>
+            <button
+              type="button"
+              class="cli-action-btn primary"
+              data-cli-action="connect"
+              data-cli-id="${escapeHtml(cli.id)}"
+              ${disableConnect ? "disabled" : ""}
+            >Connect</button>
+          </div>
+          <div class="cli-action-message hidden" data-cli-message></div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderCliStatusError(message) {
+    if (cliRequirementsSummary) {
+      cliRequirementsSummary.textContent = "Could not load CLI requirements";
+    }
+    if (cliConnectionsList) {
+      cliConnectionsList.innerHTML =
+        `<div class="cli-empty">${escapeHtml(message)}</div>`;
+    }
+  }
+
+  async function loadCliStatuses() {
+    if (cliStatusLoading) return;
+    cliStatusLoading = true;
+    if (cliRefreshBtn) {
+      cliRefreshBtn.disabled = true;
+      cliRefreshBtn.textContent = "Checking…";
+    }
+    try {
+      const response = await fetch("/api/cli/status");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to load CLI status");
+      }
+      renderCliStatuses(data);
+    } catch (error) {
+      renderCliStatusError(error.message || "Failed to load CLI status");
+    } finally {
+      cliStatusLoading = false;
+      if (cliRefreshBtn) {
+        cliRefreshBtn.disabled = false;
+        cliRefreshBtn.textContent = "Refresh";
+      }
+    }
+  }
+
+  function setCliActionMessage(cliId, message, isError = false) {
+    const card = cliConnectionsList?.querySelector(
+      `[data-cli-card="${CSS.escape(cliId)}"]`
+    );
+    const messageElement = card?.querySelector("[data-cli-message]");
+    if (!messageElement) return;
+    messageElement.textContent = message;
+    messageElement.classList.toggle("error", isError);
+    messageElement.classList.toggle("hidden", !message);
+  }
+
+  async function runCliAction(cliId, action) {
+    const card = cliConnectionsList?.querySelector(
+      `[data-cli-card="${CSS.escape(cliId)}"]`
+    );
+    const buttons = card?.querySelectorAll(".cli-action-btn") || [];
+    buttons.forEach(button => { button.disabled = true; });
+    setCliActionMessage(
+      cliId,
+      action === "install"
+        ? "Downloading and installing this CLI…"
+        : "Opening the sign-in flow on the server computer…"
+    );
+
+    try {
+      const response = await fetch(`/api/cli/${encodeURIComponent(cliId)}/${action}`, {
+        method: "POST"
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        const detail = data.detail || data.message || data.cli?.message || "CLI action failed";
+        const manualCommand = data.command ? ` Run manually: ${data.command}` : "";
+        throw new Error(detail + manualCommand);
+      }
+      if (action === "connect") {
+        setCliActionMessage(cliId, data.message || "Sign-in terminal opened.");
+        buttons.forEach(button => {
+          if (button.dataset.cliAction === "connect") button.disabled = false;
+        });
+      } else {
+        await loadCliStatuses();
+      }
+    } catch (error) {
+      setCliActionMessage(cliId, error.message || "CLI action failed", true);
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  }
+
+  if (cliRefreshBtn) {
+    cliRefreshBtn.addEventListener("click", loadCliStatuses);
+  }
+
+  if (cliConnectionsList) {
+    cliConnectionsList.addEventListener("click", event => {
+      const button = event.target.closest("[data-cli-action]");
+      if (!button || button.disabled) return;
+      runCliAction(button.dataset.cliId, button.dataset.cliAction);
+    });
+  }
 
   settingsBtn.addEventListener("click", () => {
     // Populate with current configurations
@@ -1468,6 +1640,7 @@ document.addEventListener("DOMContentLoaded", () => {
       settingsSpeechLang.value = recognition.lang || "th-TH";
     }
     settingsModal.classList.remove("hidden");
+    loadCliStatuses();
   });
 
   settingsDefaultModel.addEventListener("change", () => {
@@ -1523,6 +1696,9 @@ document.addEventListener("DOMContentLoaded", () => {
       tab.classList.add("active");
       const targetId = tab.getAttribute("data-target");
       document.getElementById(targetId).classList.remove("hidden");
+      if (targetId === "settingsCli") {
+        loadCliStatuses();
+      }
     });
   });
 
