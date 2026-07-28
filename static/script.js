@@ -1836,6 +1836,29 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  const DEFAULT_SETTINGS_TAB = "settingsGeneral";
+
+  function activateSettingsTab(targetId = DEFAULT_SETTINGS_TAB) {
+    const targetTab = settingsModal.querySelector(
+      `.settings-tab[data-target="${CSS.escape(targetId)}"]`
+    );
+    const targetContent = document.getElementById(targetId);
+    if (!targetTab || !targetContent) return;
+
+    settingsModal.querySelectorAll(".settings-tab").forEach(tab => {
+      tab.classList.toggle("active", tab === targetTab);
+    });
+    settingsModal.querySelectorAll(".settings-tab-content").forEach(content => {
+      content.classList.toggle("hidden", content !== targetContent);
+    });
+
+    if (targetId === "settingsCli") {
+      loadCliStatuses();
+    } else if (targetId === "settingsModels") {
+      loadModelCatalogEditor();
+    }
+  }
+
   settingsBtn.addEventListener("click", () => {
     // Populate with current configurations
     settingsDefaultModel.value = currentModel;
@@ -1849,6 +1872,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (recognition) {
       settingsSpeechLang.value = recognition.lang || "th-TH";
     }
+    activateSettingsTab();
     settingsModal.classList.remove("hidden");
     loadCliStatuses();
   });
@@ -1900,17 +1924,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Settings tab selection
   settingsModal.querySelectorAll(".settings-tab").forEach(tab => {
     tab.addEventListener("click", () => {
-      settingsModal.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
-      settingsModal.querySelectorAll(".settings-tab-content").forEach(c => c.classList.add("hidden"));
-
-      tab.classList.add("active");
       const targetId = tab.getAttribute("data-target");
-      document.getElementById(targetId).classList.remove("hidden");
-      if (targetId === "settingsCli") {
-        loadCliStatuses();
-      } else if (targetId === "settingsModels") {
-        loadModelCatalogEditor();
-      }
+      activateSettingsTab(targetId);
     });
   });
 
