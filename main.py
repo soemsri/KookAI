@@ -101,9 +101,26 @@ if os.name == "nt":
             DESKTOP_DIR = resolved_desktop
     except Exception as e:
         logging.error(f"Failed to resolve Windows Desktop user shell folder: {e}")
-WORKSPACE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _configured_project_roots() -> tuple[str, ...]:
+    configured = os.environ.get("KOOKAI_PROJECTS_ROOTS", "")
+    candidates = configured.split(os.pathsep) if configured else [DESKTOP_DIR]
+    roots = []
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        root = os.path.abspath(os.path.expanduser(os.path.expandvars(candidate)))
+        if root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
+PROJECTS_ROOTS = _configured_project_roots()
 BUILTIN_MODEL_CATALOG_PATH = os.path.join(
-    WORKSPACE_DIR,
+    APP_DIR,
     "model_catalog.json",
 )
 MODEL_CATALOG_PATH = os.environ.get(
@@ -186,7 +203,7 @@ def get_tunnel_block_page() -> str:
         return _tunnel_block_page_cache
 
     icon_data_uri = ""
-    icon_path = os.path.join(WORKSPACE_DIR, "static", "kookai-icon.png")
+    icon_path = os.path.join(APP_DIR, "static", "kookai-icon.png")
     try:
         with open(icon_path, "rb") as f:
             icon_data_uri = "data:image/png;base64," + base64.b64encode(f.read()).decode("ascii")
@@ -439,7 +456,7 @@ async def startup_event():
         catalog["catalog_version"],
         sum(1 for model in catalog["models"] if model["enabled"]),
     )
-    requirements_path = os.path.join(WORKSPACE_DIR, "requirements.txt")
+    requirements_path = os.path.join(APP_DIR, "requirements.txt")
     cli_statuses = await asyncio.to_thread(
         auto_install_missing,
         requirements_path,
@@ -536,7 +553,7 @@ def verify_cli_admin(request: Request):
 @app.get("/api/cli/status")
 async def get_cli_status(request: Request):
     verify_cli_admin(request)
-    requirements_path = os.path.join(WORKSPACE_DIR, "requirements.txt")
+    requirements_path = os.path.join(APP_DIR, "requirements.txt")
     try:
         statuses = await asyncio.wait_for(
             asyncio.to_thread(get_cli_statuses, requirements_path),
@@ -585,7 +602,7 @@ async def connect_cli_account(cli_id: str, request: Request):
         status["id"]: status
         for status in await asyncio.to_thread(
             get_cli_statuses,
-            os.path.join(WORKSPACE_DIR, "requirements.txt"),
+            os.path.join(APP_DIR, "requirements.txt"),
         )
     }
     status = statuses.get(cli_id)
@@ -598,7 +615,7 @@ async def connect_cli_account(cli_id: str, request: Request):
     result = await asyncio.to_thread(
         launch_cli_login,
         cli_id,
-        WORKSPACE_DIR,
+        APP_DIR,
     )
     return JSONResponse(
         status_code=200 if result["launched"] else 503,
@@ -1098,62 +1115,58 @@ def clean_project_name(path_name: str) -> str:
         return "GinRaiDee"
     return path_name
 
-# Helper: Get list of projects on Desktop & Parent Workspace directory (Dynamic list of folders)
+# Helper: Get projects from explicitly configured workspace roots.
 def get_desktop_projects():
-    projects = ["agy", "VirtualOffice", "GinRaiDee", "HumanRelation"] # Default minimum set
-    
-    # 1. Scan the sibling directory (parent of workspace_dir)
-    parent_dir = os.path.dirname(WORKSPACE_DIR)
-    if os.path.exists(parent_dir):
+    projects = []
+    for project_root in PROJECTS_ROOTS:
+        if not os.path.isdir(project_root):
+            logging.warning(f"Configured project root does not exist: {project_root}")
+            continue
         try:
-            for entry in os.listdir(parent_dir):
-                full_path = os.path.join(parent_dir, entry)
-                if os.path.isdir(full_path) and not entry.startswith('.'):
+            for entry in sorted(os.listdir(project_root), key=str.casefold):
+                full_path = os.path.join(project_root, entry)
+                if (
+                    os.path.isdir(full_path)
+                    and not entry.startswith(".")
+                    and os.path.commonpath(
+                        [os.path.realpath(full_path), os.path.realpath(project_root)]
+                    )
+                    == os.path.realpath(project_root)
+                ):
                     cleaned = clean_project_name(entry)
                     if cleaned not in projects:
                         projects.append(cleaned)
         except Exception as e:
-            logging.error(f"Error scanning parent project dir {parent_dir}: {e}")
-            
-    # 2. Scan Desktop path
-    desktop_path = DESKTOP_DIR
-    if os.path.exists(desktop_path):
-        try:
-            for entry in os.listdir(desktop_path):
-                full_path = os.path.join(desktop_path, entry)
-                if os.path.isdir(full_path) and not entry.startswith('.'):
-                    cleaned = clean_project_name(entry)
-                    if cleaned not in projects:
-                        projects.append(cleaned)
-        except Exception as e:
-            logging.error(f"Error scanning desktop dir {desktop_path}: {e}")
-            
+            logging.error(f"Error scanning project root {project_root}: {e}")
     return projects
 
+
 def resolve_project_directory(project_id: str) -> str:
-    # 1. Check parent workspace directory (sibling projects)
-    parent_dir = os.path.dirname(WORKSPACE_DIR)
-    direct_path = os.path.join(parent_dir, project_id)
-    if os.path.exists(direct_path) and os.path.isdir(direct_path):
-        return direct_path
-    if os.path.exists(parent_dir):
-        for entry in os.listdir(parent_dir):
-            full_path = os.path.join(parent_dir, entry)
-            if os.path.isdir(full_path) and clean_project_name(entry) == project_id:
+    if not project_id or os.path.basename(project_id) != project_id:
+        raise ValueError(f"Invalid project ID: {project_id!r}")
+
+    for project_root in PROJECTS_ROOTS:
+        if not os.path.isdir(project_root):
+            continue
+        root_realpath = os.path.realpath(project_root)
+        try:
+            entries = os.listdir(project_root)
+        except OSError as e:
+            logging.error(f"Error reading project root {project_root}: {e}")
+            continue
+        for entry in entries:
+            full_path = os.path.join(project_root, entry)
+            if not os.path.isdir(full_path) or entry.startswith("."):
+                continue
+            if clean_project_name(entry) != project_id:
+                continue
+            resolved_path = os.path.realpath(full_path)
+            if os.path.commonpath([resolved_path, root_realpath]) == root_realpath:
                 return full_path
 
-    # 2. Check Desktop directory
-    desktop_path = DESKTOP_DIR
-    direct_path = os.path.join(desktop_path, project_id)
-    if os.path.exists(direct_path) and os.path.isdir(direct_path):
-        return direct_path
-    if os.path.exists(desktop_path):
-        for entry in os.listdir(desktop_path):
-            full_path = os.path.join(desktop_path, entry)
-            if os.path.isdir(full_path) and clean_project_name(entry) == project_id:
-                return full_path
-                
-    return WORKSPACE_DIR
+    raise ValueError(
+        f"Unknown project {project_id!r}; it is not inside a configured project root"
+    )
 
 def get_conversation_project(conversation_id: str) -> Optional[str]:
     hist_paths = [
@@ -1553,7 +1566,7 @@ def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=No
 
 def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: str = "Sandbox", workspace: str = "agy", progress_callback=None):
     mapped_model = map_model_name(model_ui_name)
-    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
     message_with_context = (
         f"Selected KookAI project/workspace: {project_id}\n"
@@ -1691,7 +1704,7 @@ def run_codex_cli(
     image_paths: Optional[List[str]] = None,
     progress_callback=None,
 ):
-    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
     mapping_key = f"codex:{project_id}:{conversation_id}"
     actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
@@ -1832,7 +1845,7 @@ def run_claude_cli(
     thinking: bool = True,
     progress_callback=None,
 ):
-    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
     mapping_key = f"claude:{project_id}:{conversation_id}"
     actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
@@ -1959,7 +1972,7 @@ def run_kimi_cli(
     workspace: str = "agy",
     progress_callback=None,
 ):
-    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
     mapping_key = f"kimi:{project_id}:{conversation_id}"
     actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
@@ -2142,7 +2155,7 @@ def run_selected_cli(
 async def get_files(request: Request):
     verify_authorization(request)
     files = []
-    workspace_path = WORKSPACE_DIR
+    workspace_path = APP_DIR
     if os.path.exists(workspace_path):
         for root, dirs, filenames in os.walk(workspace_path):
             dirs[:] = [d for d in dirs if not d.startswith('.')]
@@ -2172,7 +2185,13 @@ async def get_files(request: Request):
 async def get_projects(request: Request):
     verify_authorization(request)
     projects = get_desktop_projects()
-    return JSONResponse(content={"projects": projects, "workspace_dir": WORKSPACE_DIR})
+    return JSONResponse(content={
+        "projects": projects,
+        "projects_roots": list(PROJECTS_ROOTS),
+        # Retained for older web clients that show a single diagnostic path.
+        "workspace_dir": PROJECTS_ROOTS[0] if PROJECTS_ROOTS else None,
+        "app_dir": APP_DIR,
+    })
 
 @app.get("/api/conversations")
 async def get_conversations(request: Request, project: Optional[str] = None):
@@ -2387,7 +2406,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
                 )
             effort, _ = normalize_claude_effort(effort, model)
 
-    project_id = clean_project_name(os.path.basename(workspace or "agy"))
+    project_id = clean_project_name(workspace or "agy")
     if provider == "codex":
         actual_cid = convo_id_mapping.get(
             f"codex:{project_id}:{conversation_id}",
@@ -2527,7 +2546,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             # Interview completed! Close state and save report
             del interview_states[actual_cid]
             
-            project_id = clean_project_name(os.path.basename(workspace or "agy"))
+            project_id = clean_project_name(workspace or "agy")
             cwd_path = resolve_project_directory(project_id)
             pref_file = os.path.join(cwd_path, "alignment_preferences.json")
             try:
@@ -2563,7 +2582,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             )
             resolved_cid = conversation_id
         else:
-            project_id = clean_project_name(os.path.basename(workspace or "agy"))
+            project_id = clean_project_name(workspace or "agy")
             cwd_path = resolve_project_directory(project_id)
             if provider in {"codex", "kimi"}:
                 agents_file = os.path.join(cwd_path, "AGENTS.md")

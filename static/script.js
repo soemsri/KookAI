@@ -492,6 +492,12 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!projRes.ok) throw new Error(`Failed to load projects (${projRes.status})`);
       const projData = await projRes.json();
       projectsList = Array.isArray(projData.projects) ? projData.projects : [];
+      if (!projectsList.includes(currentWorkspace)) {
+        currentWorkspace = projectsList[0] || "";
+        if (headerProject) {
+          headerProject.textContent = currentWorkspace || "No workspace";
+        }
+      }
       if (projData.workspace_dir) {
         const diagWorkspace = document.getElementById("diagWorkspace");
         if (diagWorkspace) {

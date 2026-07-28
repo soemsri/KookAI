@@ -122,6 +122,24 @@ The server acts as the backend broker and hosts the web chat console.
 
 The server automatically launches a Cloudflare Quick Tunnel so your mobile phone can reach your local workspace.
 
+### Project Workspaces
+
+By default, KookAI lists immediate subdirectories of the current user's
+Desktop as projects. The application installation directory is kept separate
+and is never scanned for projects.
+
+Set `KOOKAI_PROJECTS_ROOTS` before starting the server to allow projects from
+different locations. Separate multiple roots with the platform path separator
+(`:` on macOS/Linux, `;` on Windows):
+
+```bash
+KOOKAI_PROJECTS_ROOTS="/srv/projects:/root/Desktop" ./run_server.sh
+```
+
+Only directories directly inside these configured roots can be selected as
+workspaces. Unknown project names are rejected instead of falling back to the
+KookAI application directory.
+
 ### Dynamic Model Catalog
 
 KookAI serves a versioned model catalog from `GET /api/models`. The web client
