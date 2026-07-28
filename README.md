@@ -37,7 +37,7 @@ The server acts as the backend broker and hosts the web chat console.
    downloaded and installed automatically before the server starts.
 
    Set `KOOKAI_AUTO_INSTALL_CLIS=0` to disable automatic CLI installation.
-   A failed install remains visible in **Settings → CLI Connections**, where an
+   A failed install remains visible in **Settings → Connections**, where an
    administrator can retry it.
 
 2. The automatic Antigravity CLI (`agy`) installation uses:
@@ -115,7 +115,7 @@ The server acts as the backend broker and hosts the web chat console.
 
    If the server cannot find the runnable CLI, set `KIMI_CLI_PATH` to the full executable path.
 
-6. Open **Settings → CLI Connections** and select **Connect** for each provider.
+6. Open **Settings → Connections** and select **Connect** for each provider.
    KookAI opens that provider's interactive sign-in in a terminal on the server
    computer. For security, CLI installation and connection management are
    available only from localhost.
