@@ -1839,6 +1839,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const DEFAULT_SETTINGS_TAB = "settingsGeneral";
 
   function activateSettingsTab(targetId = DEFAULT_SETTINGS_TAB) {
+    const settingsTabs = settingsModal.querySelector(".settings-tabs");
     const targetTab = settingsModal.querySelector(
       `.settings-tab[data-target="${CSS.escape(targetId)}"]`
     );
@@ -1851,6 +1852,10 @@ document.addEventListener("DOMContentLoaded", () => {
     settingsModal.querySelectorAll(".settings-tab-content").forEach(content => {
       content.classList.toggle("hidden", content !== targetContent);
     });
+    targetContent.scrollTop = 0;
+    if (targetId === DEFAULT_SETTINGS_TAB && settingsTabs) {
+      settingsTabs.scrollLeft = 0;
+    }
 
     if (targetId === "settingsCli") {
       loadCliStatuses();
