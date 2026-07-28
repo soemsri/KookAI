@@ -135,6 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextClaudeModels = {};
     const groups = [
       ["agy", "Antigravity Models"],
+      ["kimi", "Moonshot Kimi Code CLI"],
       ["claude", "Anthropic Claude CLI"],
       ["codex", "OpenAI Codex CLI"]
     ];
@@ -144,7 +145,7 @@ document.addEventListener("DOMContentLoaded", () => {
         !model
         || typeof model.id !== "string"
         || typeof model.label !== "string"
-        || !["agy", "claude", "codex"].includes(model.provider)
+        || !["agy", "claude", "codex", "kimi"].includes(model.provider)
       ) {
         return;
       }
@@ -180,12 +181,20 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!providerModels.length) return "";
       const items = providerModels.map(model => {
         const badge = escapeHtml(model.badge || (
-          provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : "AI"
+          provider === "codex"
+            ? "Codex"
+            : provider === "claude"
+              ? "Claude"
+              : provider === "kimi"
+                ? "Kimi"
+                : "AI"
         ));
         const badgeClass = provider === "codex"
           ? "codex"
           : provider === "claude"
             ? "claude"
+            : provider === "kimi"
+              ? "kimi"
             : badge.toLowerCase().replace(/[^a-z0-9_-]/g, "") || "gpt";
         return `
           <div class="dropdown-item" data-value="${escapeHtml(model.id)}">
@@ -233,7 +242,11 @@ document.addEventListener("DOMContentLoaded", () => {
   function updateCodexControls() {
     const capability = CODEX_MODELS[currentModel];
     const claudeCapability = CLAUDE_MODELS[currentModel];
+    const selectedItem = Array.from(
+      modelDropdown?.querySelectorAll(".dropdown-item") || []
+    ).find(item => item.dataset.value === currentModel);
     currentProvider = getCatalogModel(currentModel)?.provider
+      || selectedItem?.dataset.provider
       || (capability ? "codex" : (claudeCapability ? "claude" : "agy"));
 
     if (capability && !capability.ultra && currentCodexEffort === "Ultra") {
@@ -1656,6 +1669,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const CLI_ICON_LABELS = {
     agy: "AG",
+    kimi: "KI",
     claude: "CL",
     codex: "CX"
   };
@@ -2037,7 +2051,15 @@ document.addEventListener("DOMContentLoaded", () => {
         note: ""
       };
     }
-    if (catalogBucket === "gpt" || lowerModel.includes("gpt")) {
+    if (catalogBucket === "gpt" || lowerModel.includes("gpt") || lowerModel.includes("kimi")) {
+      if (lowerModel.includes("kimi")) {
+        return {
+          key: "gpt",
+          title: "Kimi Models",
+          badge: "KookAI Kimi usage",
+          note: "Kimi usage is grouped in the KookAI model usage budget."
+        };
+      }
       return {
         key: "gpt",
         title: "GPT Models",

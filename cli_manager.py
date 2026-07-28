@@ -78,6 +78,16 @@ CLI_DEFINITIONS: dict[str, CliDefinition] = {
         connect_help="Runs codex login and opens the ChatGPT sign-in flow.",
         env_path="CODEX_CLI_PATH",
     ),
+    "kimi": CliDefinition(
+        cli_id="kimi",
+        name="Moonshot Kimi Code",
+        executable="kimi",
+        install_kind="native_kimi",
+        install_source="https://code.kimi.com/kimi-code/install.sh",
+        connect_args=("login",),
+        connect_help="Runs kimi login and opens the Kimi device authorization flow.",
+        env_path="KIMI_CLI_PATH",
+    ),
 }
 
 _install_lock = threading.Lock()
@@ -169,6 +179,11 @@ def _known_cli_candidates(definition: CliDefinition) -> list[str]:
                 ".plugin-appserver",
                 "codex.exe",
             )
+        )
+    if definition.cli_id == "kimi":
+        candidates.extend(
+            os.path.join(home, ".kimi-code", "bin", executable_name)
+            for executable_name in _candidate_executable_names("kimi")
         )
     return candidates
 
@@ -314,6 +329,42 @@ def _install_native_agy() -> subprocess.CompletedProcess[str]:
             pass
 
 
+def _install_native_kimi() -> subprocess.CompletedProcess[str]:
+    if os.name == "nt":
+        installer_url = "https://code.kimi.com/kimi-code/install.ps1"
+        installer_path = _download_installer(installer_url, ".ps1")
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+        if not powershell:
+            os.unlink(installer_path)
+            raise RuntimeError("PowerShell is required to install Kimi Code CLI")
+        command = [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            installer_path,
+        ]
+    else:
+        installer_path = _download_installer(
+            CLI_DEFINITIONS["kimi"].install_source,
+            ".sh",
+        )
+        bash = shutil.which("bash")
+        if not bash:
+            os.unlink(installer_path)
+            raise RuntimeError("bash is required to install Kimi Code CLI")
+        command = [bash, installer_path]
+
+    try:
+        return _run_installer(command)
+    finally:
+        try:
+            os.unlink(installer_path)
+        except OSError:
+            pass
+
+
 def _install_npm_package(package_name: str) -> subprocess.CompletedProcess[str]:
     npm = shutil.which("npm")
     if not npm:
@@ -363,6 +414,8 @@ def install_cli(cli_id: str) -> dict[str, Any]:
         try:
             if definition.install_kind == "native":
                 result = _install_native_agy()
+            elif definition.install_kind == "native_kimi":
+                result = _install_native_kimi()
             elif definition.install_kind == "npm":
                 result = _install_npm_package(definition.install_source)
             else:

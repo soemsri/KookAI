@@ -86,7 +86,7 @@ message: string;
 
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
-type AgentProvider = 'agy' | 'codex' | 'claude';
+type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi';
 type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
 type CodexSpeed = 'Standard' | 'Fast';
 type ClaudeEffort = 'Low' | 'Medium' | 'High' | 'Extra' | 'Max';
@@ -148,6 +148,7 @@ const FALLBACK_MODELS: ModelOption[] = [
   { value: "Claude Sonnet 4.6 (Thinking)", desc: "Advanced reasoning with thinking trace", provider: "agy" },
   { value: "Claude Opus 4.6 (Thinking)", desc: "Highest reasoning capacity model", provider: "agy" },
   { value: "GPT-OSS 120B (Medium)", desc: "Open-source large scale LLM", provider: "agy" },
+  { value: "Kimi K3", desc: "Native multimodal model for long-horizon coding", provider: "kimi", badge: "Kimi", usageBucket: "gpt", thinkingRequired: true },
   { value: "Fable 5", desc: "For your toughest challenges", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true, thinkingRequired: true },
   { value: "Opus 5", desc: "For complex tasks", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
   { value: "Sonnet 5", desc: "Most efficient for everyday tasks", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
@@ -212,6 +213,7 @@ const getModelOption = (modelName: string) => activeModelsList.find(
 const getModelLabel = (modelName: string) => getModelOption(modelName)?.label || modelName;
 const isCodexModel = (modelName: string) => getModelOption(modelName)?.provider === "codex";
 const isClaudeModel = (modelName: string) => getModelOption(modelName)?.provider === "claude";
+const isKimiModel = (modelName: string) => getModelOption(modelName)?.provider === "kimi";
 const getClaudeEfforts = (modelName: string) => {
   const model = getModelOption(modelName);
   if (!model?.supportsClaudeEffort) return [];
@@ -243,12 +245,19 @@ const getUsageBucketForModel = (modelName: string): {
       note: 'Codex models draw from your ChatGPT/Codex GPT usage budget.',
     };
   }
+  if (isKimiModel(modelName)) {
+    return {
+      key: 'gpt',
+      title: 'Kimi Models (KookAI)',
+      note: 'Kimi usage is grouped in the KookAI model usage budget.',
+    };
+  }
 
   const lowered = getModelLabel(modelName).toLowerCase();
   if (catalogBucket === 'gemini' || lowered.includes('gemini')) {
     return { key: 'gemini', title: 'Gemini Models (Google AI Ultra)' };
   }
-  if (catalogBucket === 'gpt' || lowered.includes('gpt')) {
+  if (catalogBucket === 'gpt' || lowered.includes('gpt') || lowered.includes('kimi')) {
     return { key: 'gpt', title: 'GPT Models (KookAI)' };
   }
   return { key: 'claude', title: 'Claude Models (Claude Pro)' };
@@ -378,6 +387,11 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
     return isDark
       ? { text: 'GPT', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }
       : { text: 'GPT', bg: '#ecfdf5', color: '#059669' };
+  }
+  if (name.includes('kimi')) {
+    return isDark
+      ? { text: catalogBadge || 'Kimi', bg: 'rgba(6, 182, 212, 0.15)', color: '#22d3ee' }
+      : { text: catalogBadge || 'Kimi', bg: '#cffafe', color: '#0e7490' };
   }
   return isDark
     ? { text: catalogBadge || 'AI', bg: 'rgba(107, 114, 128, 0.15)', color: '#9ca3af' }
@@ -1691,7 +1705,15 @@ const selectConversation = async (cid: string, projectName?: string) => {
 const selectedConversation = conversations.find((convo) => convo.id === cid);
 const conversationProject = projectName || selectedConversation?.project;
 const conversationProvider = selectedConversation?.provider
-  || (cid.startsWith('codex_') ? 'codex' : (cid.startsWith('claude_') ? 'claude' : 'agy'));
+  || (
+    cid.startsWith('codex_')
+      ? 'codex'
+      : cid.startsWith('claude_')
+        ? 'claude'
+        : cid.startsWith('kimi_')
+          ? 'kimi'
+          : 'agy'
+  );
 if (conversationProject) {
 setSelectedProject(conversationProject);
 selectedProjectRef.current = conversationProject;
@@ -1705,7 +1727,7 @@ setLoadingState(true);
     try {
 const data = await callHostApi(`/api/conversation/${cid}`);
 const resolvedProject = data.project || conversationProject;
-const resolvedProvider: AgentProvider = ['codex', 'claude'].includes(data.provider)
+const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi'].includes(data.provider)
   ? data.provider
   : conversationProvider;
 if (resolvedProject) {
@@ -2694,6 +2716,7 @@ allowQueue: false,
                 {item.model}
                 {item.provider === 'codex' ? ` · ${item.effort} · ${item.speed}` : ''}
                 {item.provider === 'claude' ? ` · ${item.effort} · Thinking ${item.thinking ? 'On' : 'Off'}` : ''}
+                {item.provider === 'kimi' ? ' · Thinking On' : ''}
                 {` · ${item.target}`}
               </Text>
             </View>

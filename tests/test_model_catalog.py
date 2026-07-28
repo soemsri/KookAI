@@ -57,6 +57,17 @@ class ModelCatalogTests(unittest.TestCase):
             resolve_catalog_model(catalog, catalog["models"][0]["id"])
         )
 
+    def test_kimi_k3_is_available_by_display_name_and_cli_slug(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+
+        display_model = resolve_catalog_model(catalog, "Kimi K3")
+        cli_model = resolve_catalog_model(catalog, "kimi-for-coding/k3")
+
+        self.assertIsNotNone(display_model)
+        self.assertEqual(display_model["provider"], "kimi")
+        self.assertEqual(display_model["cli_model"], "kimi-for-coding/k3")
+        self.assertEqual(cli_model["id"], "Kimi K3")
+
 
 class ModelCatalogApiTests(unittest.TestCase):
     @staticmethod
@@ -86,6 +97,26 @@ class ModelCatalogApiTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as context:
             main.verify_chat_model_request(request)
         self.assertEqual(context.exception.status_code, 422)
+
+    def test_kimi_chat_request_uses_kimi_provider(self):
+        request = main.ChatRequest(
+            message="hello",
+            model="Kimi K3",
+            workspace="agy",
+            target="Sandbox",
+            conversation_id="temp-kimi-test",
+            provider="kimi",
+        )
+
+        model = main.resolve_chat_model(request)
+
+        self.assertEqual(model["id"], "Kimi K3")
+        self.assertEqual(model["provider"], "kimi")
+        self.assertEqual(model["cli_model"], "kimi-for-coding/k3")
+        self.assertEqual(
+            main.map_model_name("Kimi K3"),
+            "kimi-for-coding/k3",
+        )
 
     def test_runtime_catalog_registers_dynamic_codex_model(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)

@@ -32,6 +32,7 @@ class CliManagerTests(unittest.TestCase):
                 "# kookai-cli: agy\n"
                 "# kookai-cli: claude\n"
                 "# kookai-cli: codex\n"
+                "# kookai-cli: kimi\n"
                 "# kookai-cli: unknown\n"
                 "# kookai-cli: codex\n"
             )
@@ -39,7 +40,7 @@ class CliManagerTests(unittest.TestCase):
         try:
             self.assertEqual(
                 cli_manager.parse_cli_requirements(path),
-                ["agy", "claude", "codex"],
+                ["agy", "claude", "codex", "kimi"],
             )
         finally:
             os.unlink(path)
@@ -96,7 +97,10 @@ class CliManagerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         fallback_command = run_installer.call_args_list[1].args[0]
         self.assertIn("--prefix", fallback_command)
-        self.assertIn(os.path.expanduser("~/.local"), fallback_command)
+        self.assertIn(
+            os.path.normpath(os.path.expanduser("~/.local")),
+            fallback_command,
+        )
 
     def test_launch_codex_login_opens_a_terminal(self):
         with (
@@ -111,6 +115,7 @@ class CliManagerTests(unittest.TestCase):
                 "which",
                 side_effect=lambda name: "/usr/bin/xterm" if name == "xterm" else None,
             ),
+            mock.patch.object(cli_manager.os, "name", "posix"),
             mock.patch.object(cli_manager.subprocess, "Popen") as popen,
             mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False),
         ):

@@ -19,6 +19,7 @@ from functools import lru_cache
 from typing import Any, Optional
 
 from claude_backend import is_claude_model
+from kimi_backend import is_kimi_model
 
 
 CODEX_MODEL_MAP = {
@@ -121,22 +122,28 @@ def is_codex_model(model_name: str) -> bool:
 
 def resolve_provider(provider: Optional[str], model_name: str) -> str:
     normalized = (provider or "").strip().lower()
-    if normalized and normalized not in {"agy", "codex", "claude"}:
+    if normalized and normalized not in {"agy", "codex", "claude", "kimi"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
     if normalized == "codex" and not is_codex_model(model_name):
         raise ValueError(f"Model {model_name} is not a Codex model")
     if normalized == "claude" and not is_claude_model(model_name):
         raise ValueError(f"Model {model_name} is not a Claude CLI model")
+    if normalized == "kimi" and not is_kimi_model(model_name):
+        raise ValueError(f"Model {model_name} is not a Kimi Code model")
     if normalized == "agy" and is_codex_model(model_name):
         raise ValueError(f"Model {model_name} must use the Codex provider")
     if normalized == "agy" and is_claude_model(model_name):
         raise ValueError(f"Model {model_name} must use the Claude provider")
+    if normalized == "agy" and is_kimi_model(model_name):
+        raise ValueError(f"Model {model_name} must use the Kimi provider")
     if normalized:
         return normalized
     if is_codex_model(model_name):
         return "codex"
     if is_claude_model(model_name):
         return "claude"
+    if is_kimi_model(model_name):
+        return "kimi"
     return "agy"
 
 
