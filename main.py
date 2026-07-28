@@ -141,6 +141,9 @@ migrate_legacy_data_dir(LEGACY_ANTIGRAVITY_CLI_DIR, ANTIGRAVITY_CLI_DIR)
 AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "600"))
 AGY_CLI_MAX_CAPTURE_CHARS = int(os.environ.get("AGY_CLI_MAX_CAPTURE_CHARS", "200000"))
 AGY_RELOAD = os.environ.get("AGY_RELOAD", "0").lower() in ("1", "true", "yes", "on")
+CLI_STATUS_TIMEOUT_SECONDS = float(
+    os.environ.get("KOOKAI_CLI_STATUS_TIMEOUT", "15")
+)
 
 app = FastAPI(title="KookAI Workspace Chat Client")
 
@@ -534,10 +537,16 @@ def verify_cli_admin(request: Request):
 async def get_cli_status(request: Request):
     verify_cli_admin(request)
     requirements_path = os.path.join(WORKSPACE_DIR, "requirements.txt")
-    statuses = await asyncio.to_thread(
-        get_cli_statuses,
-        requirements_path,
-    )
+    try:
+        statuses = await asyncio.wait_for(
+            asyncio.to_thread(get_cli_statuses, requirements_path),
+            timeout=CLI_STATUS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="CLI status check timed out. Retry after the current CLI process finishes.",
+        ) from exc
     return JSONResponse(
         content={
             "clis": statuses,
@@ -2828,7 +2837,10 @@ async def get_usage_limits(request: Request):
     }
 
     try:
-        codex_rate_limits = fetch_codex_rate_limits(timeout_seconds=8)
+        codex_rate_limits = await asyncio.to_thread(
+            fetch_codex_rate_limits,
+            timeout_seconds=8,
+        )
         if codex_rate_limits:
             result_data["codexRateLimits"] = codex_rate_limits
             primary = codex_rate_limits.get("primary") or {}
@@ -2845,7 +2857,8 @@ async def get_usage_limits(request: Request):
         logging.error(f"Failed to fetch Codex account rate limits: {e}")
     
     try:
-        res = subprocess.run(
+        res = await asyncio.to_thread(
+            subprocess.run,
             ["npx", "ccusage", "session", "--json"],
             capture_output=True,
             text=True,

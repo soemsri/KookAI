@@ -2,6 +2,7 @@ import asyncio
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -165,6 +166,22 @@ class CliApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"can_manage":true', response.body)
+
+    def test_cli_status_endpoint_times_out_instead_of_hanging(self):
+        def slow_status(_requirements_path):
+            time.sleep(0.05)
+            return []
+
+        with (
+            mock.patch.object(main, "CLI_STATUS_TIMEOUT_SECONDS", 0.01),
+            mock.patch.object(main, "get_cli_statuses", side_effect=slow_status),
+        ):
+            with self.assertRaises(HTTPException) as context:
+                asyncio.run(
+                    main.get_cli_status(self.request("127.0.0.1"))
+                )
+        self.assertEqual(context.exception.status_code, 504)
+        self.assertIn("timed out", context.exception.detail)
 
 
 if __name__ == "__main__":

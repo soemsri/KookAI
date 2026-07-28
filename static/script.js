@@ -1592,6 +1592,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const cliConnectionsList = document.getElementById("cliConnectionsList");
   const cliRequirementsSummary = document.getElementById("cliRequirementsSummary");
   const cliRefreshBtn = document.getElementById("cliRefreshBtn");
+  const CLI_STATUS_TIMEOUT_MS = 15000;
   let cliStatusLoading = false;
 
   function setModelCatalogMessage(message, isError = false) {
@@ -1754,20 +1755,28 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadCliStatuses() {
     if (cliStatusLoading) return;
     cliStatusLoading = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CLI_STATUS_TIMEOUT_MS);
     if (cliRefreshBtn) {
       cliRefreshBtn.disabled = true;
       cliRefreshBtn.textContent = "Checking…";
     }
     try {
-      const response = await fetch("/api/cli/status");
+      const response = await fetch("/api/cli/status", {
+        signal: controller.signal
+      });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.detail || "Failed to load CLI status");
       }
       renderCliStatuses(data);
     } catch (error) {
-      renderCliStatusError(error.message || "Failed to load CLI status");
+      const message = error?.name === "AbortError"
+        ? "CLI status check timed out. Click Refresh to try again."
+        : (error.message || "Failed to load CLI status");
+      renderCliStatusError(message);
     } finally {
+      clearTimeout(timeoutId);
       cliStatusLoading = false;
       if (cliRefreshBtn) {
         cliRefreshBtn.disabled = false;
@@ -1879,7 +1888,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     activateSettingsTab();
     settingsModal.classList.remove("hidden");
-    loadCliStatuses();
   });
 
   settingsDefaultModel.addEventListener("change", () => {
