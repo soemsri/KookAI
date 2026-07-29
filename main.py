@@ -16,6 +16,7 @@ import queue
 import urllib.parse
 import urllib.request
 import datetime
+import time
 from collections import deque
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
@@ -154,8 +155,12 @@ def migrate_legacy_data_dir(old_path: str, new_path: str):
 migrate_legacy_data_dir(LEGACY_ANTIGRAVITY_DATA_DIR, ANTIGRAVITY_DATA_DIR)
 migrate_legacy_data_dir(LEGACY_ANTIGRAVITY_CLI_DIR, ANTIGRAVITY_CLI_DIR)
 
-# Default execution timeout for the agy CLI (seconds)
+# A CLI is considered stuck only after this many seconds without output.
+# Set to 0 to disable the inactivity timeout.
 AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "600"))
+# Optional hard ceiling for a single CLI run. Zero keeps legitimately long,
+# active jobs running without an arbitrary wall-clock cutoff.
+AGY_CLI_MAX_RUNTIME = int(os.environ.get("AGY_CLI_MAX_RUNTIME", "0"))
 AGY_CLI_MAX_CAPTURE_CHARS = int(os.environ.get("AGY_CLI_MAX_CAPTURE_CHARS", "200000"))
 AGY_RELOAD = os.environ.get("AGY_RELOAD", "0").lower() in ("1", "true", "yes", "on")
 CLI_STATUS_TIMEOUT_SECONDS = float(
@@ -163,6 +168,24 @@ CLI_STATUS_TIMEOUT_SECONDS = float(
 )
 
 app = FastAPI(title="KookAI Workspace Chat Client")
+
+
+class AgentCommandTimeout(subprocess.TimeoutExpired):
+    def __init__(self, cmd, timeout, reason, output=None, stderr=None):
+        super().__init__(cmd, timeout, output=output, stderr=stderr)
+        self.reason = reason
+
+
+def cli_timeout_message(cli_name: str, exc: subprocess.TimeoutExpired) -> str:
+    if getattr(exc, "reason", "idle") == "max_runtime":
+        return (
+            f"⏱️ **Timeout Error**: The request to `{cli_name}` CLI exceeded "
+            f"the configured {exc.timeout}-second maximum runtime."
+        )
+    return (
+        f"⏱️ **Timeout Error**: The `{cli_name}` CLI produced no output for "
+        f"{exc.timeout} seconds and was stopped because it may be stuck."
+    )
 
 
 TUNNEL_ALLOWED_EXACT_PATHS = {
@@ -1440,6 +1463,7 @@ def run_agent_command(
     cmd,
     cwd_path,
     timeout=AGY_CLI_TIMEOUT,
+    max_runtime=AGY_CLI_MAX_RUNTIME,
     progress_callback=None,
     progress_line_classifier=classify_cli_progress_line,
     raw_line_callback=None,
@@ -1462,6 +1486,8 @@ def run_agent_command(
     output_queue = queue.Queue()
     stdout_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
     stderr_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
+    start_time = time.monotonic()
+    last_activity = {"time": start_time}
 
     def append_capture(capture, line):
         original_len = len(line)
@@ -1488,6 +1514,7 @@ def run_agent_command(
     def reader(pipe, source, capture):
         try:
             for line in iter(pipe.readline, ""):
+                last_activity["time"] = time.monotonic()
                 append_capture(capture, line)
                 if raw_line_callback:
                     try:
@@ -1517,7 +1544,6 @@ def run_agent_command(
 
         threading.Thread(target=write_stdin, daemon=True).start()
 
-    start_time = datetime.datetime.now().timestamp()
     while proc.poll() is None or not output_queue.empty():
         try:
             source, line = output_queue.get(timeout=0.2)
@@ -1527,13 +1553,29 @@ def run_agent_command(
         except queue.Empty:
             pass
 
-        if proc.poll() is None and datetime.datetime.now().timestamp() - start_time > timeout:
+        if proc.poll() is None:
+            now = time.monotonic()
+            timeout_reason = None
+            timeout_limit = None
+            if timeout > 0 and now - last_activity["time"] > timeout:
+                timeout_reason = "idle"
+                timeout_limit = timeout
+            elif max_runtime > 0 and now - start_time > max_runtime:
+                timeout_reason = "max_runtime"
+                timeout_limit = max_runtime
+
+        if proc.poll() is None and timeout_reason:
             proc.kill()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                logging.warning("Timed-out CLI process did not exit after being killed: %s", cmd)
             stdout_thread.join(timeout=1)
             stderr_thread.join(timeout=1)
-            raise subprocess.TimeoutExpired(
+            raise AgentCommandTimeout(
                 cmd,
-                timeout,
+                timeout_limit,
+                timeout_reason,
                 output=capture_text(stdout_capture),
                 stderr=capture_text(stderr_capture)
             )
@@ -1688,8 +1730,8 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
             err_msg = command_output(result) or "Unknown error"
             return f"⚠️ **agy CLI Error (Exit Code {result.returncode})**\n\n```\n{err_msg}\n```", resolved_cid
             
-    except subprocess.TimeoutExpired:
-        return f"⏱️ **Timeout Error**: The request to `agy` CLI exceeded the {AGY_CLI_TIMEOUT}-second limit.", actual_cid
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("agy", exc), actual_cid
     except Exception as e:
         return f"❌ **Execution Error**: Failed to run `agy` CLI. Details: `{str(e)}`", actual_cid
 
@@ -1821,12 +1863,8 @@ def run_codex_cli(
             f"```\n{error_message}\n```",
             resolved_cid,
         )
-    except subprocess.TimeoutExpired:
-        return (
-            f"⏱️ **Timeout Error**: The request to `codex` CLI exceeded "
-            f"the {AGY_CLI_TIMEOUT}-second limit.",
-            actual_cid,
-        )
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("codex", exc), actual_cid
     except Exception as e:
         return (
             "❌ **Execution Error**: Failed to run `codex` CLI. "
@@ -1950,12 +1988,8 @@ def run_claude_cli(
             f"```\n{error_message}\n```",
             resolved_cid,
         )
-    except subprocess.TimeoutExpired:
-        return (
-            f"⏱️ **Timeout Error**: The request to `claude` CLI exceeded "
-            f"the {AGY_CLI_TIMEOUT}-second limit.",
-            actual_cid,
-        )
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("claude", exc), actual_cid
     except Exception as e:
         return (
             "❌ **Execution Error**: Failed to run `claude` CLI. "
@@ -2075,12 +2109,8 @@ def run_kimi_cli(
             f"```\n{error_message}\n```",
             resolved_cid,
         )
-    except subprocess.TimeoutExpired:
-        return (
-            f"⏱️ **Timeout Error**: The request to `kimi` CLI exceeded "
-            f"the {AGY_CLI_TIMEOUT}-second limit.",
-            actual_cid,
-        )
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("kimi", exc), actual_cid
     except Exception as e:
         return (
             "❌ **Execution Error**: Failed to run `kimi` CLI. "

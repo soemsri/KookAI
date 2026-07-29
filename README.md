@@ -40,6 +40,12 @@ The server acts as the backend broker and hosts the web chat console.
    A failed install remains visible in **Settings → Connections**, where an
    administrator can retry it.
 
+   Long-running agent jobs use an inactivity timeout rather than a total
+   runtime limit. `AGY_CLI_TIMEOUT` controls how many seconds a CLI may produce
+   no output before it is treated as stuck (default: `600`; `0` disables it).
+   Set `AGY_CLI_MAX_RUNTIME` to a positive number of seconds only if you also
+   want a hard wall-clock limit (default: `0`, disabled).
+
 2. The automatic Antigravity CLI (`agy`) installation uses:
 
    **macOS / Linux**

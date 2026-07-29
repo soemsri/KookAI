@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -20,6 +21,50 @@ def completed(returncode=0, stdout="", stderr=""):
         stdout=stdout,
         stderr=stderr,
     )
+
+
+class AgentCommandTimeoutTests(unittest.TestCase):
+    def test_active_command_can_run_longer_than_idle_timeout(self):
+        script = (
+            "import time\n"
+            "for index in range(8):\n"
+            "    print(index, flush=True)\n"
+            "    time.sleep(0.04)\n"
+        )
+        result = main.run_agent_command(
+            [sys.executable, "-u", "-c", script],
+            os.getcwd(),
+            timeout=0.12,
+            max_runtime=0,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("7", result.stdout)
+
+    def test_silent_command_hits_idle_timeout(self):
+        with self.assertRaises(main.AgentCommandTimeout) as context:
+            main.run_agent_command(
+                [sys.executable, "-c", "import time; time.sleep(1)"],
+                os.getcwd(),
+                timeout=0.05,
+                max_runtime=0,
+            )
+        self.assertEqual(context.exception.reason, "idle")
+
+    def test_optional_max_runtime_stops_active_command(self):
+        script = (
+            "import time\n"
+            "while True:\n"
+            "    print('working', flush=True)\n"
+            "    time.sleep(0.02)\n"
+        )
+        with self.assertRaises(main.AgentCommandTimeout) as context:
+            main.run_agent_command(
+                [sys.executable, "-u", "-c", script],
+                os.getcwd(),
+                timeout=1,
+                max_runtime=0.12,
+            )
+        self.assertEqual(context.exception.reason, "max_runtime")
 
 
 class CliManagerTests(unittest.TestCase):
