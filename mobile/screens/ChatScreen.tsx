@@ -1683,10 +1683,6 @@ try {
 const data = await callHostApi('/api/chat-history');
 const list = data.conversations || [];
 setConversations(list);
-const projectNames = Array.from(new Set(list.map((convo: Conversation) => convo.project).filter(Boolean))) as string[];
-if (projectNames.length > 0) {
-setProjects((current) => Array.from(new Set([...current, ...projectNames])));
-}
 
 // Auto-select most recent conversation only on initial load.
 if (autoSelect && list.length > 0 && !activeConvoId) {
