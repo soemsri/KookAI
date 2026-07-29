@@ -13,6 +13,22 @@ export interface ConnectionInfo {
 // In-memory cache for the active base URL to avoid pinging LAN and WAN on every single API call
 let cachedActiveBaseUrl: string | null = null;
 
+async function createApiError(response: Response): Promise<Error> {
+  let detail = '';
+  try {
+    const payload = await response.json();
+    detail = typeof payload?.detail === 'string' ? payload.detail : '';
+  } catch {
+    // The host may return an empty or non-JSON error response.
+  }
+
+  const error = new Error(
+    detail || `API error: ${response.status} ${response.statusText}`
+  );
+  (error as Error & { status?: number }).status = response.status;
+  return error;
+}
+
 // Save connection info securely
 export async function saveConnection(info: ConnectionInfo) {
   await SecureStore.setItemAsync('host_id', info.hostId);
@@ -149,12 +165,16 @@ export async function apiCall(endpoint: string, options: RequestInit = {}): Prom
       if (response.status === 401) {
         await clearConnection(); // Token revoked, force repair
       }
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      throw await createApiError(response);
     }
 
     return response.json();
   } catch (err) {
     if (options.signal?.aborted || (err instanceof Error && err.name === 'AbortError')) {
+      throw err;
+    }
+    const status = (err as Error & { status?: number })?.status;
+    if (status !== undefined && status < 500) {
       throw err;
     }
 
@@ -176,7 +196,7 @@ export async function apiCall(endpoint: string, options: RequestInit = {}): Prom
       if (response.status === 401) {
         await clearConnection();
       }
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      throw await createApiError(response);
     }
 
     return response.json();

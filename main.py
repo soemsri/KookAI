@@ -483,6 +483,11 @@ class PairRequest(BaseModel):
     pin: str
     device_uuid: str
 
+
+class CreateProjectRequest(BaseModel):
+    name: str
+
+
 @app.on_event("startup")
 async def startup_event():
     catalog = load_runtime_model_catalog()
@@ -1230,6 +1235,64 @@ def clean_project_name(path_name: str) -> str:
     if path_name == "GinRaiD":
         return "GinRaiDee"
     return path_name
+
+
+WINDOWS_RESERVED_PROJECT_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
+
+
+def validate_new_project_name(project_name: str) -> str:
+    name = project_name.strip()
+    if not name:
+        raise ValueError("Project name is required")
+    if len(name) > 100:
+        raise ValueError("Project name must be 100 characters or fewer")
+    if name in {".", ".."} or name.startswith("."):
+        raise ValueError("Project name cannot be hidden or use a relative path")
+    if name.endswith((" ", ".")):
+        raise ValueError("Project name cannot end with a space or period")
+    if any(character in name for character in '<>:"/\\|?*'):
+        raise ValueError("Project name contains unsupported characters")
+    if any(ord(character) < 32 for character in name):
+        raise ValueError("Project name contains unsupported control characters")
+    if name.split(".", 1)[0].upper() in WINDOWS_RESERVED_PROJECT_NAMES:
+        raise ValueError("Project name is reserved by the operating system")
+    return name
+
+
+def create_project_directory(project_name: str) -> tuple[str, str]:
+    name = validate_new_project_name(project_name)
+    if not PROJECTS_ROOTS:
+        raise OSError("No project root is configured")
+
+    project_root = PROJECTS_ROOTS[0]
+    if not os.path.isdir(project_root):
+        raise OSError(f"Configured project root does not exist: {project_root}")
+
+    display_name = clean_project_name(name)
+    existing_names = {project.casefold() for project in get_desktop_projects()}
+    if display_name.casefold() in existing_names:
+        raise FileExistsError(f"A project named {display_name!r} already exists")
+
+    root_realpath = os.path.realpath(project_root)
+    project_path = os.path.join(project_root, name)
+    candidate_realpath = os.path.realpath(project_path)
+    if os.path.commonpath([candidate_realpath, root_realpath]) != root_realpath:
+        raise ValueError("Project path must stay inside the configured project root")
+
+    try:
+        os.mkdir(project_path)
+    except FileExistsError as exc:
+        raise FileExistsError(f"A project named {display_name!r} already exists") from exc
+
+    return display_name, project_path
+
 
 # Helper: Get projects from explicitly configured workspace roots.
 def get_desktop_projects():
@@ -2449,6 +2512,34 @@ async def get_projects(request: Request):
         "workspace_dir": PROJECTS_ROOTS[0] if PROJECTS_ROOTS else None,
         "app_dir": APP_DIR,
     })
+
+
+@app.post("/api/projects", status_code=201)
+async def create_project(request: Request, project_request: CreateProjectRequest):
+    verify_authorization(request)
+    try:
+        project, project_path = create_project_directory(project_request.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OSError as exc:
+        logging.error("Failed to create project: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not create the project in the configured project root",
+        ) from exc
+
+    return JSONResponse(
+        status_code=201,
+        content={
+            "status": "success",
+            "project": project,
+            "project_path": project_path,
+            "projects": get_desktop_projects(),
+        },
+    )
+
 
 @app.get("/api/conversations")
 async def get_conversations(request: Request, project: Optional[str] = None):

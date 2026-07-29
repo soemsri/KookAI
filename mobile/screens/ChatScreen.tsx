@@ -933,6 +933,10 @@ const [isEffortModalOpen, setIsEffortModalOpen] = useState(false);
 const [isSpeedModalOpen, setIsSpeedModalOpen] = useState(false);
 const [isTargetModalOpen, setIsTargetModalOpen] = useState(false);
 const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+const [isNewProjectFormOpen, setIsNewProjectFormOpen] = useState(false);
+const [newProjectName, setNewProjectName] = useState('');
+const [newProjectError, setNewProjectError] = useState('');
+const [creatingProject, setCreatingProject] = useState(false);
 const [isPlusModalOpen, setIsPlusModalOpen] = useState(false);
 const [isUsageModalOpen, setIsUsageModalOpen] = useState(false);
 const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
@@ -1457,6 +1461,55 @@ selectedProjectRef.current = list[0];
 console.error("Error loading projects:", err);
 } finally {
 setLoadingProjects(false);
+}
+};
+
+const closeProjectModal = () => {
+if (creatingProject) return;
+setIsProjectModalOpen(false);
+setIsNewProjectFormOpen(false);
+setNewProjectName('');
+setNewProjectError('');
+};
+
+const openProjectModal = () => {
+setNewProjectError('');
+setIsProjectModalOpen(true);
+loadProjects();
+};
+
+const handleCreateProject = async () => {
+const name = newProjectName.trim();
+if (!name) {
+setNewProjectError('Enter a project name.');
+return;
+}
+if (name.length > 100) {
+setNewProjectError('Project name must be 100 characters or fewer.');
+return;
+}
+
+setCreatingProject(true);
+setNewProjectError('');
+try {
+const data = await callHostApi('/api/projects', {
+method: 'POST',
+body: JSON.stringify({ name }),
+});
+const createdProject = typeof data.project === 'string' ? data.project : name;
+const updatedProjects = Array.isArray(data.projects)
+? data.projects
+: [...projects, createdProject];
+setProjects(updatedProjects);
+setNewProjectName('');
+setIsNewProjectFormOpen(false);
+handleSelectProject(createdProject);
+showToast(`Created project "${createdProject}"`);
+} catch (err) {
+const message = err instanceof Error ? err.message : 'Could not create the project.';
+setNewProjectError(message);
+} finally {
+setCreatingProject(false);
 }
 };
 
@@ -2976,7 +3029,7 @@ allowQueue: false,
               {/* Project Selector Dropdown */}
               <TouchableOpacity
                 style={styles.projectPickerBtn}
-                onPress={() => setIsProjectModalOpen(true)}
+                onPress={openProjectModal}
                 disabled={isPromptDisabled}
               >
                 <Text style={{ marginRight: 4 }}>▣</Text>
@@ -3259,26 +3312,114 @@ allowQueue: false,
       </Modal>
 
  {/* Project Picker Modal overlay */}
- <Modal visible={isProjectModalOpen} transparent animationType="slide" onRequestClose={() => setIsProjectModalOpen(false)}>
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsProjectModalOpen(false)} />
-          <View style={[styles.bottomSheet, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
+ <Modal visible={isProjectModalOpen} transparent animationType="slide" onRequestClose={closeProjectModal}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={closeProjectModal} disabled={creatingProject} />
+          <View style={[styles.bottomSheet, styles.projectBottomSheet, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
             <View style={[styles.bottomSheetHeader, { borderBottomColor: theme.borderColor }]}>
               <Text style={[styles.bottomSheetTitle, { color: theme.textPrimary }]}>Select Project</Text>
-              <TouchableOpacity onPress={() => setIsProjectModalOpen(false)} style={styles.closeModalX}>
+              <TouchableOpacity onPress={closeProjectModal} style={styles.closeModalX} disabled={creatingProject}>
                 <Text style={{ color: theme.textSecondary, fontSize: 18 }}>✕</Text>
               </TouchableOpacity>
+            </View>
+            <View style={[styles.createProjectSection, { borderBottomColor: theme.borderColor }]}>
+              {isNewProjectFormOpen ? (
+                <View style={styles.createProjectForm}>
+                  <Text style={[styles.createProjectLabel, { color: theme.textPrimary }]}>New project name</Text>
+                  <TextInput
+                    style={[
+                      styles.createProjectInput,
+                      {
+                        color: theme.textPrimary,
+                        backgroundColor: theme.bgSecondary,
+                        borderColor: newProjectError ? theme.statusRed : theme.borderColor,
+                      },
+                    ]}
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!creatingProject}
+                    maxLength={101}
+                    placeholder="e.g. my-new-app"
+                    placeholderTextColor={theme.textMuted}
+                    returnKeyType="done"
+                    value={newProjectName}
+                    onChangeText={(value) => {
+                      setNewProjectName(value);
+                      if (newProjectError) setNewProjectError('');
+                    }}
+                    onSubmitEditing={() => {
+                      if (!creatingProject && newProjectName.trim()) {
+                        handleCreateProject();
+                      }
+                    }}
+                  />
+                  <Text style={[styles.createProjectHint, { color: theme.textMuted }]}>
+                    A folder will be created in the host's primary project location.
+                  </Text>
+                  {newProjectError ? (
+                    <Text style={[styles.createProjectError, { color: theme.statusRed }]}>{newProjectError}</Text>
+                  ) : null}
+                  <View style={styles.createProjectActions}>
+                    <TouchableOpacity
+                      style={[styles.createProjectCancelBtn, { borderColor: theme.borderColor }]}
+                      disabled={creatingProject}
+                      onPress={() => {
+                        setIsNewProjectFormOpen(false);
+                        setNewProjectName('');
+                        setNewProjectError('');
+                      }}
+                    >
+                      <Text style={[styles.createProjectCancelText, { color: theme.textSecondary }]}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.createProjectSubmitBtn,
+                        { backgroundColor: theme.accent },
+                        (!newProjectName.trim() || creatingProject) && styles.createProjectSubmitDisabled,
+                      ]}
+                      disabled={!newProjectName.trim() || creatingProject}
+                      onPress={handleCreateProject}
+                    >
+                      {creatingProject ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <Text style={styles.createProjectSubmitText}>Create</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.newProjectBtn, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor }]}
+                  onPress={() => setIsNewProjectFormOpen(true)}
+                >
+                  <Text style={[styles.newProjectIcon, { color: theme.accent }]}>＋</Text>
+                  <View style={styles.modelInfo}>
+                    <Text style={[styles.modelName, { color: theme.textPrimary }]}>Create new project</Text>
+                    <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>Add a workspace folder on the host</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
             </View>
             <ScrollView style={styles.bottomSheetList}>
               {loadingProjects ? (
                 <ActivityIndicator size="small" color={theme.accent} style={{ marginVertical: 18 }} />
-              ) : (
+              ) : projects.length > 0 ? (
                 projects.map((project) => {
                   const isActive = selectedProject === project;
                   return (
                     <TouchableOpacity
                       key={project}
-                      style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
+                      style={[
+                        styles.modalItem,
+                        isActive && { backgroundColor: theme.bgActive },
+                        creatingProject && styles.projectItemDisabled,
+                      ]}
+                      disabled={creatingProject}
                       onPress={() => handleSelectProject(project)}
                     >
                       <View style={styles.modelInfo}>
@@ -3289,10 +3430,14 @@ allowQueue: false,
                     </TouchableOpacity>
                   );
                 })
+              ) : (
+                <Text style={[styles.emptyProjectText, { color: theme.textMuted }]}>
+                  No projects yet. Create your first project above.
+                </Text>
               )}
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Settings Modal overlay */}
@@ -4625,6 +4770,9 @@ gap: 12,
     maxHeight: '78%',
     paddingBottom: 0,
   },
+  projectBottomSheet: {
+    maxHeight: '78%',
+  },
   bottomSheetHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -4646,6 +4794,92 @@ gap: 12,
   bottomSheetContent: {
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  createProjectSection: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  newProjectBtn: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  newProjectIcon: {
+    width: 30,
+    fontSize: 24,
+    fontWeight: '500',
+  },
+  createProjectForm: {
+    gap: 8,
+  },
+  createProjectLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  createProjectInput: {
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    fontSize: 14,
+  },
+  createProjectHint: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  createProjectError: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  createProjectActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 2,
+  },
+  createProjectCancelBtn: {
+    minWidth: 82,
+    height: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 9,
+    paddingHorizontal: 14,
+  },
+  createProjectCancelText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  createProjectSubmitBtn: {
+    minWidth: 92,
+    height: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 9,
+    paddingHorizontal: 16,
+  },
+  createProjectSubmitDisabled: {
+    opacity: 0.45,
+  },
+  createProjectSubmitText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  emptyProjectText: {
+    paddingHorizontal: 12,
+    paddingVertical: 22,
+    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  projectItemDisabled: {
+    opacity: 0.5,
   },
   settingsTabs: {
     flexDirection: 'row',

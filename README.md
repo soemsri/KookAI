@@ -170,6 +170,9 @@ Only directories directly inside these configured roots can be selected as
 workspaces. Unknown project names are rejected instead of falling back to the
 KookAI application directory.
 
+Paired mobile devices can also create a project from the project picker. New
+projects are created as directories inside the first configured project root.
+
 ### Dynamic Model Catalog
 
 KookAI serves a versioned model catalog from `GET /api/models`. The web client
