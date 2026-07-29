@@ -68,6 +68,18 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(display_model["cli_model"], "kimi-for-coding/k3")
         self.assertEqual(cli_model["id"], "Kimi K3")
 
+    def test_grok_models_are_available_by_display_name_and_cli_slug(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+
+        display_model = resolve_catalog_model(catalog, "Grok 4.5")
+        cli_model = resolve_catalog_model(catalog, "grok-4.5")
+
+        self.assertIsNotNone(display_model)
+        self.assertEqual(display_model["provider"], "xai")
+        self.assertEqual(display_model["usage_bucket"], "xai")
+        self.assertEqual(display_model["capabilities"]["effort"], ["Low", "Medium", "High"])
+        self.assertEqual(cli_model["id"], "Grok 4.5")
+
 
 class ModelCatalogApiTests(unittest.TestCase):
     @staticmethod
@@ -117,6 +129,22 @@ class ModelCatalogApiTests(unittest.TestCase):
             main.map_model_name("Kimi K3"),
             "kimi-for-coding/k3",
         )
+
+    def test_grok_chat_request_uses_xai_provider(self):
+        request = main.ChatRequest(
+            message="hello",
+            model="Grok 4.5",
+            workspace="agy",
+            target="Sandbox",
+            conversation_id="temp-grok-test",
+            provider="xai",
+        )
+
+        model = main.resolve_chat_model(request)
+
+        self.assertEqual(model["provider"], "xai")
+        self.assertEqual(model["cli_model"], "grok-4.5")
+        self.assertEqual(main.map_model_name("Grok 4.5"), "grok-4.5")
 
     def test_runtime_catalog_registers_dynamic_codex_model(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)

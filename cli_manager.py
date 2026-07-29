@@ -88,6 +88,16 @@ CLI_DEFINITIONS: dict[str, CliDefinition] = {
         connect_help="Runs kimi login and opens the Kimi device authorization flow.",
         env_path="KIMI_CLI_PATH",
     ),
+    "grok": CliDefinition(
+        cli_id="grok",
+        name="xAI Grok Build",
+        executable="grok",
+        install_kind="native_grok",
+        install_source="https://x.ai/cli/install.sh",
+        connect_args=("login",),
+        connect_help="Runs grok login and opens the xAI sign-in flow.",
+        env_path="GROK_CLI_PATH",
+    ),
 }
 
 _install_lock = threading.Lock()
@@ -184,6 +194,11 @@ def _known_cli_candidates(definition: CliDefinition) -> list[str]:
         candidates.extend(
             os.path.join(home, ".kimi-code", "bin", executable_name)
             for executable_name in _candidate_executable_names("kimi")
+        )
+    if definition.cli_id == "grok":
+        candidates.extend(
+            os.path.join(home, ".grok", "bin", executable_name)
+            for executable_name in _candidate_executable_names("grok")
         )
     return candidates
 
@@ -365,6 +380,42 @@ def _install_native_kimi() -> subprocess.CompletedProcess[str]:
             pass
 
 
+def _install_native_grok() -> subprocess.CompletedProcess[str]:
+    if os.name == "nt":
+        installer_url = "https://x.ai/cli/install.ps1"
+        installer_path = _download_installer(installer_url, ".ps1")
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+        if not powershell:
+            os.unlink(installer_path)
+            raise RuntimeError("PowerShell is required to install Grok Build CLI")
+        command = [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            installer_path,
+        ]
+    else:
+        installer_path = _download_installer(
+            CLI_DEFINITIONS["grok"].install_source,
+            ".sh",
+        )
+        bash = shutil.which("bash")
+        if not bash:
+            os.unlink(installer_path)
+            raise RuntimeError("bash is required to install Grok Build CLI")
+        command = [bash, installer_path]
+
+    try:
+        return _run_installer(command)
+    finally:
+        try:
+            os.unlink(installer_path)
+        except OSError:
+            pass
+
+
 def _install_npm_package(package_name: str) -> subprocess.CompletedProcess[str]:
     npm = shutil.which("npm")
     if not npm:
@@ -416,6 +467,8 @@ def install_cli(cli_id: str) -> dict[str, Any]:
                 result = _install_native_agy()
             elif definition.install_kind == "native_kimi":
                 result = _install_native_kimi()
+            elif definition.install_kind == "native_grok":
+                result = _install_native_grok()
             elif definition.install_kind == "npm":
                 result = _install_npm_package(definition.install_source)
             else:

@@ -115,12 +115,30 @@ document.addEventListener("DOMContentLoaded", () => {
     "Opus 3": { effort: false, extra: false },
     "Sonnet 4.6": { effort: true, extra: false }
   };
+  let XAI_MODELS = {
+    "Grok 4.5": {
+      effort: true,
+      efforts: ["Low", "Medium", "High"],
+      extra: false,
+      thinkingRequired: true
+    },
+    "Grok 4.20 Reasoning": { effort: false, extra: false, thinkingRequired: true },
+    "Grok Build 0.1": { effort: false, extra: false, thinkingRequired: true }
+  };
+  let XAI_MODEL_IDS = new Set([
+    "Grok 4.5",
+    "Grok 4.20 Reasoning",
+    "Grok 4.20 Non-Reasoning",
+    "Grok Build 0.1"
+  ]);
   let MODEL_CATALOG = {};
   let modelCatalogVersion = "built-in";
   let defaultCatalogModel = currentModel;
 
   const isCodexModel = model => Object.prototype.hasOwnProperty.call(CODEX_MODELS, model);
   const isClaudeModel = model => Object.prototype.hasOwnProperty.call(CLAUDE_MODELS, model);
+  const isXaiModel = model =>
+    getCatalogModel(model)?.provider === "xai" || XAI_MODEL_IDS.has(model);
   const getCatalogModel = model => MODEL_CATALOG[model] || null;
   const getModelLabel = model => getCatalogModel(model)?.label || model;
 
@@ -133,9 +151,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextCatalog = {};
     const nextCodexModels = {};
     const nextClaudeModels = {};
+    const nextXaiModels = {};
     const groups = [
       ["agy", "Antigravity Models"],
       ["kimi", "Moonshot Kimi Code CLI"],
+      ["xai", "xAI Grok Build CLI"],
       ["claude", "Anthropic Claude CLI"],
       ["codex", "OpenAI Codex CLI"]
     ];
@@ -145,7 +165,7 @@ document.addEventListener("DOMContentLoaded", () => {
         !model
         || typeof model.id !== "string"
         || typeof model.label !== "string"
-        || !["agy", "claude", "codex", "kimi"].includes(model.provider)
+        || !["agy", "claude", "codex", "kimi", "xai"].includes(model.provider)
       ) {
         return;
       }
@@ -164,6 +184,16 @@ document.addEventListener("DOMContentLoaded", () => {
           extra: efforts.includes("Extra"),
           thinkingRequired: capabilities.thinking_required === true
         };
+      } else if (
+        model.provider === "xai"
+        && (efforts.length > 0 || capabilities.thinking === true)
+      ) {
+        nextXaiModels[model.id] = {
+          effort: efforts.length > 0,
+          efforts,
+          extra: false,
+          thinkingRequired: capabilities.thinking_required === true
+        };
       }
     });
 
@@ -171,6 +201,10 @@ document.addEventListener("DOMContentLoaded", () => {
     MODEL_CATALOG = nextCatalog;
     CODEX_MODELS = nextCodexModels;
     CLAUDE_MODELS = nextClaudeModels;
+    XAI_MODELS = nextXaiModels;
+    XAI_MODEL_IDS = new Set(
+      models.filter(model => model.provider === "xai").map(model => model.id)
+    );
     modelCatalogVersion = String(payload.catalog_version || "dynamic");
     defaultCatalogModel = nextCatalog[payload.default_model]
       ? payload.default_model
@@ -187,6 +221,8 @@ document.addEventListener("DOMContentLoaded", () => {
               ? "Claude"
               : provider === "kimi"
                 ? "Kimi"
+                : provider === "xai"
+                  ? "Grok"
                 : "AI"
         ));
         const badgeClass = provider === "codex"
@@ -195,6 +231,8 @@ document.addEventListener("DOMContentLoaded", () => {
             ? "claude"
             : provider === "kimi"
               ? "kimi"
+              : provider === "xai"
+                ? "grok"
             : badge.toLowerCase().replace(/[^a-z0-9_-]/g, "") || "gpt";
         return `
           <div class="dropdown-item" data-value="${escapeHtml(model.id)}">
@@ -242,12 +280,14 @@ document.addEventListener("DOMContentLoaded", () => {
   function updateCodexControls() {
     const capability = CODEX_MODELS[currentModel];
     const claudeCapability = CLAUDE_MODELS[currentModel];
+    const xaiCapability = XAI_MODELS[currentModel];
+    const reasoningCapability = claudeCapability || xaiCapability;
     const selectedItem = Array.from(
       modelDropdown?.querySelectorAll(".dropdown-item") || []
     ).find(item => item.dataset.value === currentModel);
     currentProvider = getCatalogModel(currentModel)?.provider
       || selectedItem?.dataset.provider
-      || (capability ? "codex" : (claudeCapability ? "claude" : "agy"));
+      || (capability ? "codex" : (claudeCapability ? "claude" : (xaiCapability ? "xai" : "agy")));
 
     if (capability && !capability.ultra && currentCodexEffort === "Ultra") {
       currentCodexEffort = "Medium";
@@ -256,31 +296,51 @@ document.addEventListener("DOMContentLoaded", () => {
       currentCodexSpeed = "Standard";
     }
 
-    if (claudeCapability?.thinkingRequired) currentClaudeThinking = true;
-    if (claudeCapability && !claudeCapability.extra && currentClaudeEffort === "Extra") {
+    if (reasoningCapability?.thinkingRequired) currentClaudeThinking = true;
+    if (reasoningCapability && !reasoningCapability.extra && currentClaudeEffort === "Extra") {
       currentClaudeEffort = "High";
     }
+    if (
+      xaiCapability?.efforts?.length
+      && !xaiCapability.efforts.includes(currentClaudeEffort)
+    ) {
+      currentClaudeEffort = xaiCapability.efforts.includes("Medium")
+        ? "Medium"
+        : xaiCapability.efforts[0];
+    }
 
-    codexInlineControls?.classList.toggle("hidden", !capability && !claudeCapability);
+    codexInlineControls?.classList.toggle("hidden", !capability && !reasoningCapability);
     if (currentModelText) {
       const modelLabel = getModelLabel(currentModel);
       currentModelText.textContent = capability
         ? `${modelLabel} ${currentCodexEffort}`
-        : (claudeCapability?.effort ? `${modelLabel} ${currentClaudeEffort}` : modelLabel);
+        : (reasoningCapability?.effort ? `${modelLabel} ${currentClaudeEffort}` : modelLabel);
     }
     if (currentCodexEffortText) {
-      currentCodexEffortText.textContent = claudeCapability ? currentClaudeEffort : currentCodexEffort;
+      currentCodexEffortText.textContent = reasoningCapability ? currentClaudeEffort : currentCodexEffort;
     }
     if (currentCodexSpeedText) {
-      currentCodexSpeedText.textContent = claudeCapability
+      currentCodexSpeedText.textContent = reasoningCapability
         ? (currentClaudeThinking ? "On" : "Off")
         : currentCodexSpeed;
     }
     const effortLabel = codexEffortBtn?.querySelector(".codex-inline-label");
     const speedLabel = codexSpeedBtn?.querySelector(".codex-inline-label");
+    const claudeEffortHeader = claudeEffortDropdown?.querySelector(".dropdown-header");
+    const settingsReasoningEffortLabel = document.querySelector("#settingsClaudeEffortGroup label");
+    const settingsThinkingLabel = document.querySelector("#settingsClaudeThinkingGroup label");
     if (effortLabel) effortLabel.textContent = "Effort";
-    if (speedLabel) speedLabel.textContent = claudeCapability ? "Thinking" : "Speed";
-    codexEffortBtn?.classList.toggle("hidden", Boolean(claudeCapability && !claudeCapability.effort));
+    if (speedLabel) speedLabel.textContent = reasoningCapability ? "Thinking" : "Speed";
+    if (claudeEffortHeader) {
+      claudeEffortHeader.textContent = xaiCapability ? "Grok Reasoning Effort" : "Claude Effort";
+    }
+    if (settingsReasoningEffortLabel) {
+      settingsReasoningEffortLabel.textContent = xaiCapability ? "Grok Reasoning Effort" : "Claude Effort";
+    }
+    if (settingsThinkingLabel) {
+      settingsThinkingLabel.textContent = xaiCapability ? "Grok Reasoning" : "Claude Thinking";
+    }
+    codexEffortBtn?.classList.toggle("hidden", Boolean(reasoningCapability && !reasoningCapability.effort));
     modelDropdown?.querySelectorAll(".dropdown-item").forEach(item => {
       item.classList.toggle("active", item.dataset.value === currentModel);
     });
@@ -296,7 +356,9 @@ document.addEventListener("DOMContentLoaded", () => {
       item.classList.toggle("active", item.dataset.value === currentCodexSpeed);
     });
     claudeEffortDropdown?.querySelectorAll(".dropdown-item").forEach(item => {
-      const isUnsupported = item.dataset.extraOnly === "true" && !claudeCapability?.extra;
+      const isUnsupported = xaiCapability?.efforts?.length
+        ? !xaiCapability.efforts.includes(item.dataset.value)
+        : item.dataset.extraOnly === "true" && !reasoningCapability?.extra;
       item.classList.toggle("hidden", isUnsupported);
       item.classList.toggle("active", item.dataset.value === currentClaudeEffort);
     });
@@ -305,9 +367,9 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("settingsCodexSpeedGroup")?.classList.toggle("hidden", !capability);
     document.getElementById("settingsClaudeEffortGroup")?.classList.toggle(
       "hidden",
-      !claudeCapability?.effort
+      !reasoningCapability?.effort
     );
-    document.getElementById("settingsClaudeThinkingGroup")?.classList.toggle("hidden", !claudeCapability);
+    document.getElementById("settingsClaudeThinkingGroup")?.classList.toggle("hidden", !reasoningCapability);
     const ultraOption = document.querySelector('#settingsCodexEffort option[value="Ultra"]');
     const fastOption = document.querySelector('#settingsCodexSpeed option[value="Fast"]');
     if (ultraOption) ultraOption.disabled = !capability?.ultra;
@@ -910,7 +972,7 @@ document.addEventListener("DOMContentLoaded", () => {
           message: message,
           model: currentModel,
           provider: currentProvider,
-          effort: currentProvider === "claude" ? currentClaudeEffort : currentCodexEffort,
+          effort: ["claude", "xai"].includes(currentProvider) ? currentClaudeEffort : currentCodexEffort,
           speed: currentCodexSpeed,
           thinking: currentClaudeThinking,
           workspace: currentWorkspace,
@@ -1389,7 +1451,9 @@ document.addEventListener("DOMContentLoaded", () => {
     e.stopPropagation();
     modelDropdown.classList.add("hidden");
     codexSpeedDropdown.classList.add("hidden");
-    const effortDropdown = currentProvider === "claude" ? claudeEffortDropdown : codexEffortDropdown;
+    const effortDropdown = ["claude", "xai"].includes(currentProvider)
+      ? claudeEffortDropdown
+      : codexEffortDropdown;
     if (effortDropdown?.classList.contains("hidden")) {
       positionDropdown(codexEffortBtn, effortDropdown, "up");
     } else {
@@ -1399,8 +1463,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   codexSpeedBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (currentProvider === "claude") {
-      if (!CLAUDE_MODELS[currentModel]?.thinkingRequired) {
+    if (["claude", "xai"].includes(currentProvider)) {
+      const reasoningCapability = CLAUDE_MODELS[currentModel] || XAI_MODELS[currentModel];
+      if (!reasoningCapability?.thinkingRequired) {
         currentClaudeThinking = !currentClaudeThinking;
         updateCodexControls();
         saveAppPreferences();
@@ -1677,6 +1742,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const CLI_ICON_LABELS = {
     agy: "AG",
     kimi: "KI",
+    grok: "GX",
     claude: "CL",
     codex: "CX"
   };
@@ -1899,10 +1965,24 @@ document.addEventListener("DOMContentLoaded", () => {
   settingsDefaultModel.addEventListener("change", () => {
     const capability = CODEX_MODELS[settingsDefaultModel.value];
     const claudeCapability = CLAUDE_MODELS[settingsDefaultModel.value];
+    const xaiCapability = XAI_MODELS[settingsDefaultModel.value];
+    const reasoningCapability = claudeCapability || xaiCapability;
+    const effortGroupLabel = document.querySelector(
+      "#settingsClaudeEffortGroup label"
+    );
+    const thinkingGroupLabel = document.querySelector(
+      "#settingsClaudeThinkingGroup label"
+    );
+    if (effortGroupLabel) {
+      effortGroupLabel.textContent = xaiCapability ? "Grok Reasoning Effort" : "Claude Effort";
+    }
+    if (thinkingGroupLabel) {
+      thinkingGroupLabel.textContent = xaiCapability ? "Grok Reasoning" : "Claude Thinking";
+    }
     document.getElementById("settingsCodexEffortGroup")?.classList.toggle("hidden", !capability);
     document.getElementById("settingsCodexSpeedGroup")?.classList.toggle("hidden", !capability);
-    document.getElementById("settingsClaudeEffortGroup")?.classList.toggle("hidden", !claudeCapability?.effort);
-    document.getElementById("settingsClaudeThinkingGroup")?.classList.toggle("hidden", !claudeCapability);
+    document.getElementById("settingsClaudeEffortGroup")?.classList.toggle("hidden", !reasoningCapability?.effort);
+    document.getElementById("settingsClaudeThinkingGroup")?.classList.toggle("hidden", !reasoningCapability);
     const ultraOption = settingsCodexEffort.querySelector('option[value="Ultra"]');
     const fastOption = settingsCodexSpeed.querySelector('option[value="Fast"]');
     ultraOption.disabled = !capability?.ultra;
@@ -1913,13 +1993,23 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!capability?.fast && settingsCodexSpeed.value === "Fast") {
       settingsCodexSpeed.value = "Standard";
     }
-    const extraOption = settingsClaudeEffort.querySelector('option[value="Extra"]');
-    extraOption.disabled = !claudeCapability?.extra;
-    if (!claudeCapability?.extra && settingsClaudeEffort.value === "Extra") {
+    settingsClaudeEffort.querySelectorAll("option").forEach(option => {
+      option.disabled = xaiCapability?.efforts?.length
+        ? !xaiCapability.efforts.includes(option.value)
+        : option.value === "Extra" && !reasoningCapability?.extra;
+    });
+    if (
+      xaiCapability?.efforts?.length
+      && !xaiCapability.efforts.includes(settingsClaudeEffort.value)
+    ) {
+      settingsClaudeEffort.value = xaiCapability.efforts.includes("Medium")
+        ? "Medium"
+        : xaiCapability.efforts[0];
+    } else if (!reasoningCapability?.extra && settingsClaudeEffort.value === "Extra") {
       settingsClaudeEffort.value = "High";
     }
-    settingsClaudeThinking.querySelector('option[value="Off"]').disabled = Boolean(claudeCapability?.thinkingRequired);
-    if (claudeCapability?.thinkingRequired) {
+    settingsClaudeThinking.querySelector('option[value="Off"]').disabled = Boolean(reasoningCapability?.thinkingRequired);
+    if (reasoningCapability?.thinkingRequired) {
       settingsClaudeThinking.value = "On";
     }
   });
@@ -2072,6 +2162,15 @@ document.addEventListener("DOMContentLoaded", () => {
         title: "GPT Models (Codex / ChatGPT)",
         badge: "Codex GPT usage",
         note: "Codex models draw from your ChatGPT/Codex GPT usage budget."
+      };
+    }
+    if (isXaiModel(currentModel)) {
+      return {
+        key: "xai",
+        title: "Grok Models (xAI)",
+        badge: "xAI account usage",
+        note: usageData.xaiUsageNote
+          || "Grok usage and billing are managed by your xAI account."
       };
     }
 
@@ -2227,6 +2326,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (secondaryNote && typeof usageData.codexRateLimits.availableResets === "number") {
         secondaryNote.textContent = `${secondaryNote.textContent} ${usageData.codexRateLimits.availableResets} available resets.`;
       }
+      return;
+    }
+    if (isXaiModel(currentModel)) {
+      document.getElementById("secondaryWeeklyRow")?.classList.add("hidden");
+      document.getElementById("secondaryHourlyRow")?.classList.add("hidden");
       return;
     }
 

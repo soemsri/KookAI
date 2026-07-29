@@ -79,6 +79,7 @@ class CliManagerTests(unittest.TestCase):
                 "# kookai-cli: claude\n"
                 "# kookai-cli: codex\n"
                 "# kookai-cli: kimi\n"
+                "# kookai-cli: grok\n"
                 "# kookai-cli: unknown\n"
                 "# kookai-cli: codex\n"
             )
@@ -86,7 +87,7 @@ class CliManagerTests(unittest.TestCase):
         try:
             self.assertEqual(
                 cli_manager.parse_cli_requirements(path),
-                ["agy", "claude", "codex", "kimi"],
+                ["agy", "claude", "codex", "kimi", "grok"],
             )
         finally:
             os.unlink(path)
@@ -147,6 +148,13 @@ class CliManagerTests(unittest.TestCase):
             os.path.normpath(os.path.expanduser("~/.local")),
             fallback_command,
         )
+
+    def test_grok_uses_official_installer_and_login_command(self):
+        definition = cli_manager.CLI_DEFINITIONS["grok"]
+
+        self.assertEqual(definition.install_source, "https://x.ai/cli/install.sh")
+        self.assertEqual(definition.connect_args, ("login",))
+        self.assertEqual(definition.executable, "grok")
 
     def test_launch_codex_login_opens_a_terminal(self):
         with (

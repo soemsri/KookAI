@@ -18,6 +18,7 @@ The server acts as the backend broker and hosts the web chat console.
   - The npm install path requires **Node.js / npm**.
 - **Moonshot Kimi Code CLI (`kimi`)** for Kimi K3
   - Windows requires **Git for Windows** because Kimi Code uses Git Bash.
+- **xAI Grok Build CLI (`grok`)** for Grok 4.5, Grok 4.20, and Grok Build models
 
 ### Installation
 
@@ -33,7 +34,7 @@ The server acts as the backend broker and hosts the web chat console.
 
    On first launch, KookAI creates the Python virtual environment when needed,
    installs missing Python packages from `requirements.txt`, and checks the
-   `agy`, `claude`, `codex`, and `kimi` declarations in the same file. Missing CLIs are
+   `agy`, `claude`, `codex`, `kimi`, and `grok` declarations in the same file. Missing CLIs are
    downloaded and installed automatically before the server starts.
 
    Set `KOOKAI_AUTO_INSTALL_CLIS=0` to disable automatic CLI installation.
@@ -121,7 +122,30 @@ The server acts as the backend broker and hosts the web chat console.
 
    If the server cannot find the runnable CLI, set `KIMI_CLI_PATH` to the full executable path.
 
-6. Open **Settings → Connections** and select **Connect** for each provider.
+6. The automatic Grok Build installation uses:
+
+   **macOS / Linux**
+   ```bash
+   curl -fsSL https://x.ai/cli/install.sh | bash
+   ```
+
+   **Windows PowerShell**
+   ```powershell
+   irm https://x.ai/cli/install.ps1 | iex
+   ```
+
+   Authenticate, inspect the models available to the account, and verify:
+
+   ```bash
+   grok login
+   grok models
+   grok --version
+   ```
+
+   Headless environments may set `XAI_API_KEY` instead of opening the login
+   flow. If the server cannot find the executable, set `GROK_CLI_PATH`.
+
+7. Open **Settings → Connections** and select **Connect** for each provider.
    KookAI opens that provider's interactive sign-in in a terminal on the server
    computer. For security, CLI installation and connection management are
    available only from localhost.
@@ -167,7 +191,7 @@ persistent override is saved. Each model separates:
 - `id`: stable value sent by clients and stored with conversations
 - `label`: user-facing name
 - `cli_model`: exact model name or slug passed to the provider CLI
-- `provider`: `agy`, `claude`, `codex`, or `kimi`
+- `provider`: `agy`, `claude`, `codex`, `kimi`, or `xai`
 - `capabilities`: supported effort, speed, and thinking controls
 - `enabled`: removes a model from clients without deleting its configuration
 
@@ -175,7 +199,7 @@ Set `KOOKAI_MODEL_CATALOG_PATH` to use a different persistent catalog file.
 Catalog management is localhost-only, while paired mobile devices can read
 enabled models through their existing authorization token.
 
-Adding models that use the existing `agy`, `claude`, `codex`, or `kimi` controls does
+Adding models that use the existing `agy`, `claude`, `codex`, `kimi`, or `xai` controls does
 not require a new mobile build. A genuinely new provider, input type, or UI
 capability still requires an app update because older clients do not know how
 to render or execute that new interaction.
@@ -286,6 +310,23 @@ Kimi K3 runs through Moonshot's `kimi` CLI with the `kimi-for-coding/k3`
 model alias. KookAI uses non-interactive `stream-json` output and stores Kimi
 session IDs separately so conversations can be resumed.
 
+### xAI Grok Build
+
+xAI models run through the official `grok` CLI using newline-delimited
+`streaming-json` output. KookAI captures the returned `sessionId` and resumes
+later turns with `--resume`.
+
+- **Grok 4.5**: configurable Low, Medium, or High reasoning effort.
+- **Grok 4.20 Reasoning / Non-Reasoning**: explicit reasoning variants.
+- **Grok Build 0.1**: coding-focused model for agentic workflows.
+- **Sandbox**: combines `--sandbox workspace` with automatic tool approvals,
+  limiting writes to the selected workspace and temporary files.
+- **Real**: runs with automatic approvals and no Grok OS sandbox. Only use it
+  with a trusted paired device and workspace.
+
+Run `grok models` after login to confirm which catalog slugs the current xAI
+account may use.
+
 ---
 
 ## Troubleshooting
@@ -336,6 +377,19 @@ kimi login
 
 If it works in your terminal but not in KookAI, set `KIMI_CLI_PATH` to the full path of the `kimi` executable and restart the server.
 
+### `Failed to run grok CLI` or `No runnable Grok Build CLI was found`
+
+Check:
+
+```bash
+grok --version
+grok login
+grok models
+```
+
+If it works in your terminal but not in KookAI, set `GROK_CLI_PATH` to the full
+path of the `grok` executable and restart the server.
+
 ---
 
 ## References
@@ -348,6 +402,8 @@ If it works in your terminal but not in KookAI, set `KIMI_CLI_PATH` to the full 
 - [Claude Code authentication](https://docs.anthropic.com/en/docs/claude-code/iam)
 - [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code)
 - [Kimi command reference](https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html)
+- [xAI Grok Build CLI](https://docs.x.ai/build/overview)
+- [xAI Grok CLI reference](https://docs.x.ai/build/cli/reference)
 
 ---
 

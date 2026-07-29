@@ -8,3 +8,4 @@ pydantic>=2.13,<3
 # kookai-cli: claude
 # kookai-cli: codex
 # kookai-cli: kimi
+# kookai-cli: grok

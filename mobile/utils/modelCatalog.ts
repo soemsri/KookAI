@@ -1,6 +1,6 @@
 import { File, Paths } from 'expo-file-system';
 
-export type CatalogProvider = 'agy' | 'codex' | 'claude' | 'kimi';
+export type CatalogProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai';
 
 export interface CatalogCapabilities {
   effort: string[];
@@ -16,7 +16,7 @@ export interface CatalogModel {
   provider: CatalogProvider;
   cli_model?: string;
   badge: string;
-  usage_bucket: 'gemini' | 'claude' | 'gpt';
+  usage_bucket: 'gemini' | 'claude' | 'gpt' | 'xai';
   enabled: boolean;
   capabilities: CatalogCapabilities;
 }
@@ -48,8 +48,8 @@ export function isModelCatalog(value: unknown): value is ModelCatalog {
     && typeof model.id === 'string'
     && typeof model.label === 'string'
     && typeof model.description === 'string'
-    && ['agy', 'codex', 'claude', 'kimi'].includes(model.provider)
-    && ['gemini', 'claude', 'gpt'].includes(model.usage_bucket)
+    && ['agy', 'codex', 'claude', 'kimi', 'xai'].includes(model.provider)
+    && ['gemini', 'claude', 'gpt', 'xai'].includes(model.usage_bucket)
     && typeof model.enabled === 'boolean'
     && model.capabilities
     && Array.isArray(model.capabilities.effort)

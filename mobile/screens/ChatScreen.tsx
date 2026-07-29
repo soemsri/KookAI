@@ -86,11 +86,11 @@ message: string;
 
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
-type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi';
+type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai';
 type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
 type CodexSpeed = 'Standard' | 'Fast';
 type ClaudeEffort = 'Low' | 'Medium' | 'High' | 'Extra' | 'Max';
-type UsageBucketKey = 'gemini' | 'claude' | 'gpt';
+type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai';
 type UsagePeriodKey = 'Weekly' | 'Hourly';
 
 interface ModelOption {
@@ -104,6 +104,7 @@ interface ModelOption {
   supportsFast?: boolean;
   supportsClaudeEffort?: boolean;
   supportsClaudeExtra?: boolean;
+  claudeEfforts?: ClaudeEffort[];
   thinkingRequired?: boolean;
 }
 
@@ -149,6 +150,10 @@ const FALLBACK_MODELS: ModelOption[] = [
   { value: "Claude Opus 4.6 (Thinking)", desc: "Highest reasoning capacity model", provider: "agy" },
   { value: "GPT-OSS 120B (Medium)", desc: "Open-source large scale LLM", provider: "agy" },
   { value: "Kimi K3", desc: "Native multimodal model for long-horizon coding", provider: "kimi", badge: "Kimi", usageBucket: "gpt", thinkingRequired: true },
+  { value: "Grok 4.5", desc: "xAI flagship model for coding, agents, and knowledge work", provider: "xai", badge: "Grok", usageBucket: "xai", supportsClaudeEffort: true, claudeEfforts: ["Low", "Medium", "High"], thinkingRequired: true },
+  { value: "Grok 4.20 Reasoning", desc: "High-performance Grok model with reasoning", provider: "xai", badge: "Grok", usageBucket: "xai", thinkingRequired: true },
+  { value: "Grok 4.20 Non-Reasoning", desc: "Low-latency Grok 4.20 without reasoning", provider: "xai", badge: "Grok", usageBucket: "xai" },
+  { value: "Grok Build 0.1", desc: "xAI model trained for agentic coding workflows", provider: "xai", badge: "Grok", usageBucket: "xai", thinkingRequired: true },
   { value: "Fable 5", desc: "For your toughest challenges", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true, thinkingRequired: true },
   { value: "Opus 5", desc: "For complex tasks", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
   { value: "Sonnet 5", desc: "Most efficient for everyday tasks", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
@@ -181,8 +186,9 @@ const catalogToModelOptions = (catalog: ModelCatalog): ModelOption[] => (
       usageBucket: model.usage_bucket,
       supportsUltra: model.capabilities.effort.includes('Ultra'),
       supportsFast: model.capabilities.speed.includes('Fast'),
-      supportsClaudeEffort: model.provider === 'claude' && model.capabilities.effort.length > 0,
+      supportsClaudeEffort: ['claude', 'xai'].includes(model.provider) && model.capabilities.effort.length > 0,
       supportsClaudeExtra: model.capabilities.effort.includes('Extra'),
+      claudeEfforts: model.capabilities.effort as ClaudeEffort[],
       thinkingRequired: model.capabilities.thinking_required,
     }))
 );
@@ -214,9 +220,23 @@ const getModelLabel = (modelName: string) => getModelOption(modelName)?.label ||
 const isCodexModel = (modelName: string) => getModelOption(modelName)?.provider === "codex";
 const isClaudeModel = (modelName: string) => getModelOption(modelName)?.provider === "claude";
 const isKimiModel = (modelName: string) => getModelOption(modelName)?.provider === "kimi";
+const isXaiModel = (modelName: string) => getModelOption(modelName)?.provider === "xai";
+const usesClaudeStyleControls = (modelName: string) => (
+  isClaudeModel(modelName) || isXaiModel(modelName)
+);
+const showsClaudeStyleControls = (modelName: string) => {
+  const model = getModelOption(modelName);
+  return isClaudeModel(modelName) || (
+    isXaiModel(modelName)
+    && Boolean(model?.supportsClaudeEffort || model?.thinkingRequired)
+  );
+};
 const getClaudeEfforts = (modelName: string) => {
   const model = getModelOption(modelName);
   if (!model?.supportsClaudeEffort) return [];
+  if (model.claudeEfforts?.length) {
+    return claudeEffortList.filter((item) => model.claudeEfforts?.includes(item.value));
+  }
   return model.supportsClaudeExtra
     ? claudeEffortList
     : claudeEffortList.filter((item) => item.value !== "Extra");
@@ -250,6 +270,13 @@ const getUsageBucketForModel = (modelName: string): {
       key: 'gpt',
       title: 'Kimi Models (KookAI)',
       note: 'Kimi usage is grouped in the KookAI model usage budget.',
+    };
+  }
+  if (isXaiModel(modelName)) {
+    return {
+      key: 'xai',
+      title: 'Grok Models (xAI)',
+      note: 'Grok usage and billing are managed by your xAI account.',
     };
   }
 
@@ -367,6 +394,11 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
     return isDark
       ? { text: catalogBadge || 'Claude', bg: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa' }
       : { text: catalogBadge || 'Claude', bg: '#f3e8ff', color: '#7c3aed' };
+  }
+  if (isXaiModel(modelName)) {
+    return isDark
+      ? { text: catalogBadge || 'Grok', bg: 'rgba(255, 255, 255, 0.12)', color: '#f3f4f6' }
+      : { text: catalogBadge || 'Grok', bg: '#e5e7eb', color: '#111827' };
   }
   if (name.includes('flash')) {
     return isDark
@@ -1055,8 +1087,13 @@ setSelectedCodexEffort('Medium');
 if (!nextModel.supportsFast && selectedCodexSpeed === 'Fast') {
 setSelectedCodexSpeed('Standard');
 }
-if (!nextModel.supportsClaudeExtra && selectedClaudeEffort === 'Extra') {
-setSelectedClaudeEffort('High');
+if (
+nextModel.supportsClaudeEffort
+&& !getClaudeEfforts(modelName).some((item) => item.value === selectedClaudeEffort)
+) {
+setSelectedClaudeEffort(
+  getClaudeEfforts(modelName).some((item) => item.value === 'Medium') ? 'Medium' : 'High'
+);
 }
 if (nextModel.thinkingRequired) {
 setSelectedClaudeThinking(true);
@@ -1369,9 +1406,11 @@ const nextEffort = draftModelOption?.supportsUltra || draftSettingsCodexEffort !
 const nextSpeed = draftModelOption?.supportsFast || draftSettingsCodexSpeed !== 'Fast'
   ? draftSettingsCodexSpeed
   : 'Standard';
-const nextClaudeEffort = draftModelOption?.supportsClaudeExtra || draftSettingsClaudeEffort !== 'Extra'
+const draftClaudeEfforts = getClaudeEfforts(draftSettingsModel);
+const nextClaudeEffort = !draftModelOption?.supportsClaudeEffort
+  || draftClaudeEfforts.some((item) => item.value === draftSettingsClaudeEffort)
   ? draftSettingsClaudeEffort
-  : 'High';
+  : (draftClaudeEfforts.some((item) => item.value === 'Medium') ? 'Medium' : 'High');
 const nextClaudeThinking = draftModelOption?.thinkingRequired ? true : draftSettingsClaudeThinking;
 setSelectedCodexEffort(nextEffort);
 setSelectedCodexSpeed(nextSpeed);
@@ -1708,7 +1747,9 @@ const conversationProvider = selectedConversation?.provider
         ? 'claude'
         : cid.startsWith('kimi_')
           ? 'kimi'
-          : 'agy'
+          : cid.startsWith('grok_')
+            ? 'xai'
+            : 'agy'
   );
 if (conversationProject) {
 setSelectedProject(conversationProject);
@@ -1723,7 +1764,7 @@ setLoadingState(true);
     try {
 const data = await callHostApi(`/api/conversation/${cid}`);
 const resolvedProject = data.project || conversationProject;
-const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi'].includes(data.provider)
+const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai'].includes(data.provider)
   ? data.provider
   : conversationProvider;
 if (resolvedProject) {
@@ -1950,7 +1991,7 @@ id: `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
 content: userMsg,
 model: selectedModel,
 provider: queuedProvider,
-effort: queuedProvider === 'claude' ? selectedClaudeEffort : selectedCodexEffort,
+effort: ['claude', 'xai'].includes(queuedProvider) ? selectedClaudeEffort : selectedCodexEffort,
 speed: selectedCodexSpeed,
 thinking: selectedClaudeThinking,
 target: selectedTarget,
@@ -2016,7 +2057,7 @@ allowQueue: false,
     const requestModel = options?.model || selectedModel;
     const requestProvider = options?.provider || getModelOption(requestModel)?.provider || 'agy';
     const requestEffort = options?.effort
-      || (requestProvider === 'claude' ? selectedClaudeEffort : selectedCodexEffort);
+      || (['claude', 'xai'].includes(requestProvider) ? selectedClaudeEffort : selectedCodexEffort);
     const requestSpeed = options?.speed || selectedCodexSpeed;
     const requestThinking = options?.thinking ?? selectedClaudeThinking;
     const requestTarget = options?.target || selectedTarget;
@@ -2713,6 +2754,9 @@ allowQueue: false,
                 {item.provider === 'codex' ? ` · ${item.effort} · ${item.speed}` : ''}
                 {item.provider === 'claude' ? ` · ${item.effort} · Thinking ${item.thinking ? 'On' : 'Off'}` : ''}
                 {item.provider === 'kimi' ? ' · Thinking On' : ''}
+                {item.provider === 'xai'
+                  ? `${getModelOption(item.model)?.supportsClaudeEffort ? ` · ${item.effort}` : ''} · Grok`
+                  : ''}
                 {` · ${item.target}`}
               </Text>
             </View>
@@ -2857,7 +2901,13 @@ allowQueue: false,
                     </TouchableOpacity>
                   </View>
                 </View>
-                {(isCodexModel(selectedModel) || isClaudeModel(selectedModel)) && (
+                {(isCodexModel(selectedModel) || (
+                  showsClaudeStyleControls(selectedModel)
+                  && (
+                    getModelOption(selectedModel)?.supportsClaudeEffort
+                    || getModelOption(selectedModel)?.thinkingRequired
+                  )
+                )) && (
                   <View style={styles.codexOptionsRow}>
                     {(isCodexModel(selectedModel) || getModelOption(selectedModel)?.supportsClaudeEffort) && (
                       <TouchableOpacity
@@ -2867,7 +2917,7 @@ allowQueue: false,
                       >
                         <Text style={[styles.codexOptionLabel, { color: theme.textMuted }]}>Effort</Text>
                         <Text style={[styles.codexOptionValue, { color: theme.textPrimary }]}>
-                          {isClaudeModel(selectedModel) ? selectedClaudeEffort : selectedCodexEffort}
+                          {usesClaudeStyleControls(selectedModel) ? selectedClaudeEffort : selectedCodexEffort}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -3094,15 +3144,19 @@ allowQueue: false,
           <View style={[styles.bottomSheet, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
             <View style={[styles.bottomSheetHeader, { borderBottomColor: theme.borderColor }]}>
               <Text style={[styles.bottomSheetTitle, { color: theme.textPrimary }]}>
-                {isClaudeModel(selectedModel) ? 'Claude Effort' : 'Codex Effort'}
+                {isXaiModel(selectedModel)
+                  ? 'Grok Reasoning Effort'
+                  : isClaudeModel(selectedModel)
+                    ? 'Claude Effort'
+                    : 'Codex Effort'}
               </Text>
               <TouchableOpacity onPress={() => setIsEffortModalOpen(false)} style={styles.closeModalX}>
                 <Text style={{ color: theme.textSecondary, fontSize: 18 }}>✕</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.bottomSheetContent}>
-              {(isClaudeModel(selectedModel) ? getClaudeEfforts(selectedModel) : getCodexEfforts(selectedModel)).map((item) => {
-                const isClaudeEffort = isClaudeModel(selectedModel);
+              {(usesClaudeStyleControls(selectedModel) ? getClaudeEfforts(selectedModel) : getCodexEfforts(selectedModel)).map((item) => {
+                const isClaudeEffort = usesClaudeStyleControls(selectedModel);
                 const isActive = isClaudeEffort
                   ? selectedClaudeEffort === item.value
                   : selectedCodexEffort === item.value;
@@ -3360,11 +3414,13 @@ allowQueue: false,
                   </>
                 )}
 
-                {isClaudeModel(draftSettingsModel) && (
+                {showsClaudeStyleControls(draftSettingsModel) && (
                   <>
                     {getModelOption(draftSettingsModel)?.supportsClaudeEffort && (
                       <>
-                        <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>Claude Effort</Text>
+                        <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>
+                          {isXaiModel(draftSettingsModel) ? 'Grok Reasoning Effort' : 'Claude Effort'}
+                        </Text>
                         {getClaudeEfforts(draftSettingsModel).map((item) => {
                           const isActive = draftSettingsClaudeEffort === item.value;
                           return (
@@ -3384,7 +3440,9 @@ allowQueue: false,
                       </>
                     )}
 
-                    <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>Claude Thinking</Text>
+                    <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>
+                      {isXaiModel(draftSettingsModel) ? 'Grok Reasoning' : 'Claude Thinking'}
+                    </Text>
                     <View
                       style={[
                         styles.settingsToggleRow,
@@ -3534,7 +3592,11 @@ allowQueue: false,
                   </Text>
                   {getUsageBucketForModel(selectedModel).note ? (
                     <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textMuted }]}>
-                      {usageLimitData.codexUsageNote || getUsageBucketForModel(selectedModel).note}
+                      {isCodexModel(selectedModel)
+                        ? (usageLimitData.codexUsageNote || getUsageBucketForModel(selectedModel).note)
+                        : isXaiModel(selectedModel)
+                          ? (usageLimitData.xaiUsageNote || getUsageBucketForModel(selectedModel).note)
+                          : getUsageBucketForModel(selectedModel).note}
                     </Text>
                   ) : null}
                   {isCodexModel(selectedModel) && usageLimitData.codexRateLimits ? (
@@ -3547,7 +3609,7 @@ allowQueue: false,
                         </Text>
                       ) : null}
                     </>
-                  ) : (
+                  ) : isXaiModel(selectedModel) ? null : (
                     <>
                       {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Weekly', 'Weekly Limit')}
                       {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Hourly', 'Five Hour Limit')}

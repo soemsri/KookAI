@@ -61,6 +61,17 @@ from kimi_backend import (
     parse_kimi_stream_json,
     resolve_kimi_executable,
 )
+from grok_backend import (
+    GROK_CONVERSATION_PREFIX,
+    build_grok_command,
+    classify_grok_progress_line,
+    configure_grok_catalog,
+    grok_session_id,
+    make_grok_conversation_id,
+    normalize_grok_effort,
+    parse_grok_streaming_json,
+    resolve_grok_executable,
+)
 from cli_manager import (
     auto_install_missing,
     get_cli_statuses,
@@ -140,6 +151,7 @@ def load_runtime_model_catalog() -> dict:
     configure_codex_catalog(catalog["models"])
     configure_claude_catalog(catalog["models"])
     configure_kimi_catalog(catalog["models"])
+    configure_grok_catalog(catalog["models"])
     return catalog
 
 def migrate_legacy_data_dir(old_path: str, new_path: str):
@@ -603,12 +615,13 @@ async def get_cli_status(request: Request):
 @app.post("/api/cli/{cli_id}/install")
 async def install_cli_requirement(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
     status = await asyncio.to_thread(install_cli, cli_id)
     resolve_codex_executable.cache_clear()
     resolve_claude_executable.cache_clear()
     resolve_kimi_executable.cache_clear()
+    resolve_grok_executable.cache_clear()
     return JSONResponse(
         status_code=200 if status["installed"] else 500,
         content={"cli": status},
@@ -618,7 +631,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
 @app.post("/api/cli/{cli_id}/connect")
 async def connect_cli_account(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
 
     statuses = {
@@ -675,6 +688,7 @@ async def update_models(request: Request):
         configure_codex_catalog(catalog["models"])
         configure_claude_catalog(catalog["models"])
         configure_kimi_catalog(catalog["models"])
+        configure_grok_catalog(catalog["models"])
     except (ModelCatalogError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(
@@ -731,6 +745,8 @@ CLAUDE_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "claude_conversat
 claude_conversations_lock = threading.Lock()
 KIMI_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "kimi_conversations.json")
 kimi_conversations_lock = threading.Lock()
+GROK_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "grok_conversations.json")
+grok_conversations_lock = threading.Lock()
 CONVERSATION_METADATA_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "conversation_metadata.json")
 conversation_metadata_lock = threading.Lock()
 
@@ -1117,6 +1133,83 @@ def get_kimi_conversations() -> List[dict]:
 def get_kimi_conversation(conversation_id: str) -> Optional[dict]:
     with kimi_conversations_lock:
         record = _load_kimi_conversation_records().get(conversation_id)
+    return record if isinstance(record, dict) else None
+
+
+def _load_grok_conversation_records() -> dict:
+    if not os.path.exists(GROK_CONVERSATIONS_FILE):
+        return {}
+    try:
+        with open(GROK_CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logging.error(f"Failed to load Grok conversation history: {e}")
+        return {}
+
+
+def _save_grok_conversation_records(records: dict):
+    os.makedirs(os.path.dirname(GROK_CONVERSATIONS_FILE), exist_ok=True)
+    temp_path = f"{GROK_CONVERSATIONS_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, GROK_CONVERSATIONS_FILE)
+
+
+def persist_grok_exchange(
+    conversation_id: str,
+    project: str,
+    model: str,
+    effort: Optional[str],
+    user_message: str,
+    assistant_message: str,
+):
+    if not conversation_id.startswith(GROK_CONVERSATION_PREFIX):
+        return
+
+    now = datetime.datetime.now().timestamp()
+    with grok_conversations_lock:
+        records = _load_grok_conversation_records()
+        record = records.get(conversation_id, {})
+        messages = record.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        messages.extend([
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_message},
+        ])
+
+        clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", user_message).strip()
+        if not clean_title:
+            clean_title = "Grok conversation"
+        if len(clean_title) > 40:
+            clean_title = clean_title[:40] + "..."
+
+        records[conversation_id] = {
+            "id": conversation_id,
+            "session_id": grok_session_id(conversation_id),
+            "title": record.get("title") or clean_title,
+            "project": project,
+            "provider": "xai",
+            "model": model,
+            "effort": effort,
+            "timestamp": now,
+            "messages": messages,
+        }
+        _save_grok_conversation_records(records)
+
+
+def get_grok_conversations() -> List[dict]:
+    with grok_conversations_lock:
+        records = _load_grok_conversation_records()
+    conversations = [value for value in records.values() if isinstance(value, dict)]
+    conversations.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
+    return conversations
+
+
+def get_grok_conversation(conversation_id: str) -> Optional[dict]:
+    with grok_conversations_lock:
+        record = _load_grok_conversation_records().get(conversation_id)
     return record if isinstance(record, dict) else None
 
 
@@ -2119,6 +2212,130 @@ def run_kimi_cli(
         )
 
 
+def run_grok_cli(
+    message: str,
+    model_ui_name: str,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    effort: str = "Medium",
+    progress_callback=None,
+):
+    project_id = clean_project_name(workspace or "agy")
+    cwd_path = resolve_project_directory(project_id)
+    mapping_key = f"xai:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+    message_with_context = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+
+    def execute(run_conversation_id: Optional[str]):
+        stream_result = {"session_id": None, "parts": [], "errors": []}
+
+        def capture_grok_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_grok_streaming_json(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["parts"].append(parsed_line["final_message"])
+            if parsed_line["errors"]:
+                stream_result["errors"].extend(parsed_line["errors"])
+
+        cmd = build_grok_command(
+            grok_path=resolve_grok_executable(),
+            prompt=message_with_context,
+            model_name=model_ui_name,
+            effort=effort,
+            target=target,
+            conversation_id=run_conversation_id,
+            cwd_path=cwd_path,
+        )
+        logging.info(
+            "Executing Grok Build CLI in %s with model=%s effort=%s target=%s resume=%s",
+            cwd_path,
+            model_ui_name,
+            effort,
+            target,
+            bool(grok_session_id(run_conversation_id)),
+        )
+        result = run_agent_command(
+            cmd,
+            cwd_path,
+            timeout=AGY_CLI_TIMEOUT,
+            progress_callback=progress_callback,
+            progress_line_classifier=classify_grok_progress_line,
+            raw_line_callback=capture_grok_line,
+        )
+        parsed = parse_grok_streaming_json(result.stdout or "")
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": "".join(stream_result["parts"]) or parsed["final_message"],
+            "errors": stream_result["errors"] or parsed["errors"],
+        }
+
+    try:
+        result, parsed = execute(actual_cid)
+        combined_error = "\n".join(
+            part
+            for part in [
+                (result.stderr or "").strip(),
+                "\n".join(parsed["errors"]).strip(),
+            ]
+            if part
+        )
+        recoverable_resume_error = grok_session_id(actual_cid) and any(
+            phrase in combined_error.lower()
+            for phrase in (
+                "session does not exist",
+                "session not found",
+                "failed to resume",
+                "unable to resume",
+            )
+        )
+        if result.returncode != 0 and recoverable_resume_error:
+            if progress_callback:
+                progress_callback(
+                    "progress",
+                    "Grok session was unavailable; starting a fresh session.",
+                )
+            result, parsed = execute(None)
+            combined_error = "\n".join(
+                part
+                for part in [
+                    (result.stderr or "").strip(),
+                    "\n".join(parsed["errors"]).strip(),
+                ]
+                if part
+            )
+
+        session_id = parsed["session_id"]
+        resolved_cid = make_grok_conversation_id(session_id) if session_id else actual_cid
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+
+        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
+            return parsed["final_message"].strip(), resolved_cid
+
+        error_message = combined_error or "Grok Build CLI did not return a final response."
+        return (
+            f"⚠️ **Grok CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```",
+            resolved_cid,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("grok", exc), actual_cid
+    except Exception as e:
+        return (
+            "❌ **Execution Error**: Failed to run `grok` CLI. "
+            f"Install/authenticate Grok Build or set `GROK_CLI_PATH`. Details: `{str(e)}`",
+            actual_cid,
+        )
+
+
 def run_selected_cli(
     message: str,
     model_ui_name: str,
@@ -2135,7 +2352,7 @@ def run_selected_cli(
     selected_provider = (provider or "").strip().lower()
     if not selected_provider:
         selected_provider = resolve_provider(None, model_ui_name)
-    if selected_provider not in {"agy", "codex", "claude", "kimi"}:
+    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
     if selected_provider == "codex":
         return run_codex_cli(
@@ -2167,6 +2384,16 @@ def run_selected_cli(
             conversation_id,
             target,
             workspace,
+            progress_callback,
+        )
+    if selected_provider == "xai":
+        return run_grok_cli(
+            message,
+            model_ui_name,
+            conversation_id,
+            target,
+            workspace,
+            effort,
             progress_callback,
         )
     return run_agy_cli(
@@ -2232,7 +2459,8 @@ async def get_conversations(request: Request, project: Optional[str] = None):
     codex_convos = get_codex_conversations()
     claude_convos = get_claude_conversations()
     kimi_convos = get_kimi_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos
+    grok_convos = get_grok_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -2255,7 +2483,8 @@ async def get_chat_history(request: Request):
     codex_convos = get_codex_conversations()
     claude_convos = get_claude_conversations()
     kimi_convos = get_kimi_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos
+    grok_convos = get_grok_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -2278,6 +2507,7 @@ async def get_conversation_details(cid: str, request: Request):
     codex_record = get_codex_conversation(cid)
     claude_record = get_claude_conversation(cid)
     kimi_record = get_kimi_conversation(cid)
+    grok_record = get_grok_conversation(cid)
 
     # First check memory cache
     if cid in in_memory_chats:
@@ -2299,6 +2529,11 @@ async def get_conversation_details(cid: str, request: Request):
             provider = "kimi"
             model = kimi_record.get("model")
             thinking = True
+        elif grok_record:
+            project = grok_record.get("project")
+            provider = "xai"
+            model = grok_record.get("model")
+            effort = grok_record.get("effort")
     elif codex_record:
         messages = codex_record.get("messages", [])
         project = codex_record.get("project")
@@ -2321,6 +2556,13 @@ async def get_conversation_details(cid: str, request: Request):
         provider = "kimi"
         model = kimi_record.get("model")
         thinking = True
+        in_memory_chats[cid] = messages
+    elif grok_record:
+        messages = grok_record.get("messages", [])
+        project = grok_record.get("project")
+        provider = "xai"
+        model = grok_record.get("model")
+        effort = grok_record.get("effort")
         in_memory_chats[cid] = messages
     else:
         # Check seed conversations
@@ -2435,6 +2677,12 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
                     f"Effort {effort} is not supported by model {model}"
                 )
             effort, _ = normalize_claude_effort(effort, model)
+    elif provider == "xai" and capabilities["effort"]:
+        if effort not in capabilities["effort"]:
+            raise ValueError(
+                f"Effort {effort} is not supported by model {model}"
+            )
+        effort, _ = normalize_grok_effort(effort, model)
 
     project_id = clean_project_name(workspace or "agy")
     if provider == "codex":
@@ -2450,6 +2698,11 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     elif provider == "kimi":
         actual_cid = convo_id_mapping.get(
             f"kimi:{project_id}:{conversation_id}",
+            conversation_id,
+        )
+    elif provider == "xai":
+        actual_cid = convo_id_mapping.get(
+            f"xai:{project_id}:{conversation_id}",
             conversation_id,
         )
     else:
@@ -2614,7 +2867,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         else:
             project_id = clean_project_name(workspace or "agy")
             cwd_path = resolve_project_directory(project_id)
-            if provider in {"codex", "kimi"}:
+            if provider in {"codex", "kimi", "xai"}:
                 agents_file = os.path.join(cwd_path, "AGENTS.md")
             elif provider == "claude":
                 agents_file = os.path.join(cwd_path, "CLAUDE.md")
@@ -2683,9 +2936,9 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         project_id,
         model,
         provider,
-        effort if provider in {"codex", "claude"} else None,
+        effort if provider in {"codex", "claude", "xai"} and capabilities["effort"] else None,
         speed if provider == "codex" else None,
-        thinking if provider in {"claude", "kimi"} else None,
+        thinking if provider in {"claude", "kimi", "xai"} else None,
     )
 
     if provider == "codex":
@@ -2716,6 +2969,15 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             user_visible_message,
             reply,
         )
+    elif provider == "xai":
+        persist_grok_exchange(
+            resolved_cid,
+            project_id,
+            model,
+            effort if capabilities["effort"] else None,
+            user_visible_message,
+            reply,
+        )
 
     processed_reply = reply.replace("file:///", "/api/media?path=/")
     return {
@@ -2724,9 +2986,9 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         "conversation_id": resolved_cid,
         "provider": provider,
         "model": model,
-        "effort": effort if provider in {"codex", "claude"} else None,
+        "effort": effort if provider in {"codex", "claude", "xai"} and capabilities["effort"] else None,
         "speed": speed if provider == "codex" else None,
-        "thinking": thinking if provider in {"claude", "kimi"} else None,
+        "thinking": thinking if provider in {"claude", "kimi", "xai"} else None,
     }
 
 
@@ -2866,6 +3128,8 @@ async def get_usage_limits(request: Request):
         "claudeHourlyPercent": 1.8,
         "gptWeeklyPercent": 0.0,
         "gptHourlyPercent": 0.0,
+        "xaiWeeklyPercent": 0.0,
+        "xaiHourlyPercent": 0.0,
         
         "geminiWeeklyUsed": 120000,
         "geminiWeeklyLimit": 10000000,
@@ -2881,8 +3145,13 @@ async def get_usage_limits(request: Request):
         "gptWeeklyLimit": 100000000,
         "gptHourlyUsed": 0,
         "gptHourlyLimit": 10000000,
+        "xaiWeeklyUsed": 0,
+        "xaiWeeklyLimit": 0,
+        "xaiHourlyUsed": 0,
+        "xaiHourlyLimit": 0,
         "codexRateLimits": None,
-        "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop."
+        "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop.",
+        "xaiUsageNote": "Grok usage and billing are managed by your xAI account. Grok Build does not currently expose an account-wide quota percentage here.",
     }
 
     try:

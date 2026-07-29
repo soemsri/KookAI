@@ -10,8 +10,8 @@ from typing import Any, Optional
 
 
 SCHEMA_VERSION = 1
-PROVIDERS = {"agy", "claude", "codex", "kimi"}
-USAGE_BUCKETS = {"gemini", "claude", "gpt"}
+PROVIDERS = {"agy", "claude", "codex", "kimi", "xai"}
+USAGE_BUCKETS = {"gemini", "claude", "gpt", "xai"}
 EFFORT_VALUES = {
     "Light",
     "Low",
@@ -150,6 +150,14 @@ def validate_model_catalog(payload: Any) -> dict[str, Any]:
         if provider == "kimi" and (effort or speed):
             raise ModelCatalogError(
                 f"{prefix} uses kimi; effort and speed must be empty"
+            )
+        if provider == "xai" and speed:
+            raise ModelCatalogError(
+                f"{prefix} uses xai; speed must be empty"
+            )
+        if provider == "xai" and effort and not thinking:
+            raise ModelCatalogError(
+                f"{prefix} uses xai effort; thinking must be true"
             )
 
         enabled = raw_model.get("enabled", True)
