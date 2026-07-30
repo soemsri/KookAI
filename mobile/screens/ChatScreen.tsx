@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StatusBar, Animated, useColorScheme, Modal, Vibration, Easing, Keyboard, Image, Linking, Switch } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StatusBar, Animated, useColorScheme, Modal, Vibration, Easing, Keyboard, Image, Linking, Switch, AppState } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 import { apiCall, clearConnection, uploadMedia, loadConnection, getActiveBaseUrl } from '../utils/api';
+import { getPromptAttachments, PromptAttachment } from '../utils/promptAttachments';
 import {
   isModelCatalog,
   ModelCatalog,
@@ -68,6 +69,7 @@ interface PromptSuggestion {
 interface QueuedPrompt {
 id: string;
 content: string;
+attachments: PromptAttachment[];
 model: string;
 provider: AgentProvider;
 effort: CodexEffort | ClaudeEffort;
@@ -832,7 +834,7 @@ export default function ChatScreen({ onDisconnect }: ChatScreenProps) {
   const promptKeyboardOffset = Platform.OS === 'android' && isKeyboardVisible ? keyboardHeight : 0;
 
   const [messages, setMessages] = useState<Message[]>([]);
-  const [localAttachments, setLocalAttachments] = useState<{ id: string; uri: string; name: string; type: 'image' | 'video' | 'document' | 'audio' }[]>([]);
+  const [localAttachments, setLocalAttachments] = useState<PromptAttachment[]>([]);
   const [inputText, setInputText] = useState('');
 
   const addLocalAttachment = (uri: string, name: string, type: 'image' | 'video' | 'document' | 'audio') => {
@@ -974,6 +976,7 @@ const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
   const pendingConversationScrollRef = useRef(false);
   const usageLimitControllerRef = useRef<AbortController | null>(null);
+  const activeTaskIdRef = useRef<string | null>(null);
 
   // Sidebar expand/collapse state & animation
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -1266,6 +1269,7 @@ selectedProjectRef.current = selectedProject;
         await loadProjects();
         await loadConversations();
         fetchUsageLimits();
+        await checkAndAttachActiveTask();
       } finally {
         if (isMounted) {
           setIsInitializingChat(false);
@@ -1281,6 +1285,18 @@ selectedProjectRef.current = selectedProject;
       if (toastTimeoutRef.current) {
         clearTimeout(toastTimeoutRef.current);
       }
+    };
+  }, []);
+
+  // Check and reconnect to active background CLI tasks when app returns to foreground
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        checkAndAttachActiveTask();
+      }
+    });
+    return () => {
+      subscription.remove();
     };
   }, []);
 
@@ -1849,6 +1865,7 @@ updateMessages(data.messages || []);
       Alert.alert("Error", "Failed to load chat logs.");
     } finally {
       setLoadingState(false);
+      checkAndAttachActiveTask(cid, conversationProject);
     }
   };
 
@@ -1857,6 +1874,7 @@ const newId = `temp_${selectedProject}_${Math.random().toString(36).substring(2,
 updateActiveConversation(newId, selectedProject, getModelOption(selectedModel)?.provider || 'agy');
 setQueuedPromptList([]);
 updateMessages([]);
+checkAndAttachActiveTask(newId, selectedProject);
 };
 
 const handleSelectProject = (project: string) => {
@@ -1871,6 +1889,7 @@ setActiveConvoProvider(activeConvoProviderRef.current);
 setQueuedPromptList([]);
 updateMessages([]);
 setIsProjectModalOpen(false);
+checkAndAttachActiveTask('', project);
 };
 
 const ensureActiveConversationForContext = () => {
@@ -2027,13 +2046,14 @@ setPromptCursor(nextCursor);
     }
   };
 
-const enqueuePrompt = (messageText: string) => {
+const enqueuePrompt = (messageText: string, attachments: PromptAttachment[]) => {
 const userMsg = messageText.trim();
-if (!userMsg) return;
+if (!userMsg && attachments.length === 0) return;
 
 if (inputText === messageText) {
 setInputText('');
 }
+setLocalAttachments([]);
 
 const conversationId = activeConvoIdRef.current || ensureActiveConversationForContext();
 const queuedProvider = getModelOption(selectedModel)?.provider || 'agy';
@@ -2042,6 +2062,7 @@ const nextQueue = [
 {
 id: `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
 content: userMsg,
+attachments: [...attachments],
 model: selectedModel,
 provider: queuedProvider,
 effort: ['claude', 'xai'].includes(queuedProvider) ? selectedClaudeEffort : selectedCodexEffort,
@@ -2076,6 +2097,7 @@ if (loadingRef.current || queuedPromptsRef.current.length === 0) return;
 const [nextPrompt, ...remainingQueue] = queuedPromptsRef.current;
 setQueuedPromptList(remainingQueue);
 sendChatMessage(nextPrompt.content, messagesRef.current, false, {
+attachments: nextPrompt.attachments,
 model: nextPrompt.model,
 provider: nextPrompt.provider,
 effort: nextPrompt.effort,
@@ -2088,13 +2110,141 @@ allowQueue: false,
 });
 };
 
+  const pollActiveTask = async (
+    taskId: string,
+    targetConvoId: string,
+    initialEvents: ChatTaskEvent[] = []
+  ) => {
+    if (activeTaskIdRef.current === taskId) return;
+    activeTaskIdRef.current = taskId;
+
+    setLoadingState(true);
+    const progressEvents: ChatTaskEvent[] = [...initialEvents];
+    let lastSeq = initialEvents.reduce((max, ev) => Math.max(max, ev.seq), -1);
+    if (initialEvents.length > 0) {
+      setTaskProgressEvents([...progressEvents]);
+    }
+
+    let response: any = null;
+
+    try {
+      while (activeTaskIdRef.current === taskId) {
+        await wait(1500);
+        if (activeTaskIdRef.current !== taskId) break;
+
+        const taskResponse = await callHostApi(`/api/chat-tasks/${taskId}?after=${lastSeq}`);
+        if (!taskResponse) break;
+
+        if (Array.isArray(taskResponse.events) && taskResponse.events.length > 0) {
+          taskResponse.events.forEach((event: ChatTaskEvent) => {
+            progressEvents.push(event);
+            lastSeq = Math.max(lastSeq, event.seq);
+          });
+          setTaskProgressEvents([...progressEvents]);
+          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+        }
+
+        if (taskResponse.status === 'success' || taskResponse.status === 'error') {
+          response = taskResponse.result;
+          break;
+        }
+      }
+
+      if (response && response.reply) {
+        setMessages((prevMsgs) => {
+          const lastMsg = prevMsgs[prevMsgs.length - 1];
+          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === response.reply) {
+            return prevMsgs;
+          }
+          const updated: Message[] = [
+            ...prevMsgs,
+            { role: 'assistant', content: String(response.reply) },
+          ];
+          messagesRef.current = updated;
+          return updated;
+        });
+
+        loadConversations(false);
+        fetchUsageLimits();
+        if (response.conversation_id && response.conversation_id !== targetConvoId) {
+          updateActiveConversation(response.conversation_id, selectedProjectRef.current, activeConvoProviderRef.current);
+          replaceQueuedConversationId(targetConvoId, response.conversation_id);
+        }
+      }
+    } catch (err: any) {
+      console.error("Error polling active task:", err);
+    } finally {
+      if (activeTaskIdRef.current === taskId) {
+        activeTaskIdRef.current = null;
+      }
+      setTaskProgressEvents([]);
+      setLoadingState(false);
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+      setTimeout(processNextQueuedPrompt, 0);
+    }
+  };
+
+  const checkAndAttachActiveTask = async (currentConvoId?: string, currentProject?: string) => {
+    const convoId = currentConvoId !== undefined ? currentConvoId : activeConvoIdRef.current;
+    const project = currentProject !== undefined ? currentProject : selectedProjectRef.current;
+
+    try {
+      const res = await callHostApi('/api/chat-tasks?active_only=true');
+      if (!res || !Array.isArray(res.tasks) || res.tasks.length === 0) {
+        return;
+      }
+
+      const activeTask = res.tasks.find((t: any) => {
+        if (convoId && t.conversation_id === convoId) return true;
+        if (project && t.workspace === project) {
+          if (!convoId || convoId.startsWith('temp_') || !t.conversation_id || t.conversation_id.startsWith('temp_')) {
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (!activeTask) return;
+
+      const taskId = activeTask.task_id;
+      if (activeTaskIdRef.current === taskId) return;
+
+      if (activeTask.message) {
+        setMessages((prevMsgs) => {
+          const hasUserMsg = prevMsgs.some(
+            (m) => m.role === 'user' && (m.content === activeTask.message || m.content.includes(activeTask.message))
+          );
+          if (!hasUserMsg) {
+            const updated: Message[] = [
+              ...prevMsgs,
+              { role: 'user', content: String(activeTask.message) },
+            ];
+            messagesRef.current = updated;
+            return updated;
+          }
+          return prevMsgs;
+        });
+      }
+
+      if (activeTask.conversation_id && activeTask.conversation_id !== convoId && !activeTask.conversation_id.startsWith('temp_')) {
+        updateActiveConversation(activeTask.conversation_id, project || activeTask.workspace || 'agy', activeTask.provider || 'agy');
+      }
+
+      pollActiveTask(taskId, activeTask.conversation_id || convoId, activeTask.events || []);
+
+    } catch (err) {
+      console.error("Error checking active task:", err);
+    }
+  };
+
   const sendChatMessage = async (
     messageText: string,
     baseMessages = messagesRef.current,
     clearPrompt = false,
     options?: Partial<QueuedPrompt> & { allowQueue?: boolean }
   ) => {
-    const hasAttachments = localAttachments && localAttachments.length > 0;
+    const attachmentsForPrompt = getPromptAttachments(options?.attachments, localAttachments);
+    const hasAttachments = attachmentsForPrompt.length > 0;
     if (!messageText.trim() && !hasAttachments) return;
 
     const userMsg = messageText.trim();
@@ -2103,7 +2253,7 @@ allowQueue: false,
     }
 
     if (loadingRef.current && options?.allowQueue !== false) {
-      enqueuePrompt(userMsg);
+      enqueuePrompt(userMsg, attachmentsForPrompt);
       return;
     }
 
@@ -2118,7 +2268,7 @@ allowQueue: false,
 
     // Add user message to display instantly (including local preview)
     const displayMsg = hasAttachments
-      ? (localAttachments.map(a => `![Attached Image](${a.uri}?type=${a.type})`).join('\n') + '\n\n' + userMsg).trim()
+      ? (attachmentsForPrompt.map(a => `![Attached Image](${a.uri}?type=${a.type})`).join('\n') + '\n\n' + userMsg).trim()
       : userMsg;
 
     const updatedMessages = [...baseMessages, { role: 'user', content: displayMsg } as Message];
@@ -2126,10 +2276,13 @@ allowQueue: false,
     setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
 
     setLoadingState(true);
-    // Keep local copy of attachments to upload, then clear the state
-    const attachmentsToUpload = [...localAttachments];
-    setLocalAttachments([]); // Clear from input bar instantly so it looks sent
+    const attachmentsToUpload = [...attachmentsForPrompt];
+    // A queued send must not clear attachments being composed for a later prompt.
+    if (options?.attachments === undefined) {
+      setLocalAttachments([]);
+    }
 
+    let startedTaskId: string | null = null;
     try {
       const shouldReuseConversation = activeConvoIdRef.current
         && activeConvoProjectRef.current === requestProject
@@ -2177,6 +2330,9 @@ allowQueue: false,
         throw new Error('Failed to start chat task');
       }
 
+      startedTaskId = startResponse.task_id;
+      activeTaskIdRef.current = startResponse.task_id;
+
       const progressEvents: ChatTaskEvent[] = [];
       let lastSeq = -1;
       let response: any = null;
@@ -2219,6 +2375,9 @@ allowQueue: false,
         setInputText(userMsg); // Restore prompt text on failure
       }
     } finally {
+      if (startedTaskId && activeTaskIdRef.current === startedTaskId) {
+        activeTaskIdRef.current = null;
+      }
       setTaskProgressEvents([]);
       setLoadingState(false);
       setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);

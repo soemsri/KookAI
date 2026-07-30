@@ -3152,7 +3152,16 @@ async def start_chat_task_endpoint(request: ChatRequest, req_raw: Request):
     task_id = uuid.uuid4().hex
     with chat_tasks_lock:
         chat_tasks[task_id] = {
+            "task_id": task_id,
             "status": "running",
+            "conversation_id": request.conversation_id,
+            "message": request.message,
+            "workspace": request.workspace,
+            "model": request.model,
+            "provider": request.provider,
+            "effort": request.effort,
+            "speed": request.speed,
+            "thinking": request.thinking,
             "events": [],
             "next_seq": 0,
             "result": None,
@@ -3164,6 +3173,39 @@ async def start_chat_task_endpoint(request: ChatRequest, req_raw: Request):
     return JSONResponse(content={"status": "running", "task_id": task_id})
 
 
+@app.get("/api/chat-tasks")
+async def list_chat_tasks_endpoint(
+    request: Request,
+    conversation_id: Optional[str] = None,
+    workspace: Optional[str] = None,
+    active_only: bool = True
+):
+    verify_authorization(request)
+    with chat_tasks_lock:
+        tasks_list = []
+        for tid, task in chat_tasks.items():
+            if active_only and task.get("status") != "running":
+                continue
+            if conversation_id and task.get("conversation_id") != conversation_id:
+                continue
+            if workspace and task.get("workspace") != workspace:
+                continue
+            tasks_list.append({
+                "task_id": tid,
+                "status": task.get("status"),
+                "conversation_id": task.get("conversation_id"),
+                "message": task.get("message"),
+                "workspace": task.get("workspace"),
+                "model": task.get("model"),
+                "provider": task.get("provider"),
+                "events": task.get("events", []),
+                "created_at": task.get("created_at"),
+                "completed_at": task.get("completed_at"),
+                "result": task.get("result")
+            })
+        return JSONResponse(content={"tasks": tasks_list})
+
+
 @app.get("/api/chat-tasks/{task_id}")
 async def get_chat_task_endpoint(task_id: str, request: Request, after: int = -1):
     verify_authorization(request)
@@ -3173,7 +3215,10 @@ async def get_chat_task_endpoint(task_id: str, request: Request, after: int = -1
             raise HTTPException(status_code=404, detail="Task not found")
         events = [event for event in task["events"] if event["seq"] > after]
         return JSONResponse(content={
+            "task_id": task_id,
             "status": task["status"],
+            "conversation_id": task.get("conversation_id"),
+            "message": task.get("message"),
             "events": events,
             "result": task["result"]
         })
