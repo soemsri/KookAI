@@ -1,0 +1,142 @@
+===============================================================================
+📋 รายการ Task ย่อยระดับละเอียด: ระบบ Multi-Server & Workspace Switcher (agy-mobile)
+อ้างอิงจากแผนงาน: multi_server_workspace_plan.md
+===============================================================================
+
+[x] Phase 1: Data Storage & API Refactoring (โครงสร้างข้อมูลและการจัดเก็บ)
+    ---------------------------------------------------------------------------
+    [x] Task 1.1: อัปเดตและนิยาม Data Types & Interfaces ใน `mobile/utils/api.ts`
+        - [x] กำหนด interface `ServerNode`:
+              - `id`: string (Unique UUID หรือ hostId)
+              - `name`: string (ชื่อเรียก Server เช่น "Office PC", "Home Mac")
+              - `hostId`: string (Host ID จาก Broker)
+              - `url`: string (Cloudflare/WAN Public URL)
+              - `localIp`: string (IP Address ใน LAN)
+              - `port`: number (ค่าเริ่มต้น 8080)
+              - `token`: string (JWT Auth Token ของ Server นั้น)
+              - `createdAt`: number (Timestamp)
+              - `lastActive`: number (Timestamp การใช้งานล่าสุด)
+              - `connectionState`: 'local' | 'wan' | 'offline'
+        - [x] กำหนด interface `MultiServerConfig`:
+              - `activeServerId`: string | null
+              - `servers`: Record<string, ServerNode>
+
+    [x] Task 1.2: พัฒนาระบบ Data Migration จาก Single-Server เป็น Multi-Server
+        - [x] เพิ่ม Key ใหม่ `kookai_multi_server_config` ใน SecureStore
+        - [x] สร้างฟังก์ชัน `migrateLegacyConnection()` เพื่อตรวจสอบ Key เดิม (`kookai_server_url`, `kookai_local_ip`, `kookai_token`, `kookai_host_id`)
+        - [x] หากพบข้อมูลเดิม ให้แปลงเป็น `ServerNode` (ตั้งชื่อเริ่มต้นว่า "Primary Host") แล้วบันทึกลง `MultiServerConfig` อัตโนมัติ พร้อมตั้งเป็น `activeServerId`
+        - [x] ลบหรือทำเครื่องหมายข้อมูล Legacy หลังจาก Migration สำเร็จ
+
+    [x] Task 1.3: พัฒนา Storage Helper APIs ใน `mobile/utils/api.ts`
+        - [x] ฟังก์ชัน `getMultiServerConfig()`: ดึงข้อมูล Config ทั้งหมดจาก SecureStore
+        - [x] ฟังก์ชัน `saveMultiServerConfig(config: MultiServerConfig)`: บันทึกข้อมูล Config ลง SecureStore
+        - [x] ฟังก์ชัน `getSavedServers()`: คืนค่า Array ของ `ServerNode` ทั้งหมด
+        - [x] ฟังก์ชัน `saveServer(server: ServerNode)`: เพิ่ม Server ใหม่ หรือ อัปเดต Server เดิม (เช็คจาก id/hostId)
+        - [x] ฟังก์ชัน `removeServer(serverId: string)`: ลบ Server ออกจาก Config (หากเป็น activeServerId ให้สลับไปยัง Server ที่เหลืออยู่ หรือรีเซ็ตเป็น null)
+        - [x] ฟังก์ชัน `setActiveServerId(serverId: string)`: อัปเดต Active Server ID และ `lastActive` timestamp
+        - [x] ฟังก์ชัน `getActiveServer()`: คืนค่า `ServerNode` ที่เลือกใช้งานปัจจุบัน
+
+-------------------------------------------------------------------------------
+
+[x] Phase 2: Dynamic Routing & Connection Health Check (การเชื่อมต่อและตรวจสถานะ)
+    ---------------------------------------------------------------------------
+    [x] Task 2.1: พัฒนาระบบ Per-Server Active URL Resolution
+        - [x] ปรับปรุงฟังก์ชัน `getActiveBaseUrlForServer(server: ServerNode, forceRefresh?: boolean)` ให้ทดสอบการเชื่อมต่อเฉพาะ Server นั้นๆ
+        - [x] ขั้นที่ 1 (LAN First): ทดสอบ `http://${server.localIp}:${server.port || 8080}` ด้วย timeout 2,000 ms
+        - [x] ขั้นที่ 2 (WAN Second): ทดสอบ `server.url` ด้วย timeout 4,000 ms
+        - [x] ขั้นที่ 3 (Broker Resolution): สอบถาม `WORKER_BASE_URL/resolve-host/${server.hostId}` หาก LAN/WAN เดิมติดต่อไม่ได้ เพื่อดึง URL/IP ล่าสุด
+        - [x] อัปเดต `connectionState` ('local' | 'wan' | 'offline') ลงใน ServerNode และ Cache ผลลัพธ์
+
+    [x] Task 2.2: พัฒนาระบบ Real-time Server Health & Ping Check
+        - [x] สร้างฟังก์ชัน `pingServer(server: ServerNode)`: ส่งคำขอ `/api/health` หรือ `/` เพื่อวัด Response Time (ms) และสถานะออนไลน์
+        - [x] สร้างฟังก์ชัน `pingAllServers()`: ตรวจสอบสถานะ Server ทั้งหมดใน Background เพื่ออัปเดต Badge สีบนหน้าจอ
+        - [x] คืนค่าสถานะ:
+              - 🟢 Local LAN (Latency ต่ำสุด)
+              - 🟡 Public WAN / Cloudflare Tunnel
+              - 🔴 Offline / Unreachable
+
+    [x] Task 2.3: ปรับปรุง `apiCall()` ให้รองรับ Multi-Server Context
+        - [x] ปรับแก้ `apiCall()` ให้ดึง Token และ Base URL ของ Active Server โดยอัตโนมัติ
+        - [x] หากคำขอตอบกลับ 401 Unauthorized ให้แจ้งเตือน Token หมดอายุเฉพาะ Server นั้น
+        - [x] หากเกิด Network Failure ให้ทำ Auto-Fallback Resolution เฉพาะ Active Server ก่อนแสดงข้อความสลับ Server
+
+-------------------------------------------------------------------------------
+
+[x] Phase 3: UI Component - Multi-Server Pairing Flow (การจับคู่เพิ่ม Server)
+    ---------------------------------------------------------------------------
+    [x] Task 3.1: ปรับปรุง `mobile/screens/PairingScreen.tsx`
+        - [x] แก้ไข Logic การบันทึกคู่เชื่อมต่อไม่ให้ overwrite Server อื่นที่มีอยู่แล้ว
+        - [x] รองรับ Parameter หรือ State ที่ระบุว่าเป็น "First-time Pairing" หรือ "Add New Server"
+
+    [x] Task 3.2: สร้าง Modal ตั้งชื่อ Server Alias
+        - [x] เมื่อสแกน QR Code หรือกรอก PIN สำเร็จ แสดง Modal ให้ผู้ใช้ระบุชื่อเรียก Server (เช่น "Office Desktop", "MacBook Home")
+        - [x] กำหนดค่า Default Name ตาม Host Name หรือ Host ID หากผู้ใช้ไม่ระบุ
+
+    [x] Task 3.3: จัดการกรณี Server ซ้ำ (Duplicate Host Handling)
+        - [x] ตรวจสอบ `hostId` ก่อนบันทึก หากพบว่ามี Server ID/Host ID นี้ในระบบแล้ว แสดง Prompt สอบถามผู้ใช้:
+              - "อัปเดตการเชื่อมต่อ (Update Token/IP)" หรือ "ยกเลิก"
+        - [x] บันทึก `ServerNode` ใหม่เข้า `MultiServerConfig` และตั้งค่าเป็น Active Server พร้อมนำทางเข้าสู่หน้า ChatScreen
+
+-------------------------------------------------------------------------------
+
+[x] Phase 4: UI Component - Server & Workspace Switcher (หน้าต่างสลับ Server & Workspace)
+    ---------------------------------------------------------------------------
+    [x] Task 4.1: สร้าง Component `mobile/components/ServerSwitcherModal.tsx`
+        - [x] ออกแบบ UI แบบ BottomSheet หรือ Modal Drawer ที่สวยงาม สอดคล้องกับ Design System
+        - [x] แสดงส่วนประกอบ 2 Section หลัก:
+              - Section 1: รายการ Server ทั้งหมด
+              - Section 2: รายการ Workspace ของ Active Server ที่เลือกอยู่
+
+    [x] Task 4.2: พัฒนา UI Server List & Status Indicator
+        - [x] แสดงชื่อ Server, Host ID, IP/URL และ Status Badge (🟢 LAN / 🟡 WAN / 🔴 Offline)
+        - [x] แสดง Latency (ms) หากทดสอบ Ping สำเร็จ
+        - [x] เพิ่มปุ่ม Radio Button หรือ Selection Highlight แสดง Active Server ปัจจุบัน
+        - [x] ปุ่ม Ping Refresh สำหรับกดทดสอบการเชื่อมต่อเฉพาะเครื่อง
+
+    [x] Task 4.3: เพิ่มปุ่มและการจัดการการบริหาร Server (Server Management Controls)
+        - [x] ปุ่ม `+ Pair New Server`: สลับไปยังหน้า `PairingScreen` เพื่อเพิ่ม Server เครื่องใหม่
+        - [x] ปุ่ม Edit (แก้ไขชื่อ Server Alias)
+        - [x] ปุ่ม Delete / Unpair (ลบ Server ออกจากอุปกรณ์ พร้อมแสดง Confirmation Modal)
+
+    [x] Task 4.4: พัฒนา UI Workspace List ใน Switcher
+        - [x] ดึงข้อมูล Workspaces/Projects ของ Server ที่ถูกเลือกแสดงรายการ (มี Active Indicator)
+        - [x] เมื่อผู้ใช้กดเลือก Workspace ให้สลับ Active Workspace บน Server นั้นทันที
+
+    [x] Task 4.5: เชื่อมต่อ Switcher Bar เข้ากับ `mobile/screens/ChatScreen.tsx`
+        - [x] ปรับปรุง Top Bar ใน `ChatScreen.tsx` ให้แสดงชื่อ `[Server Name] • [Workspace Name]` พร้อม Connection Status Dot
+        - [x] เมื่อแตะที่ Top Bar ให้เปิด `ServerSwitcherModal`
+
+-------------------------------------------------------------------------------
+
+[x] Phase 5: State Management & Context Isolation (การแยกสถานะการทำงาน)
+    ---------------------------------------------------------------------------
+    [x] Task 5.1: Context Reset เมื่อมีการสลับ Server
+        - [x] เมื่อมีการเปลี่ยน Active Server ให้ทำการ:
+              - เคลียร์ข้อความ Chat History Context บนหน้าจอ (หรือโหลด Chat History ของ Server นั้นๆ)
+              - เคลียร์ไฟล์แนบ (Pending Upload Attachments)
+              - รีเซ็ต Active Session / Model Selection ให้สอดคล้องกับ Server ใหม่
+              - บันทึก `activeServerId` ลง SecureStore
+
+    [x] Task 5.2: Token & Authorization Isolation
+        - [x] ตรวจสอบว่า HTTP Headers สำหรับทุก Request (`Authorization: Bearer <token>`) ใช้ Token ตรงตาม `activeServerId`
+        - [x] ป้องกันการรั่วไหลของ Token ข้าม Server
+
+-------------------------------------------------------------------------------
+
+[x] Phase 6: End-to-End Testing & Verification (การทดสอบและการปรับแต่ง)
+    ---------------------------------------------------------------------------
+    [x] Task 6.1: ทดสอบ Data Migration
+        - [x] จำลองข้อมูล Single-Connection เดิม และตรวจสอบว่าเปิดแอปแล้ว Migration แปลงเป็น Multi-Server Config ได้อย่างถูกต้อง
+
+    [x] Task 6.2: ทดสอบ Multi-Server Pairing & Switching
+        - [x] ทดสอบจับคู่ Server มากกว่า 2 เครื่องพร้อมกัน
+        - [x] ทดสอบสลับไปมาด้วย `ServerSwitcherModal` และตรวจสอบว่า API เรียกถูก URL และใช้ Token ถูกต้อง
+
+    [x] Task 6.3: ทดสอบ Fallback & Network Resilience
+        - [x] ทดสอบกรณี LAN ปิด ให้สลับไปใช้ WAN
+        - [x] ทดสอบกรณี Server เครื่องหนึ่ง Offline ว่า UI แจ้งเตือนถูกต้อง ไม่ทำให้แอป Crash และยังสามารถสลับไป Server อื่นได้
+
+    [x] Task 6.4: UI Polish & Micro-animations
+        - [x] เพิ่ม Animation ตอนเปิด/ปิด Switcher Modal และ Badge Status Pulse
+        - [x] ตรวจสอบความเรียบร้อยของข้อความ ภาษา และ UX การใช้งานโดยรวม
+===============================================================================

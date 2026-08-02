@@ -3,7 +3,9 @@ import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, Activi
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
-import { apiCall, clearConnection, uploadMedia, loadConnection, getActiveBaseUrl } from '../utils/api';
+import { apiCall, clearConnection, uploadMedia, loadConnection, getActiveBaseUrl, ServerNode, getSavedServers, getActiveServer, setActiveServerId, updateServerAlias, removeServer, pingAllServers } from '../utils/api';
+import ServerSwitcherModal from '../components/ServerSwitcherModal';
+import PairingScreen from './PairingScreen';
 import { getPromptAttachments, PromptAttachment } from '../utils/promptAttachments';
 import {
   isModelCatalog,
@@ -122,6 +124,7 @@ const colors = {
     textMuted: '#6b7280',
     accent: '#3b82f6',
     statusGreen: '#34d399',
+    statusYellow: '#fbbf24',
     statusRed: '#f87171',
   },
   light: {
@@ -135,6 +138,7 @@ const colors = {
     textMuted: '#9ca3af',
     accent: '#2563eb',
     statusGreen: '#10b981',
+    statusYellow: '#d97706',
     statusRed: '#ef4444',
   }
 };
@@ -894,6 +898,12 @@ const [projects, setProjects] = useState<string[]>(["agy"]);
 const [loadingProjects, setLoadingProjects] = useState(false);
 const [expandedProjects, setExpandedProjects] = useState<{ [key: string]: boolean }>({});
 
+const [activeServer, setActiveServer] = useState<ServerNode | null>(null);
+const [savedServers, setSavedServers] = useState<ServerNode[]>([]);
+const [isServerSwitcherOpen, setIsServerSwitcherOpen] = useState(false);
+const [isPairingModalOpen, setIsPairingModalOpen] = useState(false);
+const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
+
 const chatFadeAnim = useRef(new Animated.Value(1)).current;
 const chatTranslateY = useRef(new Animated.Value(0)).current;
 
@@ -1266,6 +1276,7 @@ selectedProjectRef.current = selectedProject;
             setAuthToken(conn.token);
           }
         }
+        await refreshServerList();
         await loadProjects();
         await loadConversations();
         fetchUsageLimits();
@@ -1463,7 +1474,87 @@ setIsSettingsModalOpen(false);
 fetchUsageLimits();
 };
 
-const loadProjects = async () => {
+  const refreshServerList = async () => {
+    const servers = await getSavedServers();
+    const currentActive = await getActiveServer();
+    setSavedServers(servers);
+    setActiveServer(currentActive);
+
+    if (servers.length > 0) {
+      void pingAllServers().then(async () => {
+        const updatedServers = await getSavedServers();
+        const updatedActive = await getActiveServer();
+        setSavedServers(updatedServers);
+        setActiveServer(updatedActive);
+      });
+    }
+  };
+
+  const handleSwitchServer = async (server: ServerNode) => {
+    await setActiveServerId(server.id);
+    setActiveServer(server);
+    await refreshServerList();
+
+    // Context Reset (Task 5.1 & 5.2)
+    setMessages([]);
+    setLocalAttachments([]);
+    setQueuedPrompts([]);
+    setTaskProgressEvents([]);
+    setActiveConvoId('');
+
+    setLoadingWorkspaces(true);
+    setLoadingProjects(true);
+    setLoadingConvList(true);
+
+    try {
+      const data = await apiCall('/api/projects');
+      const list = Array.isArray(data.projects) && data.projects.length > 0 ? data.projects : ["agy"];
+      setProjects(list);
+      setSelectedProject(list[0]);
+      selectedProjectRef.current = list[0];
+      setActiveConvoProject(list[0]);
+      activeConvoProjectRef.current = list[0];
+      await loadConversations(true);
+      showToast(`Switched to "${server.name}"`);
+    } catch (err) {
+      console.error("Error switching server:", err);
+      showToast(`Error connecting to server ${server.name}`);
+    } finally {
+      setLoadingWorkspaces(false);
+      setLoadingProjects(false);
+      setLoadingConvList(false);
+    }
+  };
+
+  const handleSelectWorkspace = async (workspaceId: string) => {
+    setSelectedProject(workspaceId);
+    selectedProjectRef.current = workspaceId;
+    setActiveConvoProject(workspaceId);
+    activeConvoProjectRef.current = workspaceId;
+    showToast(`Switched workspace to "${workspaceId}"`);
+    setIsServerSwitcherOpen(false);
+  };
+
+  const handleDeleteServer = async (serverId: string) => {
+    await removeServer(serverId);
+    const remaining = await getSavedServers();
+    const nextActive = await getActiveServer();
+    setSavedServers(remaining);
+    if (nextActive) {
+      await handleSwitchServer(nextActive);
+    } else {
+      setActiveServer(null);
+      onDisconnect();
+    }
+  };
+
+  const handleUpdateServerAlias = async (serverId: string, newAlias: string) => {
+    await updateServerAlias(serverId, newAlias);
+    await refreshServerList();
+    showToast("Server alias updated");
+  };
+
+  const loadProjects = async () => {
 setLoadingProjects(true);
 try {
 const data = await callHostApi('/api/projects');
@@ -2795,12 +2886,37 @@ allowQueue: false,
           <TouchableOpacity style={styles.menuBtn} onPress={toggleSidebar}>
             <Text style={{ color: theme.textPrimary, fontSize: 24 }}>☰</Text>
           </TouchableOpacity>
-          <View style={styles.headerTitleContainer}>
-            <Text style={[styles.headerTitle, { color: theme.textPrimary }]} numberOfLines={1}>
-              {headerConversationTitle}
-            </Text>
-          </View>
+
+          <TouchableOpacity
+            style={styles.serverHeaderSelector}
+            onPress={() => {
+              void refreshServerList();
+              setIsServerSwitcherOpen(true);
+            }}
+            activeOpacity={0.7}
+          >
+            <View style={[
+              styles.headerStatusDot,
+              {
+                backgroundColor: activeServer?.connectionState === 'local'
+                  ? theme.statusGreen
+                  : activeServer?.connectionState === 'wan'
+                    ? theme.statusYellow
+                    : theme.statusRed
+              }
+            ]} />
+            <View style={styles.headerTitleTextGroup}>
+              <Text style={[styles.headerServerTitle, { color: theme.textPrimary }]} numberOfLines={1}>
+                {activeServer?.name || 'Primary Server'}
+              </Text>
+              <Text style={[styles.headerWorkspaceSub, { color: theme.textSecondary }]} numberOfLines={1}>
+                {selectedProject}
+              </Text>
+            </View>
+            <Text style={[styles.headerChevron, { color: theme.textSecondary }]}>▼</Text>
+          </TouchableOpacity>
         </View>
+
         <TouchableOpacity style={styles.themeToggleBtn} onPress={toggleThemeMode}>
           <Text style={{ fontSize: 20 }}>{selectedThemeMode === 'light' ? '🌙' : '☀️'}</Text>
         </TouchableOpacity>
@@ -3967,6 +4083,45 @@ allowQueue: false,
           <Text style={[styles.toastText, { color: theme.textPrimary }]}>{toastMessage}</Text>
         </Animated.View>
       )}
+
+      {/* Server & Workspace Switcher Modal */}
+      <ServerSwitcherModal
+        visible={isServerSwitcherOpen}
+        onClose={() => setIsServerSwitcherOpen(false)}
+        activeServer={activeServer}
+        savedServers={savedServers}
+        activeWorkspaceId={selectedProject}
+        workspaces={projects.map((p) => ({ id: p, name: p }))}
+        onSelectServer={handleSwitchServer}
+        onSelectWorkspace={handleSelectWorkspace}
+        onAddNewServer={() => {
+          setIsServerSwitcherOpen(false);
+          setIsPairingModalOpen(true);
+        }}
+        onRefreshServers={refreshServerList}
+        onUpdateServerAlias={handleUpdateServerAlias}
+        onDeleteServer={handleDeleteServer}
+        loadingWorkspaces={loadingWorkspaces || loadingProjects}
+      />
+
+      {/* Add New Server Modal */}
+      <Modal
+        visible={isPairingModalOpen}
+        animationType="slide"
+        onRequestClose={() => setIsPairingModalOpen(false)}
+      >
+        <PairingScreen
+          onPairSuccess={async () => {
+            setIsPairingModalOpen(false);
+            await refreshServerList();
+            const current = await getActiveServer();
+            if (current) {
+              await handleSwitchServer(current);
+            }
+          }}
+          onCancel={() => setIsPairingModalOpen(false)}
+        />
+      </Modal>
 
     </SafeAreaView>
   );
@@ -5370,5 +5525,34 @@ gap: 12,
   seeAllText: {
     fontSize: 12,
     fontWeight: '600',
+  },
+  serverHeaderSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    gap: 8,
+    maxWidth: '75%',
+  },
+  headerStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  headerTitleTextGroup: {
+    flexDirection: 'column',
+  },
+  headerServerTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  headerWorkspaceSub: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  headerChevron: {
+    fontSize: 10,
+    marginLeft: 2,
   }
 });

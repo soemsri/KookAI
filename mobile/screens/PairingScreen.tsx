@@ -1,14 +1,24 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, Alert, SafeAreaView, Platform, StatusBar, useColorScheme, Linking } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator, Alert, SafeAreaView, Platform, StatusBar, useColorScheme, Linking, Modal } from 'react-native';
 import { Camera, CameraView } from 'expo-camera';
 import * as SecureStore from 'expo-secure-store';
-import { saveConnection } from '../utils/api';
+import { saveServer, getSavedServers, ServerNode } from '../utils/api';
 
 const WORKER_BASE_URL = "https://antigravity-pairing-broker.rangsarn.workers.dev"; // Central resolver URL
 
 interface PairingScreenProps {
   onPairSuccess: () => void;
+  onCancel?: () => void;
   initialPairingData?: string | null;
+}
+
+interface PendingPairData {
+  hostId: string;
+  url: string;
+  localIp: string;
+  token: string;
+  defaultName: string;
+  existingServer?: ServerNode;
 }
 
 const colors = {
@@ -40,7 +50,7 @@ const colors = {
   }
 };
 
-export default function PairingScreen({ onPairSuccess, initialPairingData }: PairingScreenProps) {
+export default function PairingScreen({ onPairSuccess, onCancel, initialPairingData }: PairingScreenProps) {
   const scheme = useColorScheme();
   const theme = scheme === 'light' ? colors.light : colors.dark;
 
@@ -48,6 +58,10 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
   const [loading, setLoading] = useState(false);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [aliasModalVisible, setAliasModalVisible] = useState(false);
+  const [serverAlias, setServerAlias] = useState('');
+  const [pendingPair, setPendingPair] = useState<PendingPairData | null>(null);
+
   const lastHandledPairingDataRef = useRef<string | null>(null);
 
   // Request camera permission on load
@@ -57,6 +71,31 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
       setHasPermission(status === 'granted');
     })();
   }, []);
+
+  const completePairing = async (pairInfo: PendingPairData, aliasName: string) => {
+    try {
+      const serverNode: ServerNode = {
+        id: pairInfo.existingServer?.id || pairInfo.hostId || `server_${Date.now()}`,
+        name: aliasName.trim() || pairInfo.defaultName,
+        hostId: pairInfo.hostId,
+        url: pairInfo.url,
+        localIp: pairInfo.localIp,
+        port: 8080,
+        token: pairInfo.token,
+        createdAt: pairInfo.existingServer?.createdAt || Date.now(),
+        lastActive: Date.now(),
+        connectionState: 'offline',
+      };
+
+      await saveServer(serverNode, true);
+      setAliasModalVisible(false);
+      setPendingPair(null);
+      Alert.alert("Success", `Successfully paired server "${serverNode.name}"!`);
+      onPairSuccess();
+    } catch (err: any) {
+      Alert.alert("Pairing Error", err.message || "Failed to save server.");
+    }
+  };
 
   const handlePairWithPin = async (enteredPin: string) => {
     if (enteredPin.length !== 6) {
@@ -83,9 +122,7 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
       }
 
       // 3. Initiate pair handshake to Desktop
-      // Try local network first, fallback to public tunnel URL
       let response;
-      let finalBaseUrl = desktopUrl;
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout
@@ -99,7 +136,6 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
           signal: controller.signal
         });
         clearTimeout(timeoutId);
-        finalBaseUrl = `http://${local_ip}:8080`;
       } catch {
         // Fallback to public WAN
         response = await fetch(`${desktopUrl}/api/pair`, {
@@ -119,16 +155,42 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
       const pairData = await response.json();
       const { token } = pairData;
 
-      // 4. Save connection securely
-      await saveConnection({
+      // Check for duplicate host
+      const existingServers = await getSavedServers();
+      const existing = existingServers.find(s => s.hostId === host_id);
+      const defaultName = existing ? existing.name : `Host-${host_id.substring(0, 6)}`;
+
+      const pairInfo: PendingPairData = {
         hostId: host_id,
         url: desktopUrl,
         localIp: local_ip,
-        token
-      });
+        token,
+        defaultName,
+        existingServer: existing
+      };
 
-      Alert.alert("Success", "Successfully paired with workspace!");
-      onPairSuccess();
+      if (existing) {
+        // Prompt for duplicate host
+        Alert.alert(
+          "Server Already Paired",
+          `A server with Host ID "${host_id}" is already in your saved list as "${existing.name}". Would you like to update its connection details?`,
+          [
+            { text: "Cancel", style: "cancel", onPress: () => setLoading(false) },
+            {
+              text: "Update Connection",
+              onPress: () => {
+                void completePairing(pairInfo, existing.name);
+              }
+            }
+          ]
+        );
+      } else {
+        // Show alias modal for new server
+        setPendingPair(pairInfo);
+        setServerAlias(defaultName);
+        setAliasModalVisible(true);
+      }
+
     } catch (err: any) {
       Alert.alert("Pairing Failed", err.message || "Failed to pair.");
     } finally {
@@ -249,9 +311,16 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.bgSecondary }]}>
       <StatusBar barStyle={scheme === 'light' ? 'dark-content' : 'light-content'} backgroundColor={theme.bgPrimary} />
+      
+      {onCancel && (
+        <TouchableOpacity style={styles.topBackBtn} onPress={onCancel}>
+          <Text style={[styles.topBackBtnText, { color: theme.accent }]}>✕ Close</Text>
+        </TouchableOpacity>
+      )}
+
       <View style={[styles.card, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
         <Text style={[styles.logoText, { color: theme.accent }]}>{'\u25B2'} KookAI</Text>
-        <Text style={[styles.title, { color: theme.textPrimary }]}>Link New Workspace</Text>
+        <Text style={[styles.title, { color: theme.textPrimary }]}>Link New Server</Text>
         <Text style={[styles.subtitle, { color: theme.textSecondary }]}>Enter the 6-digit PIN code or scan the pairing QR code from your desktop app.</Text>
 
         <TextInput
@@ -289,6 +358,56 @@ export default function PairingScreen({ onPairSuccess, initialPairingData }: Pai
           </View>
         )}
       </View>
+
+      {/* Task 3.2: Modal to set Server Alias Name */}
+      <Modal
+        visible={aliasModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAliasModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
+            <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>Name Your Server</Text>
+            <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
+              Give this server a friendly name (e.g. Office Desktop, Home Mac).
+            </Text>
+
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: theme.bgSecondary, borderColor: theme.borderColor, color: theme.textPrimary }]}
+              placeholder="e.g. Office PC"
+              placeholderTextColor={theme.textMuted}
+              value={serverAlias}
+              onChangeText={setServerAlias}
+              autoFocus
+            />
+
+            <View style={styles.modalButtonGroup}>
+              <TouchableOpacity
+                style={[styles.modalSecondaryBtn, { borderColor: theme.borderColor }]}
+                onPress={() => {
+                  if (pendingPair) {
+                    void completePairing(pendingPair, pendingPair.defaultName);
+                  }
+                }}
+              >
+                <Text style={[styles.modalSecondaryBtnText, { color: theme.textSecondary }]}>Use Default</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalPrimaryBtn, { backgroundColor: theme.accent }]}
+                onPress={() => {
+                  if (pendingPair) {
+                    void completePairing(pendingPair, serverAlias);
+                  }
+                }}
+              >
+                <Text style={styles.modalPrimaryBtnText}>Save & Connect</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -300,6 +419,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
     paddingBottom: Platform.OS === 'android' ? 44 : 0,
+  },
+  topBackBtn: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    padding: 10,
+  },
+  topBackBtnText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   card: {
     width: '90%',
@@ -393,7 +523,64 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 18,
+  },
+  modalInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    marginBottom: 20,
+  },
+  modalButtonGroup: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalSecondaryBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+  },
+  modalSecondaryBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalPrimaryBtn: {
+    flex: 1,
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+  },
+  modalPrimaryBtnText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
   }
 });
-
-
