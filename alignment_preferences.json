@@ -1,4 +1,13 @@
 # Design Alignment Summary
 
-Date: 2026-07-10T19:44:04.412658
+Date: 2026-08-02T16:05:27.000000
 
+{
+  "alignments": [
+    {
+      "question": "How should KookAI handle model provider fallback and failover when a selected CLI or backend service is unavailable or encounters rate limits?",
+      "selected_option": "Automatic failover to the next available configured provider in priority order with real-time UI status notifications",
+      "status": "implemented"
+    }
+  ]
+}

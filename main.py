@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Any
 from codex_backend import (
     CODEX_CONVERSATION_PREFIX,
     build_codex_command,
@@ -2399,6 +2399,112 @@ def run_grok_cli(
         )
 
 
+PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "xai"]
+
+DEFAULT_PROVIDER_MODELS = {
+    "agy": "Gemini 3.6 Flash (High)",
+    "claude": "Claude Sonnet 4.6 (Thinking)",
+    "codex": "5.6 Sol",
+    "kimi": "Kimi Code 1.5",
+    "xai": "Grok 3",
+}
+
+
+def is_provider_available(prov: str) -> bool:
+    try:
+        if prov == "agy":
+            path = resolve_managed_cli_executable("agy") or os.path.expanduser("~/.local/bin/agy")
+            return bool(path and shutil.which(path))
+        elif prov == "codex":
+            return bool(resolve_codex_executable())
+        elif prov == "claude":
+            return bool(resolve_claude_executable())
+        elif prov == "kimi":
+            return bool(resolve_kimi_executable())
+        elif prov == "xai":
+            return bool(resolve_grok_executable())
+    except Exception:
+        return False
+    return False
+
+
+def _invoke_provider_backend(
+    prov: str,
+    prov_model: str,
+    message: str,
+    conversation_id: str,
+    target: str,
+    workspace: str,
+    effort: str,
+    speed: str,
+    thinking: bool,
+    image_paths: Optional[List[str]],
+    progress_callback,
+):
+    if prov == "codex":
+        return run_codex_cli(
+            message,
+            prov_model,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            speed,
+            image_paths,
+            progress_callback,
+        )
+    elif prov == "claude":
+        return run_claude_cli(
+            message,
+            prov_model,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            thinking,
+            progress_callback,
+        )
+    elif prov == "kimi":
+        return run_kimi_cli(
+            message,
+            prov_model,
+            conversation_id,
+            target,
+            workspace,
+            progress_callback,
+        )
+    elif prov == "xai":
+        return run_grok_cli(
+            message,
+            prov_model,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            progress_callback,
+        )
+    else:
+        return run_agy_cli(
+            message,
+            prov_model,
+            conversation_id,
+            target,
+            workspace,
+            progress_callback,
+        )
+
+
+def is_execution_failure(reply_text: Any) -> bool:
+    if not isinstance(reply_text, str):
+        return True
+    clean = reply_text.strip()
+    if clean.startswith("⚠️ **") or clean.startswith("❌ **"):
+        return True
+    if "Error (Exit Code" in clean or "Failed to run `" in clean:
+        return True
+    return False
+
+
 def run_selected_cli(
     message: str,
     model_ui_name: str,
@@ -2417,56 +2523,94 @@ def run_selected_cli(
         selected_provider = resolve_provider(None, model_ui_name)
     if selected_provider not in {"agy", "codex", "claude", "kimi", "xai"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
-    if selected_provider == "codex":
-        return run_codex_cli(
-            message,
+
+    attempted_providers = set()
+
+    # Primary attempt
+    primary_failed = False
+    primary_error_msg = ""
+    try:
+        reply, resolved_cid = _invoke_provider_backend(
+            selected_provider,
             model_ui_name,
+            message,
             conversation_id,
             target,
             workspace,
             effort,
             speed,
+            thinking,
             image_paths,
             progress_callback,
         )
-    if selected_provider == "claude":
-        return run_claude_cli(
-            message,
-            model_ui_name,
-            conversation_id,
-            target,
-            workspace,
-            effort,
-            thinking,
-            progress_callback,
+        attempted_providers.add(selected_provider)
+        if not is_execution_failure(reply):
+            return reply, resolved_cid
+        else:
+            primary_failed = True
+            primary_error_msg = reply
+    except Exception as exc:
+        primary_failed = True
+        primary_error_msg = f"❌ **Execution Error**: {str(exc)}"
+        attempted_providers.add(selected_provider)
+
+    if primary_failed:
+        logging.warning(
+            f"Primary provider '{selected_provider}' failed. Triggering automatic provider failover..."
         )
-    if selected_provider == "kimi":
-        return run_kimi_cli(
-            message,
-            model_ui_name,
-            conversation_id,
-            target,
-            workspace,
-            progress_callback,
-        )
-    if selected_provider == "xai":
-        return run_grok_cli(
-            message,
-            model_ui_name,
-            conversation_id,
-            target,
-            workspace,
-            effort,
-            progress_callback,
-        )
-    return run_agy_cli(
-        message,
-        model_ui_name,
-        conversation_id,
-        target,
-        workspace,
-        progress_callback,
-    )
+        failover_candidates = [
+            p for p in PROVIDER_FAILOVER_ORDER if p not in attempted_providers
+        ]
+
+        for fallback_prov in failover_candidates:
+            if not is_provider_available(fallback_prov):
+                logging.info(
+                    f"Fallback provider '{fallback_prov}' is not installed/available. Skipping."
+                )
+                continue
+
+            fallback_model = DEFAULT_PROVIDER_MODELS.get(
+                fallback_prov, "Gemini 3.6 Flash (High)"
+            )
+
+            if progress_callback:
+                progress_callback(
+                    "warning",
+                    f"⚠️ Provider '{selected_provider}' encountered an error. Automatically failing over to '{fallback_prov}' ({fallback_model})...",
+                )
+
+            try:
+                fb_reply, fb_cid = _invoke_provider_backend(
+                    fallback_prov,
+                    fallback_model,
+                    message,
+                    conversation_id,
+                    target,
+                    workspace,
+                    effort,
+                    speed,
+                    thinking,
+                    image_paths,
+                    progress_callback,
+                )
+                attempted_providers.add(fallback_prov)
+                if not is_execution_failure(fb_reply):
+                    notice = (
+                        f"⚠️ *[Automatic Failover: Provider **{selected_provider}** encountered an error or was unavailable. "
+                        f"Successfully failed over to **{fallback_prov}** ({fallback_model})]*\n\n"
+                    )
+                    return notice + fb_reply, fb_cid
+                else:
+                    logging.warning(f"Fallback provider '{fallback_prov}' also failed.")
+            except Exception as fb_exc:
+                logging.warning(
+                    f"Fallback provider '{fallback_prov}' exception: {fb_exc}"
+                )
+                attempted_providers.add(fallback_prov)
+
+    # If all failovers fail or none available, return the primary error message
+    return primary_error_msg, conversation_id
+
 
 
 # --- Endpoints ---

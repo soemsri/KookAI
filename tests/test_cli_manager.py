@@ -220,22 +220,59 @@ class CliApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"can_manage":true', response.body)
 
-    def test_cli_status_endpoint_times_out_instead_of_hanging(self):
-        def slow_status(_requirements_path):
-            time.sleep(0.05)
-            return []
+    def test_run_selected_cli_automatic_failover(self):
+        progress_events = []
+
+        def mock_progress(evt_type, msg):
+            progress_events.append((evt_type, msg))
+
+        def mock_invoke(
+            prov,
+            prov_model,
+            message,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            speed,
+            thinking,
+            image_paths,
+            progress_callback,
+        ):
+            if prov == "codex":
+                return (
+                    "⚠️ **Codex CLI Error (Exit Code 1)**\n\nRate limit exceeded",
+                    "codex-cid-1",
+                )
+            elif prov == "agy":
+                return "Hello from fallback agy provider", "agy-cid-2"
+            return "❌ **Execution Error**: Unsupported", conversation_id
 
         with (
-            mock.patch.object(main, "CLI_STATUS_TIMEOUT_SECONDS", 0.01),
-            mock.patch.object(main, "get_cli_statuses", side_effect=slow_status),
+            mock.patch.object(main, "_invoke_provider_backend", side_effect=mock_invoke),
+            mock.patch.object(
+                main, "is_provider_available", side_effect=lambda p: p in {"codex", "agy"}
+            ),
         ):
-            with self.assertRaises(HTTPException) as context:
-                asyncio.run(
-                    main.get_cli_status(self.request("127.0.0.1"))
-                )
-        self.assertEqual(context.exception.status_code, 504)
-        self.assertIn("timed out", context.exception.detail)
+            reply, cid = main.run_selected_cli(
+                message="Test failover",
+                model_ui_name="5.6 Sol",
+                conversation_id="conv-123",
+                target="Sandbox",
+                workspace="agy",
+                provider="codex",
+                progress_callback=mock_progress,
+            )
+
+        self.assertIn("Automatic Failover", reply)
+        self.assertIn("failed over to **agy**", reply)
+        self.assertIn("Hello from fallback agy provider", reply)
+        self.assertEqual(cid, "agy-cid-2")
+        self.assertTrue(
+            any("failing over to 'agy'" in msg.lower() for _, msg in progress_events)
+        )
 
 
 if __name__ == "__main__":
     unittest.main()
+
