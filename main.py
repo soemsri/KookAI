@@ -118,14 +118,18 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def _configured_project_roots() -> tuple[str, ...]:
     configured = os.environ.get("KOOKAI_PROJECTS_ROOTS", "")
-    candidates = configured.split(os.pathsep) if configured else [DESKTOP_DIR]
+    if configured:
+        candidates = configured.split(os.pathsep)
+    else:
+        parent_dir = os.path.dirname(APP_DIR)
+        candidates = [parent_dir, DESKTOP_DIR] if parent_dir else [DESKTOP_DIR]
     roots = []
     for candidate in candidates:
         candidate = candidate.strip()
         if not candidate:
             continue
         root = os.path.abspath(os.path.expanduser(os.path.expandvars(candidate)))
-        if root not in roots:
+        if root not in roots and os.path.isdir(root):
             roots.append(root)
     return tuple(roots)
 

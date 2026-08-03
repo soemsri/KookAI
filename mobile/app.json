@@ -18,6 +18,7 @@
     },
     "android": {
       "package": "com.kookai.app",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#061433",
         "foregroundImage": "./assets/android-icon-foreground.png",
