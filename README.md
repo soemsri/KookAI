@@ -2,6 +2,10 @@
 
 A companion system that connects your mobile device directly to your local KookAI workspace, allowing you to chat and interact with the workspace on the go.
 
+<p align="center">
+  <img src="docs/assets/mobile-preview.jpg" alt="KookAI Mobile Model Selection" width="360" />
+</p>
+
 ---
 
 ## Server Setup
