@@ -1,6 +1,7 @@
 fastapi>=0.139,<1
 uvicorn>=0.51,<1
 pydantic>=2.13,<3
+yt-dlp>=2024.0.0
 
 # External command-line tools checked and auto-installed by the server.
 # These are comments so this file remains compatible with pip.

@@ -327,6 +327,7 @@ const PREFERENCE_KEYS = {
 };
 
 const slashCommands: PromptSuggestion[] = [
+  { name: "/watch", desc: "Watch & analyze video (URL or local path)", type: "Command" },
   { name: "/goal", desc: "Initiate goal mode checklist", type: "Command" },
   { name: "/browser", desc: "Launch browser automation tool", type: "Command" },
   { name: "/grill-me", desc: "Launch requirements audit survey", type: "Command" },
@@ -2035,17 +2036,19 @@ setPromptCursor(nextCursor);
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['images'],
+        mediaTypes: ['images', 'videos'],
         quality: 0.9,
       });
 
       if (result.canceled || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const ext = asset.uri.split('.').pop() || 'jpg';
+      const isVid = asset.type === 'video' || Boolean(asset.uri.match(/\.(mp4|mov|mkv|webm)$/i));
+      const mediaType = isVid ? 'video' : 'image';
+      const ext = asset.uri.split('.').pop() || (isVid ? 'mp4' : 'jpg');
       const filename = `camera_${Date.now()}.${ext}`;
 
-      addLocalAttachment(asset.uri, filename, 'image');
+      addLocalAttachment(asset.uri, filename, mediaType as any);
     } catch (err: any) {
       Alert.alert("Error", err?.message || "Could not capture media.");
     }
@@ -2061,7 +2064,7 @@ setPromptCursor(nextCursor);
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
+        mediaTypes: ['images', 'videos'],
         quality: 0.9,
         allowsMultipleSelection: false,
       });
@@ -2069,10 +2072,12 @@ setPromptCursor(nextCursor);
       if (result.canceled || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const ext = asset.uri.split('.').pop() || 'jpg';
+      const isVid = asset.type === 'video' || Boolean(asset.uri.match(/\.(mp4|mov|mkv|webm)$/i));
+      const mediaType = isVid ? 'video' : 'image';
+      const ext = asset.uri.split('.').pop() || (isVid ? 'mp4' : 'jpg');
       const filename = asset.fileName || `gallery_${Date.now()}.${ext}`;
 
-      addLocalAttachment(asset.uri, filename, 'image');
+      addLocalAttachment(asset.uri, filename, mediaType as any);
     } catch (err: any) {
       Alert.alert("Error", err?.message || "Could not select media.");
     }

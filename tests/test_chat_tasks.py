@@ -64,5 +64,59 @@ class TestChatTasks(unittest.TestCase):
         self.assertEqual(json_data["message"], "Test prompt")
         self.assertEqual(len(json_data["events"]), 1)
 
+    @patch("main.process_video_source")
+    def test_video_processing_progress_callback_signature(self, mock_process_video):
+        from main import build_chat_response, ChatRequest
+        mock_process_video.return_value = {
+            "frame_paths": [],
+            "prompt_summary": "Video analysis data..."
+        }
+        events = []
+        def mock_callback(event_type, message):
+            events.append((event_type, message))
+
+        req = ChatRequest(
+            message="/watch https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            model="Gemini 3.6 Flash (High)",
+            conversation_id="test_convo",
+            provider="agy",
+            workspace="agy",
+            target="Sandbox"
+        )
+        with patch("main.run_selected_cli", return_value={"reply": "ok", "conversation_id": "test_convo"}):
+            res = build_chat_response(req, progress_callback=mock_callback)
+
+        self.assertTrue(any("🎥 Processing video" in msg for et, msg in events))
+
+    @patch("main.process_video_source")
+    def test_agy_video_frames_stay_in_history_but_not_cli_prompt(self, mock_process_video):
+        from main import build_chat_response, ChatRequest, in_memory_chats
+
+        frame_path = "D:/workspace/.kookai_cache/video/v_test/frames/frame_0001.jpg"
+        mock_process_video.return_value = {
+            "frame_paths": [frame_path],
+            "prompt_summary": "### Video Transcript\n[00:00] Test transcript",
+        }
+        request = ChatRequest(
+            message="/watch https://example.com/test.mp4",
+            model="Gemini 3.6 Flash (High)",
+            conversation_id="video-prompt-test",
+            provider="agy",
+            workspace="KookAI",
+            target="Sandbox",
+        )
+
+        try:
+            with patch("main.run_selected_cli", return_value=("ok", "video-prompt-test")) as run_cli:
+                build_chat_response(request)
+
+            execution_prompt = run_cli.call_args.args[0]
+            self.assertNotIn("file://", execution_prompt)
+            self.assertIn("Test transcript", execution_prompt)
+            self.assertIn("file://", in_memory_chats["video-prompt-test"][0]["content"])
+        finally:
+            in_memory_chats.pop("video-prompt-test", None)
+
+
 if __name__ == "__main__":
     unittest.main()

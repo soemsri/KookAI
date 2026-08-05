@@ -1723,7 +1723,8 @@ body {
   color: var(--text-secondary);
 }
 
-.settings-group select {
+.settings-group select,
+.settings-group input {
   padding: 8px 12px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -1731,10 +1732,19 @@ body {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
   outline: none;
+  font-family: inherit;
 }
 
-.settings-group select:focus {
+.settings-group select:focus,
+.settings-group input:focus {
   border-color: var(--accent-color);
+}
+
+.settings-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  margin-top: 2px;
 }
 
 .cli-settings-header {

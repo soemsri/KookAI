@@ -1,7 +1,11 @@
 import os
-from dependency_bootstrap import ensure_python_requirements
+from pathlib import Path
+from dependency_bootstrap import ensure_python_requirements, ensure_video_binaries_warning
 
 ensure_python_requirements(os.path.dirname(os.path.abspath(__file__)))
+ensure_video_binaries_warning()
+
+from video_processor import is_video_source, process_video_source, is_url, extract_video_target, WATCH_HELP_RESPONSE
 
 import asyncio
 import uvicorn
@@ -515,6 +519,29 @@ async def startup_event():
         )
     start_localtunnel()
     threading.Thread(target=periodic_registry_update, daemon=True).start()
+    try:
+        from video_processor import load_all_whisper_keys
+        whisper_keys = load_all_whisper_keys()
+        if whisper_keys:
+            logging.info("Whisper transcription active with %d API key(s)", len(whisper_keys))
+        else:
+            logging.warning(
+                "\n"
+                "================================================================================\n"
+                "⚠️  [Whisper API Key Missing] ⚠️\n"
+                "--------------------------------------------------------------------------------\n"
+                "ไม่พบ Whisper API Key สำหรับการถอดเสียงวิดีโอ (Video Transcription) ในไฟล์ .env\n\n"
+                "💡 วิธีสมัครและสร้าง API Key ฟรี:\n"
+                "1. สมัคร/เข้าสู่ระบบ Groq Console (ฟรี 100%): https://console.groq.com/keys\n"
+                "2. กด 'Create API Key' แล้วคัดลอก Key ที่ได้ (ขึ้นต้นด้วย gsk_...)\n\n"
+                "⚙️ วิธีการบันทึก Config:\n"
+                "วิธีที่ 1: เพิ่มบรรทัดนี้ลงในไฟล์ .env ในโฟลเดอร์นี้\n"
+                "   GROQ_API_KEY=gsk_your_key_here\n\n"
+                "วิธีที่ 2: ตั้งค่าผ่านเมนู Settings ของเซิร์ฟเวอร์ หรือแอปมือถือ KookAI ได้ทันที\n"
+                "================================================================================"
+            )
+    except Exception as w_err:
+        logging.warning("Failed to check Whisper API keys: %s", w_err)
 
 @app.get("/api/pairing-code")
 async def get_pairing_code():
@@ -619,6 +646,66 @@ async def get_cli_status(request: Request):
             in {"1", "true", "yes", "on"},
         }
     )
+
+
+class SettingsUpdate(BaseModel):
+    groq_api_key: str | None = None
+    openai_api_key: str | None = None
+
+
+@app.get("/api/settings")
+async def get_settings():
+    from video_processor import load_all_whisper_keys, parse_key_candidates
+
+    groq_keys = [k for b, k in load_all_whisper_keys("groq")]
+    openai_keys = [k for b, k in load_all_whisper_keys("openai")]
+    
+    def mask_key(k: str) -> str:
+        if not k:
+            return ""
+        if len(k) <= 8:
+            return "*****"
+        return k[:6] + "..." + k[-4:]
+
+    masked_groq = ", ".join([mask_key(k) for k in groq_keys])
+    masked_openai = ", ".join([mask_key(k) for k in openai_keys])
+
+    return {
+        "groq_api_key_masked": masked_groq,
+        "has_groq_key": len(groq_keys) > 0,
+        "groq_key_count": len(groq_keys),
+        "openai_api_key_masked": masked_openai,
+        "has_openai_key": len(openai_keys) > 0,
+        "openai_key_count": len(openai_keys),
+    }
+
+
+@app.post("/api/settings")
+async def update_settings(payload: SettingsUpdate):
+    env_path = Path(APP_DIR) / ".env"
+    env_vars = {}
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if "=" in line and not line.strip().startswith("#"):
+                    k, v = line.split("=", 1)
+                    env_vars[k.strip()] = v.strip()
+        except Exception:
+            pass
+
+    if payload.groq_api_key is not None:
+        groq_val = payload.groq_api_key.strip()
+        env_vars["GROQ_API_KEY"] = groq_val
+        os.environ["GROQ_API_KEY"] = groq_val
+
+    if payload.openai_api_key is not None:
+        openai_val = payload.openai_api_key.strip()
+        env_vars["OPENAI_API_KEY"] = openai_val
+        os.environ["OPENAI_API_KEY"] = openai_val
+
+    lines = [f"{k}={v}" for k, v in env_vars.items()]
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"status": "ok", "message": "Settings updated successfully"}
 
 
 @app.post("/api/cli/{cli_id}/install")
@@ -1341,11 +1428,18 @@ def resolve_project_directory(project_id: str) -> str:
             full_path = os.path.join(project_root, entry)
             if not os.path.isdir(full_path) or entry.startswith("."):
                 continue
-            if clean_project_name(entry) != project_id:
-                continue
-            resolved_path = os.path.realpath(full_path)
-            if os.path.commonpath([resolved_path, root_realpath]) == root_realpath:
-                return full_path
+            if clean_project_name(entry) == project_id:
+                resolved_path = os.path.realpath(full_path)
+                if os.path.commonpath([resolved_path, root_realpath]) == root_realpath:
+                    return full_path
+
+    # Safe fallback specifically for default 'agy' project ID from mobile app
+    if project_id == "agy":
+        for project_root in PROJECTS_ROOTS:
+            candidate = os.path.join(project_root, "KookAI")
+            if os.path.isdir(candidate):
+                return candidate
+        return os.getcwd()
 
     raise ValueError(
         f"Unknown project {project_id!r}; it is not inside a configured project root"
@@ -1549,8 +1643,13 @@ def map_model_name(model_ui_name: str) -> str:
     catalog = load_runtime_model_catalog()
     model = resolve_catalog_model(catalog, model_ui_name)
     if not model:
-        raise ValueError(f"Unknown or disabled model: {model_ui_name}")
-    return model["cli_model"]
+        return "gemini-2.5-flash"
+    cli_m = model.get("cli_model", "")
+    if not cli_m or "Gemini" in cli_m or " " in cli_m:
+        if "pro" in model_ui_name.lower():
+            return "gemini-2.5-pro"
+        return "gemini-2.5-flash"
+    return cli_m
 
 # Helper: Kill processes locking the sqlite database or executing agy for this conversation
 def kill_processes_locking_db(conversation_id: str):
@@ -1558,42 +1657,74 @@ def kill_processes_locking_db(conversation_id: str):
         os.path.join(ANTIGRAVITY_DATA_DIR, f"conversations/{conversation_id}.db"),
         os.path.join(ANTIGRAVITY_CLI_DIR, f"conversations/{conversation_id}.db")
     ]
-    for db_path in db_files:
-        if not os.path.exists(db_path):
-            continue
-        try:
-            # 1. Kill via lsof
-            res = subprocess.run(["lsof", "-t", db_path], capture_output=True, text=True, timeout=5)
-            if res.returncode == 0:
-                pids = res.stdout.strip().split()
-                for pid_str in pids:
-                    try:
-                        pid = int(pid_str)
-                        if pid != os.getpid():
-                            logging.info(f"Killing process {pid} locking database {db_path}")
-                            os.kill(pid, 9)
-                    except Exception as e:
-                        logging.error(f"Failed to kill locking process {pid_str}: {e}")
-        except Exception as e:
-            logging.error(f"Error running lsof for DB {db_path}: {e}")
+    if os.name != "nt":
+        for db_path in db_files:
+            if not os.path.exists(db_path):
+                continue
+            try:
+                # lsof is available on the Unix platforms supported by the server.
+                res = subprocess.run(["lsof", "-t", db_path], capture_output=True, text=True, timeout=5)
+                if res.returncode == 0:
+                    pids = res.stdout.strip().split()
+                    for pid_str in pids:
+                        try:
+                            pid = int(pid_str)
+                            if pid != os.getpid():
+                                logging.info(f"Killing process {pid} locking database {db_path}")
+                                os.kill(pid, 9)
+                        except Exception as e:
+                            logging.error(f"Failed to kill locking process {pid_str}: {e}")
+            except Exception as e:
+                logging.error(f"Error running lsof for DB {db_path}: {e}")
             
     # 2. Kill via ps scan for agy CLI processes containing conversation ID
     try:
-        ps_res = subprocess.run(["ps", "-ef"], capture_output=True, text=True, timeout=5)
-        if ps_res.returncode == 0:
-            for line in ps_res.stdout.splitlines():
-                if "agy" in line and conversation_id in line:
-                    parts = line.strip().split()
-                    if len(parts) >= 2:
-                        try:
-                            pid = int(parts[1])
-                            if pid != os.getpid():
-                                logging.info(f"Killing matching agy process {pid} from ps output: {line}")
-                                os.kill(pid, 9)
-                        except Exception as e:
-                            pass
+        if os.name == "nt":
+            # Windows has no `ps -ef`; query process command lines through PowerShell.
+            # Keep the conversation ID in the environment so it is never interpolated
+            # into the PowerShell command.
+            environment = os.environ.copy()
+            environment["KOOKAI_TARGET_CONVERSATION_ID"] = conversation_id
+            command = (
+                "$target = $env:KOOKAI_TARGET_CONVERSATION_ID; "
+                "Get-CimInstance Win32_Process | "
+                "Where-Object { $_.Name -ieq 'agy.exe' -and $_.CommandLine "
+                "-and $_.CommandLine.Contains($target) } | "
+                "ForEach-Object { $_.ProcessId }"
+            )
+            process_result = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=environment,
+                **hidden_subprocess_kwargs(),
+            )
+            process_ids = process_result.stdout.split() if process_result.returncode == 0 else []
+        else:
+            process_result = subprocess.run(["ps", "-ef"], capture_output=True, text=True, timeout=5)
+            process_ids = []
+            if process_result.returncode == 0:
+                for line in process_result.stdout.splitlines():
+                    if "agy" in line and conversation_id in line:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            process_ids.append(parts[1])
+
+        for pid_str in process_ids:
+            try:
+                pid = int(pid_str)
+                if pid != os.getpid():
+                    logging.info(f"Killing matching agy process {pid} for conversation {conversation_id}")
+                    os.kill(pid, 9)
+            except (TypeError, ValueError):
+                logging.warning(f"Ignoring invalid agy process ID: {pid_str}")
+            except OSError as e:
+                logging.warning(f"Failed to kill matching agy process {pid_str}: {e}")
+    except FileNotFoundError as e:
+        logging.warning(f"Process scan is unavailable on this platform: {e}")
     except Exception as e:
-        logging.error(f"Error running ps to scan for agy processes: {e}")
+        logging.error(f"Error scanning for agy processes: {e}")
 # Helper: Run agy with conversation ID
 def classify_cli_progress_line(source: str, line: str):
     # Strip ANSI escape sequences (like colors and cursor movements)
@@ -1790,6 +1921,8 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
             or "conversation not found" in output
             or "database is locked" in output
             or "locked" in output
+            or "agent execution terminated due to error" in output
+            or "terminated due to error" in output
         )
     
     # Resolve temporary frontend ID if mapped
@@ -1800,7 +1933,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
     before_dbs = get_existing_db_ids()
     
     # Decide if we continue an existing conversation
-    use_continue = actual_cid in before_dbs
+    use_continue = (actual_cid in before_dbs) and not actual_cid.startswith("temp_")
     if use_continue:
         existing_project = get_conversation_project(actual_cid)
         if existing_project and existing_project != project_id:
@@ -1813,7 +1946,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
     )
 
     cmd = [
-        agy_path, "--print", message_with_context,
+        agy_path,
         "--dangerously-skip-permissions",
         "--model", mapped_model,
         "--project", project_id,
@@ -1826,9 +1959,8 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
         
     if use_continue:
         cmd += ["--conversation", actual_cid, "--continue"]
-    else:
-        # If frontend sent an ID but it is not in the db, let agy generate one
-        pass
+
+    cmd += ["--print", message_with_context]
         
     logging.info(f"Executing agy CLI in {cwd_path}: {' '.join(cmd)}")
     
@@ -2502,9 +2634,7 @@ def is_execution_failure(reply_text: Any) -> bool:
     if not isinstance(reply_text, str):
         return True
     clean = reply_text.strip()
-    if clean.startswith("⚠️ **") or clean.startswith("❌ **"):
-        return True
-    if "Error (Exit Code" in clean or "Failed to run `" in clean:
+    if "CLI Error (Exit Code" in clean or clean.startswith("❌ **Execution Error**") or "Failed to run `" in clean:
         return True
     return False
 
@@ -2560,7 +2690,7 @@ def run_selected_cli(
 
     if primary_failed:
         logging.warning(
-            f"Primary provider '{selected_provider}' failed. Triggering automatic provider failover..."
+            f"Primary provider '{selected_provider}' failed ({primary_error_msg[:200]}). Triggering automatic provider failover..."
         )
         failover_candidates = [
             p for p in PROVIDER_FAILOVER_ORDER if p not in attempted_providers
@@ -2885,6 +3015,7 @@ async def get_conversation_details(cid: str, request: Request):
     })
 
 def build_chat_response(request: ChatRequest, progress_callback=None):
+    cwd_path = os.getcwd()
     message = request.message
     model_entry = resolve_chat_model(request)
     model = model_entry["id"]
@@ -2924,6 +3055,10 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         effort, _ = normalize_grok_effort(effort, model)
 
     project_id = clean_project_name(workspace or "agy")
+    try:
+        cwd_path = resolve_project_directory(project_id)
+    except Exception:
+        pass
     if provider == "codex":
         actual_cid = convo_id_mapping.get(
             f"codex:{project_id}:{conversation_id}",
@@ -2952,23 +3087,61 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     
     # Prepend any pending media files to the message
     attached_media = pending_media.pop(actual_cid, [])
-    if attached_media:
-        media_md = "\n".join([f"![Attached Image](file://{p})" for p in attached_media])
-        # User visible message in the chat
+    
+    # Check for video sources (either /watch command, attached video files, or direct video URL)
+    msg_strip = message.strip()
+    video_source_found = extract_video_target(msg_strip, attached_media)
+
+    if msg_strip.startswith("/watch") and not video_source_found:
+        # User typed /watch without a valid video URL or video attachment -> return friendly guidance immediately
+        return WATCH_HELP_RESPONSE, actual_cid
+
+    if video_source_found:
+        try:
+            if progress_callback:
+                progress_callback("progress", "🎥 Processing video: extracting frames & transcript...")
+            v_cache_dir = Path(cwd_path) / ".kookai_cache" / "video" / f"v_{uuid.uuid4().hex[:8]}"
+            v_res = process_video_source(video_source_found, out_dir=v_cache_dir)
+            # Remove original raw video files from attached_media since video_processor converted them into frames + transcript
+            attached_media = [p for p in attached_media if not p.lower().endswith(('.mp4', '.mov', '.mkv', '.webm'))]
+            if v_res.get("frame_paths"):
+                attached_media.extend(v_res["frame_paths"])
+            message += "\n\n" + v_res.get("prompt_summary", "")
+        except Exception as v_err:
+            logging.warning(f"Video processing failed for {video_source_found}: {v_err}")
+            message += f"\n\n[Note: Video processing skipped or failed: {v_err}]"
+
+    # Filter attached_media so only actual image files are treated as image attachments
+    image_media = [
+        p for p in attached_media
+        if os.path.splitext(p)[1].lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    ]
+
+    if image_media:
+        # Cap image markdown snippets to max 5 to prevent CLI prompt length overflow
+        capped_images = image_media[:5]
+        media_md = "\n".join([f"![Attached Image](file:///{p.replace('\\', '/')})" for p in capped_images])
         user_visible_message = media_md + "\n\n" + message
-        # Message sent to the CLI with instructions for agy
-        media_instrs = "\n".join([f"[Attached Media File: {p}]\nPlease use your view_file tool to view/analyze this media file if needed." for p in attached_media])
-        message = user_visible_message + "\n\n" + media_instrs
+
+        if provider == "agy":
+            # agy CLI exits with "Agent execution terminated due to error" when
+            # its non-interactive prompt contains file:// image Markdown. Keep
+            # the markup for chat history/UI, but send the video transcript and
+            # frame summary as plain text to the CLI instead.
+            pass
+        else:
+            # Only add view_file instructions for non-video-frame images to avoid duplicating prompt_summary
+            non_frame_images = [p for p in capped_images if ".kookai_cache" not in p and "kookai-video-" not in p]
+            if non_frame_images:
+                media_instrs = "\n".join([f"[Attached Media File: {p}]\nPlease use your view_file tool to view/analyze this media file if needed." for p in non_frame_images])
+                message = user_visible_message + "\n\n" + media_instrs
+            else:
+                message = user_visible_message
     else:
         user_visible_message = message
 
     def execute_selected(prompt: str):
-        codex_images = [
-            path
-            for path in attached_media
-            if os.path.splitext(path)[1].lower()
-            in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-        ]
+        codex_images = image_media[:10]
         return run_selected_cli(
             prompt,
             model,

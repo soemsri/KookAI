@@ -750,6 +750,11 @@
             </select>
           </div>
           <div class="settings-group">
+            <label for="settingsWhisperKey">Whisper API Keys (Video Transcription)</label>
+            <input type="text" id="settingsWhisperKey" class="settings-input" placeholder="gsk_key1, gsk_key2 (Multiple keys supported)" autocomplete="off" spellcheck="false" />
+            <div class="settings-hint" id="settingsWhisperHint">Supports multiple Groq / OpenAI Whisper keys separated by commas.</div>
+          </div>
+          <div class="settings-group">
             <label>Theme</label>
             <div class="theme-segmented" id="settingsThemeMode" role="radiogroup" aria-label="Theme">
               <button type="button" class="theme-segment" data-theme-mode="system" role="radio">System</button>

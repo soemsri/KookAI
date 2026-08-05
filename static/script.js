@@ -1084,6 +1084,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Autocomplete Tags & Commands System ---
   const slashCommands = [
+    { name: "/watch", desc: "Watch & analyze video (URL or local path)", type: "Command" },
     { name: "/goal", desc: "Initiate goal mode checklist", type: "Command" },
     { name: "/browser", desc: "Launch browser automation tool", type: "Command" },
     { name: "/grill-me", desc: "Launch requirements audit survey", type: "Command" },
@@ -1945,6 +1946,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  const settingsWhisperKey = document.getElementById("settingsWhisperKey");
+  const settingsWhisperHint = document.getElementById("settingsWhisperHint");
+
+  async function loadServerSettings() {
+    if (!settingsWhisperKey) return;
+    try {
+      const res = await fetch("/api/settings");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.has_groq_key) {
+          settingsWhisperKey.placeholder = `${data.groq_api_key_masked} (${data.groq_key_count} active keys)`;
+          if (settingsWhisperHint) {
+            settingsWhisperHint.textContent = `Currently active (${data.groq_key_count} key(s)): ${data.groq_api_key_masked}. Enter new key(s) to add/update.`;
+          }
+        } else {
+          settingsWhisperKey.placeholder = "gsk_key1, gsk_key2 (Multiple keys supported)";
+          if (settingsWhisperHint) {
+            settingsWhisperHint.textContent = "No Whisper key configured. Get a free key at console.groq.com/keys";
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to load server settings:", err);
+    }
+  }
+
   settingsBtn.addEventListener("click", () => {
     // Populate with current configurations
     settingsDefaultModel.value = currentModel;
@@ -1958,6 +1985,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (recognition) {
       settingsSpeechLang.value = recognition.lang || "th-TH";
     }
+    loadServerSettings();
     activateSettingsTab();
     settingsModal.classList.remove("hidden");
   });
@@ -2070,6 +2098,19 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     
+    if (settingsWhisperKey && settingsWhisperKey.value.trim()) {
+      const newKey = settingsWhisperKey.value.trim();
+      fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groq_api_key: newKey })
+      }).then(r => r.json()).then(d => {
+        console.log("Whisper settings updated:", d);
+        settingsWhisperKey.value = "";
+        loadServerSettings();
+      }).catch(err => console.error("Failed to update Whisper key:", err));
+    }
+
     currentThemeMode = settingsThemeMode.querySelector(".theme-segment.active")?.getAttribute("data-theme-mode") || "system";
     applyThemeMode();
     saveAppPreferences();
