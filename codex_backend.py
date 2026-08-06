@@ -109,10 +109,13 @@ def hidden_subprocess_kwargs() -> dict[str, Any]:
     """Return Windows flags that prevent spawned console tools from flashing."""
     if os.name != "nt":
         return {}
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is None:
+        return {}
+    startupinfo = startupinfo_cls()
+    startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
     return {
-        "creationflags": subprocess.CREATE_NO_WINDOW,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
         "startupinfo": startupinfo,
     }
 

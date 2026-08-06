@@ -9,6 +9,7 @@ class TestProcessCleanup(unittest.TestCase):
     @patch("main.os.kill")
     @patch("main.subprocess.run")
     @patch("main.os.path.exists", return_value=False)
+    @patch("main.os.name", "nt")
     def test_windows_scans_agy_with_powershell(self, _mock_exists, mock_run, mock_kill):
         mock_run.return_value = MagicMock(returncode=0, stdout="1234\n")
 
