@@ -5,6 +5,21 @@ from dependency_bootstrap import ensure_python_requirements, ensure_video_binari
 ensure_python_requirements(os.path.dirname(os.path.abspath(__file__)))
 ensure_video_binaries_warning()
 
+def _load_env_file():
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if "=" in line and not line.strip().startswith("#"):
+                    k, v = line.split("=", 1)
+                    k_str, v_str = k.strip(), v.strip()
+                    if k_str and not os.environ.get(k_str):
+                        os.environ[k_str] = v_str
+        except Exception:
+            pass
+
+_load_env_file()
+
 from video_processor import is_video_source, process_video_source, is_url, extract_video_target, WATCH_HELP_RESPONSE
 
 import asyncio
@@ -663,6 +678,7 @@ async def get_cli_status(request: Request):
 class SettingsUpdate(BaseModel):
     groq_api_key: str | None = None
     openai_api_key: str | None = None
+    meta_api_key: str | None = None
 
 
 @app.get("/api/settings")
@@ -671,6 +687,7 @@ async def get_settings():
 
     groq_keys = [k for b, k in load_all_whisper_keys("groq")]
     openai_keys = [k for b, k in load_all_whisper_keys("openai")]
+    meta_key = os.environ.get("META_API_KEY", "") or os.environ.get("MUSE_API_KEY", "")
     
     def mask_key(k: str) -> str:
         if not k:
@@ -681,6 +698,7 @@ async def get_settings():
 
     masked_groq = ", ".join([mask_key(k) for k in groq_keys])
     masked_openai = ", ".join([mask_key(k) for k in openai_keys])
+    masked_meta = mask_key(meta_key)
 
     return {
         "groq_api_key_masked": masked_groq,
@@ -689,6 +707,8 @@ async def get_settings():
         "openai_api_key_masked": masked_openai,
         "has_openai_key": len(openai_keys) > 0,
         "openai_key_count": len(openai_keys),
+        "meta_api_key_masked": masked_meta,
+        "has_meta_key": bool(meta_key),
     }
 
 
@@ -714,6 +734,13 @@ async def update_settings(payload: SettingsUpdate):
         openai_val = payload.openai_api_key.strip()
         env_vars["OPENAI_API_KEY"] = openai_val
         os.environ["OPENAI_API_KEY"] = openai_val
+
+    if payload.meta_api_key is not None:
+        meta_val = payload.meta_api_key.strip()
+        env_vars["META_API_KEY"] = meta_val
+        env_vars["MUSE_API_KEY"] = meta_val
+        os.environ["META_API_KEY"] = meta_val
+        os.environ["MUSE_API_KEY"] = meta_val
 
     lines = [f"{k}={v}" for k, v in env_vars.items()]
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -2928,6 +2955,9 @@ def run_selected_cli(
         attempted_providers.add(selected_provider)
 
     if primary_failed:
+        if provider and selected_provider not in {"auto"}:
+            return primary_error_msg, conversation_id
+
         logging.warning(
             f"Primary provider '{selected_provider}' failed ({primary_error_msg[:200]}). Triggering automatic provider failover..."
         )
@@ -3331,6 +3361,11 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     elif provider == "xai":
         actual_cid = convo_id_mapping.get(
             f"xai:{project_id}:{conversation_id}",
+            conversation_id,
+        )
+    elif provider == "muse":
+        actual_cid = convo_id_mapping.get(
+            f"muse:{project_id}:{conversation_id}",
             conversation_id,
         )
     else:

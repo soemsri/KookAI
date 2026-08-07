@@ -76,20 +76,42 @@ def _hidden_subprocess_kwargs() -> dict[str, Any]:
     }
 
 
+def _clean_model_name(model_name: str) -> str:
+    if not model_name:
+        return ""
+    import re
+    return re.sub(r"\s+(Low|Medium|High)$", "", model_name.strip(), flags=re.IGNORECASE).strip()
+
+
 def is_muse_model(model_name: str) -> bool:
-    return model_name in MUSE_MODEL_MAP or model_name in MUSE_MODEL_MAP.values()
+    if not model_name:
+        return False
+    clean = _clean_model_name(model_name)
+    return (
+        clean in MUSE_MODEL_MAP
+        or clean in MUSE_MODEL_MAP.values()
+        or model_name in MUSE_MODEL_MAP
+        or model_name in MUSE_MODEL_MAP.values()
+        or "muse" in model_name.lower()
+    )
 
 
 def muse_model_slug(model_name: str) -> str:
+    clean = _clean_model_name(model_name)
+    if clean in MUSE_MODEL_MAP:
+        return MUSE_MODEL_MAP[clean]
+    if clean in MUSE_MODEL_MAP.values():
+        return clean
     if model_name in MUSE_MODEL_MAP:
         return MUSE_MODEL_MAP[model_name]
     if model_name in MUSE_MODEL_MAP.values():
         return model_name
-    raise ValueError(f"Unsupported Meta Muse model: {model_name}")
+    return "muse-spark-1.2"
 
 
 def muse_model_supports_effort(model_name: str) -> bool:
-    return model_name in MUSE_MODEL_EFFORTS
+    clean = _clean_model_name(model_name)
+    return clean in MUSE_MODEL_EFFORTS or model_name in MUSE_MODEL_EFFORTS or True
 
 
 def normalize_muse_effort(
@@ -99,14 +121,8 @@ def normalize_muse_effort(
     display_value = (effort or "Medium").strip()
     cli_value = MUSE_EFFORT_MAP.get(display_value.lower())
     if not cli_value:
-        raise ValueError(f"Unsupported Muse effort: {display_value}")
+        cli_value = "medium"
     canonical_display = cli_value.capitalize()
-    if model_name:
-        supported = MUSE_MODEL_EFFORTS.get(model_name)
-        if supported is not None and cli_value not in supported:
-            raise ValueError(
-                f"Effort {canonical_display} is not supported by Meta Muse model {model_name}"
-            )
     return canonical_display, cli_value
 
 
@@ -141,14 +157,26 @@ def _is_runnable_muse(path: str) -> bool:
 
 @lru_cache(maxsize=1)
 def resolve_muse_executable() -> str:
+    try:
+        from cli_manager import resolve_cli_executable
+        cli_found = resolve_cli_executable("muse")
+        if cli_found and _is_runnable_muse(cli_found):
+            return cli_found
+    except Exception:
+        pass
+
     configured = os.environ.get("MUSE_CLI_PATH", "").strip()
     candidates = [
         os.path.expanduser(configured) if configured else None,
         shutil.which("muse"),
+        os.path.expanduser("~/.local/bin/muse.bat"),
+        os.path.expanduser("~/.local/bin/muse.cmd"),
         os.path.expanduser("~/.local/bin/muse.exe"),
         os.path.expanduser("~/.local/bin/muse"),
         os.path.expanduser("~/.local/muse.exe"),
         os.path.expanduser("~/.local/muse"),
+        os.path.expanduser("~/.muse/bin/muse.bat"),
+        os.path.expanduser("~/.muse/bin/muse.cmd"),
         os.path.expanduser("~/.muse/bin/muse.exe"),
         os.path.expanduser("~/.muse/bin/muse"),
     ]
@@ -203,6 +231,9 @@ def build_muse_command(
 
     if (target or "Sandbox").strip().lower() not in {"real", "unrestricted"}:
         command.extend(["--sandbox", "workspace"])
+    meta_key = os.environ.get("META_API_KEY", "").strip() or os.environ.get("MUSE_API_KEY", "").strip()
+    if meta_key:
+        command.extend(["--api-key", meta_key])
     command.append("--always-approve")
     return command
 
@@ -241,9 +272,17 @@ def parse_muse_streaming_json(output: str) -> dict[str, Any]:
             if message:
                 errors.append(str(message))
 
+    if not text_parts:
+        plain_lines = [
+            line for line in (output or "").splitlines()
+            if line.strip() and not line.strip().startswith("{")
+        ]
+        if plain_lines:
+            text_parts = plain_lines
+
     return {
         "session_id": session_id,
-        "final_message": "".join(text_parts),
+        "final_message": "\n".join(text_parts) if text_parts else "",
         "errors": errors,
         "stop_reason": stop_reason,
     }

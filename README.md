@@ -16,6 +16,7 @@
   - **Claude Code (`claude`):** Anthropic Claude 3.7 / 3.5
   - **Kimi Code (`kimi`):** Moonshot Kimi K3
   - **xAI Grok (`grok`):** Grok 4.5 / 4.20 / Grok Build
+  - **Meta Muse (`muse`):** Muse Spark 1.2
 - 🎥 **Universal Video Analysis & `/watch`:**
   - สกัดเฟรมภาพหลัก (Keyframes) และสกัดไฟล์เสียงจาก YouTube / TikTok / Vimeo / ลิงก์ตรง / ไฟล์คลิปในเครื่อง (`.mp4`, `.mov`)
   - ถอดเสียงภาษาไทย/อังกฤษความแม่นยำสูงด้วย **Groq / OpenAI Whisper (`whisper-large-v3`)**
@@ -35,9 +36,18 @@
 # Windows
 run_server.bat  (หรือ python main.py)
 ```
-> **Note:** ในการเปิดครั้งแรก ระบบจะสร้าง Virtual Environment, ติดตั้ง Python dependencies และดาวน์โหลด CLI ต่างๆ (`agy`, `claude`, `codex`, `kimi`, `grok`) ที่ขาดให้อัตโนมัติ
+> **Note:** ในการเปิดครั้งแรก ระบบจะสร้าง Virtual Environment, ติดตั้ง Python dependencies และดาวน์โหลด CLI ต่างๆ (`agy`, `claude`, `codex`, `kimi`, `grok`, `muse`) ที่ขาดให้อัตโนมัติ
 
-### 2. ตั้งค่า Whisper API Key (สำหรับถอดเสียงวิดีโอ)
+### 2. การติดตั้งและเข้าสู่ระบบ Meta Muse Spark (`muse login`)
+- **การติดตั้งอัตโนมัติ:** เมื่อเริ่มต้นเซิร์ฟเวอร์ ระบบจะตรวจสอบและติดตั้ง `muse` CLI ให้อัตโนมัติหากยังไม่มีในเครื่อง
+- **การเข้าสู่ระบบ (Login):**
+  - **วิธีที่ 1 (ผ่าน Web Dashboard):** เปิดหน้าเว็บ `http://localhost:8080` -> เข้าเมนู **Settings → CLI Status** แล้วกดปุ่ม **Connect** ถัดจาก **Meta Muse Code** เพื่อเปิดหน้าต่างเข้าสู่ระบบ
+  - **วิธีที่ 2 (ผ่าน Terminal):** รันคำสั่งใน Terminal/Command Prompt:
+    ```bash
+    muse login
+    ```
+
+### 3. ตั้งค่า Whisper API Key (สำหรับถอดเสียงวิดีโอ)
 คุณสามารถสมัครรับ Key ฟรีได้ที่ [Groq Console](https://console.groq.com/keys) แล้วเลือกตั้งค่าได้ 2 วิธี:
 - **วิธีที่ 1 (ในไฟล์ `.env`):**
   ```env
@@ -45,7 +55,7 @@ run_server.bat  (หรือ python main.py)
   ```
 - **วิธีที่ 2 (ผ่าน Web UI):** เปิดหน้าเว็บ `http://localhost:8080` -> เข้าเมนู **Settings → General** -> กรอก Key ในช่อง **Whisper API Keys** แล้วกด **Save Changes**
 
-### 3. จับคู่แอปมือถือ (Pairing)
+### 4. จับคู่แอปมือถือ (Pairing)
 1. เปิดหน้าเว็บ `http://localhost:8080` บนคอมพิวเตอร์
 2. กดปุ่ม **Generate PIN** บนหน้าเว็บ
 3. เปิดแอปพลิเคชัน KookAI บนมือถือ แล้วกรอก รหัส PIN 6 หลัก หรือสแกน QR Code เพื่อเริ่มใช้งาน
@@ -74,6 +84,7 @@ run_server.bat  (หรือ python main.py)
 | **Claude Code** | `claude` | Claude 3.7 Sonnet, Opus | Effort (Low-Max), Extended Thinking |
 | **Kimi Code** | `kimi` | Kimi K3 | Stream-JSON, Resumable Session |
 | **xAI Grok** | `grok` | Grok 4.5, Grok Build 0.1 | Reasoning Effort (Low-High) |
+| **Meta Muse** | `muse` | Muse Spark 1.2 | Effort (Low-High), Stream-JSON |
 
 ---
 
