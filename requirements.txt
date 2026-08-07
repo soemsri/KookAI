@@ -10,3 +10,4 @@ yt-dlp>=2024.0.0
 # kookai-cli: codex
 # kookai-cli: kimi
 # kookai-cli: grok
+# kookai-cli: muse

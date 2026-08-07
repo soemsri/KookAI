@@ -98,6 +98,16 @@ CLI_DEFINITIONS: dict[str, CliDefinition] = {
         connect_help="Runs grok login and opens the xAI sign-in flow.",
         env_path="GROK_CLI_PATH",
     ),
+    "muse": CliDefinition(
+        cli_id="muse",
+        name="Meta Muse Code",
+        executable="muse",
+        install_kind="native_muse",
+        install_source="https://dev.meta.ai/install.sh",
+        connect_args=("login",),
+        connect_help="Runs muse login and opens the Meta device authorization flow.",
+        env_path="MUSE_CLI_PATH",
+    ),
 }
 
 _install_lock = threading.Lock()
@@ -200,6 +210,11 @@ def _known_cli_candidates(definition: CliDefinition) -> list[str]:
             os.path.join(home, ".grok", "bin", executable_name)
             for executable_name in _candidate_executable_names("grok")
         )
+    if definition.cli_id == "muse":
+        candidates.extend(
+            os.path.join(home, ".muse", "bin", executable_name)
+            for executable_name in _candidate_executable_names("muse")
+        )
     return candidates
 
 
@@ -283,17 +298,17 @@ def get_cli_statuses(requirements_path: str) -> list[dict[str, Any]]:
 
 
 def _download_installer(url: str, suffix: str) -> str:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    temp_path = temp_file.name
+    temp_file.close()
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "KookAI-CLI-Bootstrap/1.0"},
+        headers={"User-Agent": "KookAI-CLI-Manager/1.0"},
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        payload = response.read()
-    if not payload:
-        raise RuntimeError(f"Downloaded installer from {url} was empty")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-        temp_file.write(payload)
-        return temp_file.name
+    with urllib.request.urlopen(request, timeout=120) as response:
+        with open(temp_path, "wb") as output_file:
+            shutil.copyfileobj(response, output_file)
+    return temp_path
 
 
 def _run_installer(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -315,7 +330,7 @@ def _install_native_agy() -> subprocess.CompletedProcess[str]:
         powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
         if not powershell:
             os.unlink(installer_path)
-            raise RuntimeError("PowerShell is required to install Antigravity CLI")
+            raise RuntimeError("PowerShell is required to install Google Antigravity CLI")
         command = [
             powershell,
             "-NoProfile",
@@ -332,7 +347,7 @@ def _install_native_agy() -> subprocess.CompletedProcess[str]:
         bash = shutil.which("bash")
         if not bash:
             os.unlink(installer_path)
-            raise RuntimeError("bash is required to install Antigravity CLI")
+            raise RuntimeError("bash is required to install Google Antigravity CLI")
         command = [bash, installer_path]
 
     try:
@@ -416,6 +431,42 @@ def _install_native_grok() -> subprocess.CompletedProcess[str]:
             pass
 
 
+def _install_native_muse() -> subprocess.CompletedProcess[str]:
+    if os.name == "nt":
+        installer_url = "https://dev.meta.ai/install.ps1"
+        installer_path = _download_installer(installer_url, ".ps1")
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
+        if not powershell:
+            os.unlink(installer_path)
+            raise RuntimeError("PowerShell is required to install Meta Muse Code CLI")
+        command = [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            installer_path,
+        ]
+    else:
+        installer_path = _download_installer(
+            CLI_DEFINITIONS["muse"].install_source,
+            ".sh",
+        )
+        bash = shutil.which("bash")
+        if not bash:
+            os.unlink(installer_path)
+            raise RuntimeError("bash is required to install Meta Muse Code CLI")
+        command = [bash, installer_path]
+
+    try:
+        return _run_installer(command)
+    finally:
+        try:
+            os.unlink(installer_path)
+        except OSError:
+            pass
+
+
 def _install_npm_package(package_name: str) -> subprocess.CompletedProcess[str]:
     npm = shutil.which("npm")
     if not npm:
@@ -469,6 +520,8 @@ def install_cli(cli_id: str) -> dict[str, Any]:
                 result = _install_native_kimi()
             elif definition.install_kind == "native_grok":
                 result = _install_native_grok()
+            elif definition.install_kind == "native_muse":
+                result = _install_native_muse()
             elif definition.install_kind == "npm":
                 result = _install_npm_package(definition.install_source)
             else:

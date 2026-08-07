@@ -1238,6 +1238,7 @@ body {
 .model-badge.gpt { background-color: #d1fae5; color: #059669; }
 .model-badge.kimi { background-color: #cffafe; color: #0e7490; }
 .model-badge.grok { background-color: #e5e7eb; color: #111827; }
+.model-badge.muse { background-color: #fce7f3; color: #db2777; }
 .model-badge.codex { background-color: #d1fae5; color: #047857; }
 .model-badge.legacy { background-color: #f3f4f6; color: #4b5563; }
 

@@ -80,6 +80,18 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(display_model["capabilities"]["effort"], ["Low", "Medium", "High"])
         self.assertEqual(cli_model["id"], "Grok 4.5")
 
+    def test_muse_models_are_available_by_display_name_and_cli_slug(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+
+        display_model = resolve_catalog_model(catalog, "Muse Spark 1.2")
+        cli_model = resolve_catalog_model(catalog, "muse-spark-1.2")
+
+        self.assertIsNotNone(display_model)
+        self.assertEqual(display_model["provider"], "muse")
+        self.assertEqual(display_model["usage_bucket"], "muse")
+        self.assertEqual(display_model["capabilities"]["effort"], ["Low", "Medium", "High"])
+        self.assertEqual(cli_model["id"], "Muse Spark 1.2")
+
 
 class ModelCatalogApiTests(unittest.TestCase):
     @staticmethod
@@ -145,6 +157,22 @@ class ModelCatalogApiTests(unittest.TestCase):
         self.assertEqual(model["provider"], "xai")
         self.assertEqual(model["cli_model"], "grok-4.5")
         self.assertEqual(main.map_model_name("Grok 4.5"), "grok-4.5")
+
+    def test_muse_chat_request_uses_muse_provider(self):
+        request = main.ChatRequest(
+            message="hello",
+            model="Muse Spark 1.2",
+            workspace="agy",
+            target="Sandbox",
+            conversation_id="temp-muse-test",
+            provider="muse",
+        )
+
+        model = main.resolve_chat_model(request)
+
+        self.assertEqual(model["provider"], "muse")
+        self.assertEqual(model["cli_model"], "muse-spark-1.2")
+        self.assertEqual(main.map_model_name("Muse Spark 1.2"), "muse-spark-1.2")
 
     def test_runtime_catalog_registers_dynamic_codex_model(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)

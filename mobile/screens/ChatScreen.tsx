@@ -90,11 +90,11 @@ message: string;
 
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
-type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai';
+type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai' | 'muse';
 type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
 type CodexSpeed = 'Standard' | 'Fast';
 type ClaudeEffort = 'Low' | 'Medium' | 'High' | 'Extra' | 'Max';
-type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai';
+type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai' | 'muse';
 type UsagePeriodKey = 'Weekly' | 'Hourly';
 
 interface ModelOption {
@@ -160,6 +160,7 @@ const FALLBACK_MODELS: ModelOption[] = [
   { value: "Grok 4.20 Reasoning", desc: "High-performance Grok model with reasoning", provider: "xai", badge: "Grok", usageBucket: "xai", thinkingRequired: true },
   { value: "Grok 4.20 Non-Reasoning", desc: "Low-latency Grok 4.20 without reasoning", provider: "xai", badge: "Grok", usageBucket: "xai" },
   { value: "Grok Build 0.1", desc: "xAI model trained for agentic coding workflows", provider: "xai", badge: "Grok", usageBucket: "xai", thinkingRequired: true },
+  { value: "Muse Spark 1.2", desc: "Meta flagship model for autonomous coding and multi-agent reasoning", provider: "muse", badge: "Muse", usageBucket: "muse", supportsClaudeEffort: true, claudeEfforts: ["Low", "Medium", "High"], thinkingRequired: true },
   { value: "Fable 5", desc: "For your toughest challenges", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true, thinkingRequired: true },
   { value: "Opus 5", desc: "For complex tasks", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
   { value: "Sonnet 5", desc: "Most efficient for everyday tasks", provider: "claude", supportsClaudeEffort: true, supportsClaudeExtra: true },
@@ -192,7 +193,7 @@ const catalogToModelOptions = (catalog: ModelCatalog): ModelOption[] => (
       usageBucket: model.usage_bucket,
       supportsUltra: model.capabilities.effort.includes('Ultra'),
       supportsFast: model.capabilities.speed.includes('Fast'),
-      supportsClaudeEffort: ['claude', 'xai'].includes(model.provider) && model.capabilities.effort.length > 0,
+      supportsClaudeEffort: ['claude', 'xai', 'muse'].includes(model.provider) && model.capabilities.effort.length > 0,
       supportsClaudeExtra: model.capabilities.effort.includes('Extra'),
       claudeEfforts: model.capabilities.effort as ClaudeEffort[],
       thinkingRequired: model.capabilities.thinking_required,
@@ -227,14 +228,14 @@ const isCodexModel = (modelName: string) => getModelOption(modelName)?.provider 
 const isClaudeModel = (modelName: string) => getModelOption(modelName)?.provider === "claude";
 const isKimiModel = (modelName: string) => getModelOption(modelName)?.provider === "kimi";
 const isXaiModel = (modelName: string) => getModelOption(modelName)?.provider === "xai";
+const isMuseModel = (modelName: string) => getModelOption(modelName)?.provider === "muse";
 const usesClaudeStyleControls = (modelName: string) => (
-  isClaudeModel(modelName) || isXaiModel(modelName)
+  isClaudeModel(modelName) || isXaiModel(modelName) || isMuseModel(modelName)
 );
 const showsClaudeStyleControls = (modelName: string) => {
   const model = getModelOption(modelName);
-  return isClaudeModel(modelName) || (
-    isXaiModel(modelName)
-    && Boolean(model?.supportsClaudeEffort || model?.thinkingRequired)
+  return isClaudeModel(modelName) || isXaiModel(modelName) || isMuseModel(modelName) || (
+    !!model?.supportsClaudeEffort
   );
 };
 const getClaudeEfforts = (modelName: string) => {
@@ -283,6 +284,13 @@ const getUsageBucketForModel = (modelName: string): {
       key: 'xai',
       title: 'Grok Models (xAI)',
       note: 'Grok usage and billing are managed by your xAI account.',
+    };
+  }
+  if (isMuseModel(modelName)) {
+    return {
+      key: 'muse',
+      title: 'Muse Models (Meta AI)',
+      note: 'Muse Code usage is managed by Meta Model API.',
     };
   }
 
@@ -406,6 +414,11 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
     return isDark
       ? { text: catalogBadge || 'Grok', bg: 'rgba(255, 255, 255, 0.12)', color: '#f3f4f6' }
       : { text: catalogBadge || 'Grok', bg: '#e5e7eb', color: '#111827' };
+  }
+  if (isMuseModel(modelName)) {
+    return isDark
+      ? { text: catalogBadge || 'Muse', bg: 'rgba(236, 72, 153, 0.15)', color: '#f472b6' }
+      : { text: catalogBadge || 'Muse', bg: '#fce7f3', color: '#db2777' };
   }
   if (name.includes('flash')) {
     return isDark
@@ -1910,7 +1923,9 @@ const conversationProvider = selectedConversation?.provider
           ? 'kimi'
           : cid.startsWith('grok_')
             ? 'xai'
-            : 'agy'
+            : cid.startsWith('muse_')
+              ? 'muse'
+              : 'agy'
   );
 if (conversationProject) {
 setSelectedProject(conversationProject);
@@ -1925,7 +1940,7 @@ setLoadingState(true);
     try {
 const data = await callHostApi(`/api/conversation/${cid}`);
 const resolvedProject = data.project || conversationProject;
-const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai'].includes(data.provider)
+const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai', 'muse'].includes(data.provider)
   ? data.provider
   : conversationProvider;
 if (resolvedProject) {
@@ -2161,7 +2176,7 @@ content: userMsg,
 attachments: [...attachments],
 model: selectedModel,
 provider: queuedProvider,
-effort: ['claude', 'xai'].includes(queuedProvider) ? selectedClaudeEffort : selectedCodexEffort,
+effort: ['claude', 'xai', 'muse'].includes(queuedProvider) ? selectedClaudeEffort : selectedCodexEffort,
 speed: selectedCodexSpeed,
 thinking: selectedClaudeThinking,
 target: selectedTarget,
@@ -2356,7 +2371,7 @@ allowQueue: false,
     const requestModel = options?.model || selectedModel;
     const requestProvider = options?.provider || getModelOption(requestModel)?.provider || 'agy';
     const requestEffort = options?.effort
-      || (['claude', 'xai'].includes(requestProvider) ? selectedClaudeEffort : selectedCodexEffort);
+      || (['claude', 'xai', 'muse'].includes(requestProvider) ? selectedClaudeEffort : selectedCodexEffort);
     const requestSpeed = options?.speed || selectedCodexSpeed;
     const requestThinking = options?.thinking ?? selectedClaudeThinking;
     const requestTarget = options?.target || selectedTarget;
@@ -3090,6 +3105,9 @@ allowQueue: false,
                 {item.provider === 'xai'
                   ? `${getModelOption(item.model)?.supportsClaudeEffort ? ` · ${item.effort}` : ''} · Grok`
                   : ''}
+                {item.provider === 'muse'
+                  ? `${getModelOption(item.model)?.supportsClaudeEffort ? ` · ${item.effort}` : ''} · Muse`
+                  : ''}
                 {` · ${item.target}`}
               </Text>
             </View>
@@ -3477,11 +3495,13 @@ allowQueue: false,
           <View style={[styles.bottomSheet, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
             <View style={[styles.bottomSheetHeader, { borderBottomColor: theme.borderColor }]}>
               <Text style={[styles.bottomSheetTitle, { color: theme.textPrimary }]}>
-                {isXaiModel(selectedModel)
-                  ? 'Grok Reasoning Effort'
-                  : isClaudeModel(selectedModel)
-                    ? 'Claude Effort'
-                    : 'Codex Effort'}
+                {isMuseModel(selectedModel)
+                  ? 'Muse Reasoning Effort'
+                  : isXaiModel(selectedModel)
+                    ? 'Grok Reasoning Effort'
+                    : isClaudeModel(selectedModel)
+                      ? 'Claude Effort'
+                      : 'Codex Effort'}
               </Text>
               <TouchableOpacity onPress={() => setIsEffortModalOpen(false)} style={styles.closeModalX}>
                 <Text style={{ color: theme.textSecondary, fontSize: 18 }}>✕</Text>
@@ -3844,7 +3864,11 @@ allowQueue: false,
                     {getModelOption(draftSettingsModel)?.supportsClaudeEffort && (
                       <>
                         <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>
-                          {isXaiModel(draftSettingsModel) ? 'Grok Reasoning Effort' : 'Claude Effort'}
+                          {isMuseModel(draftSettingsModel)
+                            ? 'Muse Reasoning Effort'
+                            : isXaiModel(draftSettingsModel)
+                              ? 'Grok Reasoning Effort'
+                              : 'Claude Effort'}
                         </Text>
                         {getClaudeEfforts(draftSettingsModel).map((item) => {
                           const isActive = draftSettingsClaudeEffort === item.value;
@@ -3866,7 +3890,11 @@ allowQueue: false,
                     )}
 
                     <Text style={[styles.settingsGroupTitle, { color: theme.textSecondary }]}>
-                      {isXaiModel(draftSettingsModel) ? 'Grok Reasoning' : 'Claude Thinking'}
+                      {isMuseModel(draftSettingsModel)
+                        ? 'Muse Reasoning'
+                        : isXaiModel(draftSettingsModel)
+                          ? 'Grok Reasoning'
+                          : 'Claude Thinking'}
                     </Text>
                     <View
                       style={[
@@ -4034,7 +4062,7 @@ allowQueue: false,
                         </Text>
                       ) : null}
                     </>
-                  ) : isXaiModel(selectedModel) ? null : (
+                  ) : (isXaiModel(selectedModel) || isMuseModel(selectedModel)) ? null : (
                     <>
                       {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Weekly', 'Weekly Limit')}
                       {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Hourly', 'Five Hour Limit')}

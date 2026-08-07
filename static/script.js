@@ -131,6 +131,15 @@ document.addEventListener("DOMContentLoaded", () => {
     "Grok 4.20 Non-Reasoning",
     "Grok Build 0.1"
   ]);
+  let MUSE_MODELS = {
+    "Muse Spark 1.2": {
+      effort: true,
+      efforts: ["Low", "Medium", "High"],
+      extra: false,
+      thinkingRequired: true
+    }
+  };
+  let MUSE_MODEL_IDS = new Set(["Muse Spark 1.2"]);
   let MODEL_CATALOG = {};
   let modelCatalogVersion = "built-in";
   let defaultCatalogModel = currentModel;
@@ -139,6 +148,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const isClaudeModel = model => Object.prototype.hasOwnProperty.call(CLAUDE_MODELS, model);
   const isXaiModel = model =>
     getCatalogModel(model)?.provider === "xai" || XAI_MODEL_IDS.has(model);
+  const isMuseModel = model =>
+    getCatalogModel(model)?.provider === "muse" || MUSE_MODEL_IDS.has(model);
   const getCatalogModel = model => MODEL_CATALOG[model] || null;
   const getModelLabel = model => getCatalogModel(model)?.label || model;
 
@@ -152,10 +163,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextCodexModels = {};
     const nextClaudeModels = {};
     const nextXaiModels = {};
+    const nextMuseModels = {};
     const groups = [
       ["agy", "Antigravity Models"],
       ["kimi", "Moonshot Kimi Code CLI"],
       ["xai", "xAI Grok Build CLI"],
+      ["muse", "Meta Muse Code CLI"],
       ["claude", "Anthropic Claude CLI"],
       ["codex", "OpenAI Codex CLI"]
     ];
@@ -165,7 +178,7 @@ document.addEventListener("DOMContentLoaded", () => {
         !model
         || typeof model.id !== "string"
         || typeof model.label !== "string"
-        || !["agy", "claude", "codex", "kimi", "xai"].includes(model.provider)
+        || !["agy", "claude", "codex", "kimi", "xai", "muse"].includes(model.provider)
       ) {
         return;
       }
@@ -194,6 +207,16 @@ document.addEventListener("DOMContentLoaded", () => {
           extra: false,
           thinkingRequired: capabilities.thinking_required === true
         };
+      } else if (
+        model.provider === "muse"
+        && (efforts.length > 0 || capabilities.thinking === true)
+      ) {
+        nextMuseModels[model.id] = {
+          effort: efforts.length > 0,
+          efforts,
+          extra: false,
+          thinkingRequired: capabilities.thinking_required === true
+        };
       }
     });
 
@@ -202,8 +225,12 @@ document.addEventListener("DOMContentLoaded", () => {
     CODEX_MODELS = nextCodexModels;
     CLAUDE_MODELS = nextClaudeModels;
     XAI_MODELS = nextXaiModels;
+    MUSE_MODELS = nextMuseModels;
     XAI_MODEL_IDS = new Set(
       models.filter(model => model.provider === "xai").map(model => model.id)
+    );
+    MUSE_MODEL_IDS = new Set(
+      models.filter(model => model.provider === "muse").map(model => model.id)
     );
     modelCatalogVersion = String(payload.catalog_version || "dynamic");
     defaultCatalogModel = nextCatalog[payload.default_model]
@@ -223,6 +250,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? "Kimi"
                 : provider === "xai"
                   ? "Grok"
+                  : provider === "muse"
+                    ? "Muse"
                 : "AI"
         ));
         const badgeClass = provider === "codex"
@@ -233,6 +262,8 @@ document.addEventListener("DOMContentLoaded", () => {
               ? "kimi"
               : provider === "xai"
                 ? "grok"
+                : provider === "muse"
+                  ? "muse"
             : badge.toLowerCase().replace(/[^a-z0-9_-]/g, "") || "gpt";
         return `
           <div class="dropdown-item" data-value="${escapeHtml(model.id)}">
@@ -281,13 +312,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const capability = CODEX_MODELS[currentModel];
     const claudeCapability = CLAUDE_MODELS[currentModel];
     const xaiCapability = XAI_MODELS[currentModel];
-    const reasoningCapability = claudeCapability || xaiCapability;
+    const museCapability = MUSE_MODELS[currentModel];
+    const reasoningCapability = claudeCapability || xaiCapability || museCapability;
     const selectedItem = Array.from(
       modelDropdown?.querySelectorAll(".dropdown-item") || []
     ).find(item => item.dataset.value === currentModel);
     currentProvider = getCatalogModel(currentModel)?.provider
       || selectedItem?.dataset.provider
-      || (capability ? "codex" : (claudeCapability ? "claude" : (xaiCapability ? "xai" : "agy")));
+      || (capability ? "codex" : (claudeCapability ? "claude" : (xaiCapability ? "xai" : (museCapability ? "muse" : "agy"))));
 
     if (capability && !capability.ultra && currentCodexEffort === "Ultra") {
       currentCodexEffort = "Medium";
@@ -300,13 +332,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (reasoningCapability && !reasoningCapability.extra && currentClaudeEffort === "Extra") {
       currentClaudeEffort = "High";
     }
+    const currentEfforts = xaiCapability?.efforts || museCapability?.efforts;
     if (
-      xaiCapability?.efforts?.length
-      && !xaiCapability.efforts.includes(currentClaudeEffort)
+      currentEfforts?.length
+      && !currentEfforts.includes(currentClaudeEffort)
     ) {
-      currentClaudeEffort = xaiCapability.efforts.includes("Medium")
+      currentClaudeEffort = currentEfforts.includes("Medium")
         ? "Medium"
-        : xaiCapability.efforts[0];
+        : currentEfforts[0];
     }
 
     codexInlineControls?.classList.toggle("hidden", !capability && !reasoningCapability);
@@ -332,13 +365,19 @@ document.addEventListener("DOMContentLoaded", () => {
     if (effortLabel) effortLabel.textContent = "Effort";
     if (speedLabel) speedLabel.textContent = reasoningCapability ? "Thinking" : "Speed";
     if (claudeEffortHeader) {
-      claudeEffortHeader.textContent = xaiCapability ? "Grok Reasoning Effort" : "Claude Effort";
+      claudeEffortHeader.textContent = museCapability
+        ? "Muse Reasoning Effort"
+        : (xaiCapability ? "Grok Reasoning Effort" : "Claude Effort");
     }
     if (settingsReasoningEffortLabel) {
-      settingsReasoningEffortLabel.textContent = xaiCapability ? "Grok Reasoning Effort" : "Claude Effort";
+      settingsReasoningEffortLabel.textContent = museCapability
+        ? "Muse Reasoning Effort"
+        : (xaiCapability ? "Grok Reasoning Effort" : "Claude Effort");
     }
     if (settingsThinkingLabel) {
-      settingsThinkingLabel.textContent = xaiCapability ? "Grok Reasoning" : "Claude Thinking";
+      settingsThinkingLabel.textContent = museCapability
+        ? "Muse Reasoning"
+        : (xaiCapability ? "Grok Reasoning" : "Claude Thinking");
     }
     codexEffortBtn?.classList.toggle("hidden", Boolean(reasoningCapability && !reasoningCapability.effort));
     modelDropdown?.querySelectorAll(".dropdown-item").forEach(item => {
@@ -356,8 +395,8 @@ document.addEventListener("DOMContentLoaded", () => {
       item.classList.toggle("active", item.dataset.value === currentCodexSpeed);
     });
     claudeEffortDropdown?.querySelectorAll(".dropdown-item").forEach(item => {
-      const isUnsupported = xaiCapability?.efforts?.length
-        ? !xaiCapability.efforts.includes(item.dataset.value)
+      const isUnsupported = currentEfforts?.length
+        ? !currentEfforts.includes(item.dataset.value)
         : item.dataset.extraOnly === "true" && !reasoningCapability?.extra;
       item.classList.toggle("hidden", isUnsupported);
       item.classList.toggle("active", item.dataset.value === currentClaudeEffort);
@@ -972,7 +1011,7 @@ document.addEventListener("DOMContentLoaded", () => {
           message: message,
           model: currentModel,
           provider: currentProvider,
-          effort: ["claude", "xai"].includes(currentProvider) ? currentClaudeEffort : currentCodexEffort,
+          effort: ["claude", "xai", "muse"].includes(currentProvider) ? currentClaudeEffort : currentCodexEffort,
           speed: currentCodexSpeed,
           thinking: currentClaudeThinking,
           workspace: currentWorkspace,
@@ -1452,7 +1491,7 @@ document.addEventListener("DOMContentLoaded", () => {
     e.stopPropagation();
     modelDropdown.classList.add("hidden");
     codexSpeedDropdown.classList.add("hidden");
-    const effortDropdown = ["claude", "xai"].includes(currentProvider)
+    const effortDropdown = ["claude", "xai", "muse"].includes(currentProvider)
       ? claudeEffortDropdown
       : codexEffortDropdown;
     if (effortDropdown?.classList.contains("hidden")) {
@@ -1464,8 +1503,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   codexSpeedBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (["claude", "xai"].includes(currentProvider)) {
-      const reasoningCapability = CLAUDE_MODELS[currentModel] || XAI_MODELS[currentModel];
+    if (["claude", "xai", "muse"].includes(currentProvider)) {
+      const reasoningCapability = CLAUDE_MODELS[currentModel] || XAI_MODELS[currentModel] || MUSE_MODELS[currentModel];
       if (!reasoningCapability?.thinkingRequired) {
         currentClaudeThinking = !currentClaudeThinking;
         updateCodexControls();
@@ -1744,6 +1783,7 @@ document.addEventListener("DOMContentLoaded", () => {
     agy: "AG",
     kimi: "KI",
     grok: "GX",
+    muse: "MU",
     claude: "CL",
     codex: "CX"
   };
@@ -1994,7 +2034,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const capability = CODEX_MODELS[settingsDefaultModel.value];
     const claudeCapability = CLAUDE_MODELS[settingsDefaultModel.value];
     const xaiCapability = XAI_MODELS[settingsDefaultModel.value];
-    const reasoningCapability = claudeCapability || xaiCapability;
+    const museCapability = MUSE_MODELS[settingsDefaultModel.value];
+    const reasoningCapability = claudeCapability || xaiCapability || museCapability;
     const effortGroupLabel = document.querySelector(
       "#settingsClaudeEffortGroup label"
     );
@@ -2002,10 +2043,14 @@ document.addEventListener("DOMContentLoaded", () => {
       "#settingsClaudeThinkingGroup label"
     );
     if (effortGroupLabel) {
-      effortGroupLabel.textContent = xaiCapability ? "Grok Reasoning Effort" : "Claude Effort";
+      effortGroupLabel.textContent = museCapability
+        ? "Muse Reasoning Effort"
+        : (xaiCapability ? "Grok Reasoning Effort" : "Claude Effort");
     }
     if (thinkingGroupLabel) {
-      thinkingGroupLabel.textContent = xaiCapability ? "Grok Reasoning" : "Claude Thinking";
+      thinkingGroupLabel.textContent = museCapability
+        ? "Muse Reasoning"
+        : (xaiCapability ? "Grok Reasoning" : "Claude Thinking");
     }
     document.getElementById("settingsCodexEffortGroup")?.classList.toggle("hidden", !capability);
     document.getElementById("settingsCodexSpeedGroup")?.classList.toggle("hidden", !capability);
@@ -2021,18 +2066,19 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!capability?.fast && settingsCodexSpeed.value === "Fast") {
       settingsCodexSpeed.value = "Standard";
     }
+    const settingsEfforts = xaiCapability?.efforts || museCapability?.efforts;
     settingsClaudeEffort.querySelectorAll("option").forEach(option => {
-      option.disabled = xaiCapability?.efforts?.length
-        ? !xaiCapability.efforts.includes(option.value)
+      option.disabled = settingsEfforts?.length
+        ? !settingsEfforts.includes(option.value)
         : option.value === "Extra" && !reasoningCapability?.extra;
     });
     if (
-      xaiCapability?.efforts?.length
-      && !xaiCapability.efforts.includes(settingsClaudeEffort.value)
+      settingsEfforts?.length
+      && !settingsEfforts.includes(settingsClaudeEffort.value)
     ) {
-      settingsClaudeEffort.value = xaiCapability.efforts.includes("Medium")
+      settingsClaudeEffort.value = settingsEfforts.includes("Medium")
         ? "Medium"
-        : xaiCapability.efforts[0];
+        : settingsEfforts[0];
     } else if (!reasoningCapability?.extra && settingsClaudeEffort.value === "Extra") {
       settingsClaudeEffort.value = "High";
     }
@@ -2214,6 +2260,14 @@ document.addEventListener("DOMContentLoaded", () => {
           || "Grok usage and billing are managed by your xAI account."
       };
     }
+    if (isMuseModel(currentModel)) {
+      return {
+        key: "muse",
+        title: "Muse Models (Meta AI)",
+        badge: "Meta AI usage",
+        note: "Muse Code usage is managed by Meta Model API."
+      };
+    }
 
     const catalogBucket = getCatalogModel(currentModel)?.usage_bucket;
     const lowerModel = getModelLabel(currentModel).toLowerCase();
@@ -2369,7 +2423,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       return;
     }
-    if (isXaiModel(currentModel)) {
+    if (isXaiModel(currentModel) || isMuseModel(currentModel)) {
       document.getElementById("secondaryWeeklyRow")?.classList.add("hidden");
       document.getElementById("secondaryHourlyRow")?.classList.add("hidden");
       return;

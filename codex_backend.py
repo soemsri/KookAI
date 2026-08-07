@@ -21,6 +21,7 @@ from typing import Any, Optional
 from claude_backend import is_claude_model
 from grok_backend import is_grok_model
 from kimi_backend import is_kimi_model
+from muse_backend import is_muse_model
 
 
 CODEX_MODEL_MAP = {
@@ -58,19 +59,19 @@ CODEX_FAST_MODELS = {
 }
 
 CODEX_MODEL_EFFORTS = {
-    "5.6 Sol": {"low", "medium", "high", "xhigh", "ultra"},
-    "5.6 Terra": {"low", "medium", "high", "xhigh", "ultra"},
-    "5.6 Luna": {"low", "medium", "high", "xhigh"},
-    "5.5": {"low", "medium", "high", "xhigh"},
-    "5.4": {"low", "medium", "high", "xhigh"},
-    "5.4 Mini": {"low", "medium", "high", "xhigh"},
+    "5.6 Sol": {"light", "medium", "high", "extra high", "ultra"},
+    "5.6 Terra": {"light", "medium", "high", "extra high", "ultra"},
+    "5.6 Luna": {"light", "medium", "high", "extra high"},
+    "5.5": {"light", "medium", "high", "extra high"},
+    "5.4": {"light", "medium", "high", "extra high"},
+    "5.4 Mini": {"light", "medium", "high", "extra high"},
 }
 
 CODEX_CONVERSATION_PREFIX = "codex_"
 
 
 def configure_codex_catalog(models: list[dict[str, Any]]) -> None:
-    """Register enabled catalog aliases and capabilities for Codex models."""
+    """Register enabled catalog aliases for Codex models."""
     for model in models:
         if model.get("provider") != "codex" or not model.get("enabled", True):
             continue
@@ -90,12 +91,20 @@ def configure_codex_catalog(models: list[dict[str, Any]]) -> None:
             for effort in effort_values
             if isinstance(effort, str) and effort.lower() in CODEX_EFFORT_MAP
         }
-        CODEX_MODEL_EFFORTS[model_id] = supported_efforts
-        if label:
-            CODEX_MODEL_EFFORTS[label] = supported_efforts
+        if supported_efforts:
+            CODEX_MODEL_EFFORTS[model_id] = supported_efforts
+            if label:
+                CODEX_MODEL_EFFORTS[label] = supported_efforts
+        else:
+            CODEX_MODEL_EFFORTS.pop(model_id, None)
+            if label:
+                CODEX_MODEL_EFFORTS.pop(label, None)
 
         speed_values = capabilities.get("speed", [])
-        if "Fast" in speed_values:
+        if any(
+            isinstance(speed, str) and speed.lower() == "fast"
+            for speed in speed_values
+        ):
             CODEX_FAST_MODELS.add(model_id)
             if label:
                 CODEX_FAST_MODELS.add(label)
@@ -126,7 +135,7 @@ def is_codex_model(model_name: str) -> bool:
 
 def resolve_provider(provider: Optional[str], model_name: str) -> str:
     normalized = (provider or "").strip().lower()
-    if normalized and normalized not in {"agy", "codex", "claude", "kimi", "xai"}:
+    if normalized and normalized not in {"agy", "codex", "claude", "kimi", "xai", "muse"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
     if normalized == "codex" and not is_codex_model(model_name):
         raise ValueError(f"Model {model_name} is not a Codex model")
@@ -136,6 +145,8 @@ def resolve_provider(provider: Optional[str], model_name: str) -> str:
         raise ValueError(f"Model {model_name} is not a Kimi Code model")
     if normalized == "xai" and not is_grok_model(model_name):
         raise ValueError(f"Model {model_name} is not an xAI model")
+    if normalized == "muse" and not is_muse_model(model_name):
+        raise ValueError(f"Model {model_name} is not a Meta Muse model")
     if normalized == "agy" and is_codex_model(model_name):
         raise ValueError(f"Model {model_name} must use the Codex provider")
     if normalized == "agy" and is_claude_model(model_name):
@@ -144,6 +155,8 @@ def resolve_provider(provider: Optional[str], model_name: str) -> str:
         raise ValueError(f"Model {model_name} must use the Kimi provider")
     if normalized == "agy" and is_grok_model(model_name):
         raise ValueError(f"Model {model_name} must use the xAI provider")
+    if normalized == "agy" and is_muse_model(model_name):
+        raise ValueError(f"Model {model_name} must use the Muse provider")
     if normalized:
         return normalized
     if is_codex_model(model_name):
@@ -154,6 +167,8 @@ def resolve_provider(provider: Optional[str], model_name: str) -> str:
         return "kimi"
     if is_grok_model(model_name):
         return "xai"
+    if is_muse_model(model_name):
+        return "muse"
     return "agy"
 
 

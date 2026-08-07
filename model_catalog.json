@@ -343,6 +343,17 @@
       "usage_bucket": "gpt",
       "enabled": true,
       "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard"], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Muse Spark 1.2",
+      "label": "Muse Spark 1.2",
+      "description": "Meta flagship model for autonomous coding and multi-agent reasoning",
+      "provider": "muse",
+      "cli_model": "muse-spark-1.2",
+      "badge": "Muse",
+      "usage_bucket": "muse",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High"], "speed": [], "thinking": true, "thinking_required": true}
     }
   ]
 }
