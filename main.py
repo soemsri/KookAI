@@ -973,6 +973,53 @@ DEFAULT_INTERVIEW_QUESTIONS = [
     }
 ]
 
+def get_workspace_alignment_context(cwd_path: str) -> str:
+    """Read alignment_preferences.json or workspace rules and return formatted system prompt instructions."""
+    if not cwd_path or not os.path.exists(cwd_path):
+        return ""
+    
+    pref_file = os.path.join(cwd_path, "alignment_preferences.json")
+    pref_md_file = os.path.join(cwd_path, "alignment_preferences.md")
+    agents_file = os.path.join(cwd_path, ".agents", "AGENTS.md")
+    
+    summary_text = ""
+    if os.path.exists(pref_file):
+        try:
+            with open(pref_file, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content.startswith("{"):
+                    data = json.loads(content)
+                    if isinstance(data, dict):
+                        summary_text = data.get("summary", "")
+                        if not summary_text and "answers" in data:
+                            lines = []
+                            for a in data["answers"]:
+                                lines.append(f"- Step {a.get('step', '?')}: {a.get('answer', '')}")
+                            summary_text = "\n".join(lines)
+                else:
+                    summary_text = content
+        except Exception:
+            pass
+
+    if not summary_text and os.path.exists(pref_md_file):
+        try:
+            with open(pref_md_file, "r", encoding="utf-8") as f:
+                summary_text = f.read().strip()
+        except Exception:
+            pass
+
+    if not summary_text and os.path.exists(agents_file):
+        try:
+            with open(agents_file, "r", encoding="utf-8") as f:
+                summary_text = f.read().strip()
+        except Exception:
+            pass
+
+    if summary_text:
+        return f"\n\n[WORKSPACE DESIGN ALIGNMENT & PREFERENCES IN EFFECT]\n{summary_text}\n"
+    return ""
+
+
 # Mock seed conversations to match user screenshot layout on startup
 SEED_CONVERSATIONS = [
     {
@@ -1573,6 +1620,18 @@ def resolve_project_directory(project_id: str) -> str:
     raise ValueError(
         f"Unknown project {project_id!r}; it is not inside a configured project root"
     )
+
+
+def resolve_workspace_dir_safely(workspace_str: str) -> str:
+    """Safely resolve a workspace string (which may be an absolute path or a project name) to a directory."""
+    if workspace_str and os.path.isabs(workspace_str) and os.path.isdir(workspace_str):
+        return workspace_str
+    project_id = clean_project_name(workspace_str or "agy")
+    try:
+        return resolve_project_directory(project_id)
+    except Exception:
+        return os.getcwd()
+
 
 def get_conversation_project(conversation_id: str) -> Optional[str]:
     hist_paths = [
@@ -3424,6 +3483,13 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
 
     def execute_selected(prompt: str):
         codex_images = image_media[:10]
+        cwd_path = resolve_workspace_dir_safely(workspace)
+        
+        # Inject workspace alignment preferences if present and not currently initiating a new grill prompt
+        align_ctx = get_workspace_alignment_context(cwd_path)
+        if align_ctx and not prompt.startswith("[SYSTEM: INTERACTIVE GRILL-ME MODE INITIATED]"):
+            prompt = prompt + align_ctx
+
         return run_selected_cli(
             prompt,
             model,
@@ -3444,15 +3510,15 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         # Initialize the dynamic grill interview state
         interview_states[actual_cid] = {
             "mode": "grill",
-            "step": 0
+            "step": 0,
+            "answers": []
         }
         
         grill_init_prompt = (
             "[SYSTEM: INTERACTIVE GRILL-ME MODE INITIATED]\n"
-            "The user wants to align on design decisions and project requirements for this workspace. "
-            "Please analyze the workspace files and codebase. "
-            "Identify 2-3 important design choices, configuration options, or architectural trade-offs that need user alignment. "
-            "Generate the FIRST clarifying question and choices in the following JSON format so the UI can render it. "
+            "The user wants to align on design decisions and project requirements for this workspace using an interactive grill-me interview.\n"
+            "Please analyze the workspace files and codebase context to identify 2-3 important open questions, design choices, configuration options, tech stack preferences, or architectural trade-offs that need user alignment.\n"
+            "Generate the FIRST clarifying question and choices in the following JSON format so the UI can render an interactive question card.\n"
             "Output ONLY the JSON object, with no markdown code blocks or extra text outside the JSON.\n\n"
             "JSON Format:\n"
             "{\n"
@@ -3468,7 +3534,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         
         reply, resolved_cid = execute_selected(grill_init_prompt)
         
-        # Ensure clean JSON format by stripping markdown formatting if present
+        # Clean JSON format by stripping markdown formatting if present
         reply_clean = reply.strip()
         if reply_clean.startswith("```json"):
             reply_clean = reply_clean[7:]
@@ -3488,14 +3554,32 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     elif actual_cid in interview_states:
         state = interview_states[actual_cid]
         state["step"] += 1
+        user_response = message.strip()
+        state.setdefault("answers", []).append({
+            "step": state["step"],
+            "answer": user_response
+        })
+        
+        history_lines = [f"Step {ans['step']}: Answered '{ans['answer']}'" for ans in state.get("answers", [])]
+        history_summary = "\n".join(history_lines)
         
         grill_continue_prompt = (
             f"[SYSTEM: GRILL-ME INTERVIEW STEP {state['step']}]\n"
-            f"The user selected/responded: \"{message.strip()}\"\n\n"
-            "If you need to clarify more design decisions (limit to 3 questions max overall), "
-            "please output the NEXT clarifying question in the exact same JSON format (ONLY the JSON object, no extra text, no markdown wrappers).\n\n"
+            f"The user selected/responded: \"{user_response}\"\n\n"
+            f"Previous responses collected in this session:\n{history_summary}\n\n"
+            "If you need to clarify more design decisions or project requirements (limit to 3 questions max overall), "
+            "please output the NEXT clarifying question in the exact same JSON format (ONLY the JSON object, no extra text, no markdown wrappers):\n"
+            "{\n"
+            '  "type": "question",\n'
+            '  "question": "The question text here?",\n'
+            '  "options": [\n'
+            '    "(Recommended) Choice A text",\n'
+            '    "Choice B text"\n'
+            "  ],\n"
+            '  "allow_other": true\n'
+            "}\n\n"
             "If you have enough alignment or have reached 3 questions, please finish the interview by outputting "
-            "a friendly markdown summary of all decisions, how you will save/apply them to the workspace, "
+            "a friendly markdown summary of all decisions, how you will save and enforce them in the workspace, "
             "and state that the alignment is complete. Do NOT use the JSON format for the final summary response."
         )
         
@@ -3521,17 +3605,41 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             
         if not is_question:
             # Interview completed! Close state and save report
+            answers_collected = state.get("answers", [])
             del interview_states[actual_cid]
             
-            project_id = clean_project_name(workspace or "agy")
-            cwd_path = resolve_project_directory(project_id)
+            cwd_path = resolve_workspace_dir_safely(workspace)
+            project_id = os.path.basename(cwd_path)
             pref_file = os.path.join(cwd_path, "alignment_preferences.json")
+            pref_md_file = os.path.join(cwd_path, "alignment_preferences.md")
+            agents_file = os.path.join(cwd_path, ".agents", "AGENTS.md")
+            
+            pref_data = {
+                "project": project_id,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "summary": reply,
+                "answers": answers_collected
+            }
+            
             try:
-                os.makedirs(os.path.dirname(pref_file), exist_ok=True)
+                os.makedirs(cwd_path, exist_ok=True)
                 with open(pref_file, "w", encoding="utf-8") as f:
-                    f.write(f"# Design Alignment Summary\n\nDate: {datetime.datetime.now().isoformat()}\n\n{reply}")
+                    json.dump(pref_data, f, indent=2, ensure_ascii=False)
             except Exception as e:
-                logging.error(f"Failed to save final alignment log: {e}")
+                logging.error(f"Failed to save final alignment JSON: {e}")
+                
+            try:
+                with open(pref_md_file, "w", encoding="utf-8") as f:
+                    f.write(f"# Design Alignment Summary\n\nDate: {datetime.datetime.now().isoformat()}\n\n{reply}")
+                
+                os.makedirs(os.path.dirname(agents_file), exist_ok=True)
+                file_existed = os.path.exists(agents_file)
+                with open(agents_file, "a", encoding="utf-8") as f:
+                    if not file_existed:
+                        f.write("# Workspace Rules & Customizations\n\n")
+                    f.write(f"\n## Design Alignment & Workspace Preferences ({datetime.date.today().isoformat()})\n\n{reply}\n")
+            except Exception as e:
+                logging.error(f"Failed to save markdown alignment log: {e}")
     elif msg_lower.startswith("/goal"):
         goal_text = message[5:].strip()
         if not goal_text:
