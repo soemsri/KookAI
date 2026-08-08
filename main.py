@@ -2803,8 +2803,8 @@ DEFAULT_PROVIDER_MODELS = {
 def is_provider_available(prov: str) -> bool:
     try:
         if prov == "agy":
-            path = resolve_managed_cli_executable("agy") or os.path.expanduser("~/.local/bin/agy")
-            return bool(path and shutil.which(path))
+            path = resolve_managed_cli_executable("agy") or shutil.which("agy")
+            return bool(path and os.path.isfile(path))
         elif prov == "codex":
             return bool(resolve_codex_executable())
         elif prov == "claude":
@@ -2955,9 +2955,6 @@ def run_selected_cli(
         attempted_providers.add(selected_provider)
 
     if primary_failed:
-        if provider and selected_provider not in {"auto"}:
-            return primary_error_msg, conversation_id
-
         logging.warning(
             f"Primary provider '{selected_provider}' failed ({primary_error_msg[:200]}). Triggering automatic provider failover..."
         )

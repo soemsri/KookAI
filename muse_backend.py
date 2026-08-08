@@ -282,7 +282,7 @@ def parse_muse_streaming_json(output: str) -> dict[str, Any]:
 
     return {
         "session_id": session_id,
-        "final_message": "\n".join(text_parts) if text_parts else "",
+        "final_message": "".join(text_parts) if text_parts else "",
         "errors": errors,
         "stop_reason": stop_reason,
     }
