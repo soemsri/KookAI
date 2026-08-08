@@ -1258,13 +1258,23 @@ document.addEventListener("DOMContentLoaded", () => {
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
 
-    if (role === "assistant" && content.startsWith('{"type": "question"')) {
+    let questionPayload = null;
+    if (role === "assistant") {
       try {
-        const qObj = JSON.parse(content);
-        renderQuestionCard(bubble, qObj, isDisabled);
-      } catch(e) {
-        bubble.innerHTML = window.marked ? window.marked.parse(content) : content;
-      }
+        let clean = content.trim();
+        if (clean.startsWith('```json')) clean = clean.slice(7);
+        if (clean.startsWith('```')) clean = clean.slice(3);
+        if (clean.endsWith('```')) clean = clean.slice(0, -3);
+        clean = clean.trim();
+        const parsed = JSON.parse(clean);
+        if (parsed && parsed.type === "question" && typeof parsed.question === "string" && Array.isArray(parsed.options)) {
+          questionPayload = parsed;
+        }
+      } catch(e) {}
+    }
+
+    if (questionPayload) {
+      renderQuestionCard(bubble, questionPayload, isDisabled);
     } else {
       bubble.innerHTML = window.marked ? window.marked.parse(content) : content;
     }

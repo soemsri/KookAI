@@ -3507,18 +3507,17 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     msg_lower = message.strip().lower()
 
     if msg_lower.startswith("/grill-me"):
-        # Initialize the dynamic grill interview state
+        # Initialize the 3-step grill interview state
         interview_states[actual_cid] = {
             "mode": "grill",
-            "step": 0,
             "answers": []
         }
         
         grill_init_prompt = (
-            "[SYSTEM: INTERACTIVE GRILL-ME MODE INITIATED]\n"
+            "[SYSTEM: INTERACTIVE GRILL-ME MODE INITIATED (QUESTION 1 OF 3)]\n"
             "The user wants to align on design decisions and project requirements for this workspace using an interactive grill-me interview.\n"
-            "Please analyze the workspace files and codebase context to identify 2-3 important open questions, design choices, configuration options, tech stack preferences, or architectural trade-offs that need user alignment.\n"
-            "Generate the FIRST clarifying question and choices in the following JSON format so the UI can render an interactive question card.\n"
+            "Please analyze the workspace files and codebase context to identify 3 important open questions, design choices, configuration options, tech stack preferences, or architectural trade-offs that need user alignment.\n"
+            "Generate Question 1 of 3 in the following JSON format so the UI can render an interactive question card.\n"
             "Output ONLY the JSON object, with no markdown code blocks or extra text outside the JSON.\n\n"
             "JSON Format:\n"
             "{\n"
@@ -3544,69 +3543,92 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             reply_clean = reply_clean[:-3]
         reply_clean = reply_clean.strip()
         
+        is_valid_q = False
         try:
             parsed = json.loads(reply_clean)
-            if isinstance(parsed, dict) and "question" in parsed:
+            if isinstance(parsed, dict) and parsed.get("type") == "question" and "question" in parsed and "options" in parsed:
                 reply = json.dumps(parsed)
-        except Exception:
-            pass
-
-    elif actual_cid in interview_states:
-        state = interview_states[actual_cid]
-        state["step"] += 1
-        user_response = message.strip()
-        state.setdefault("answers", []).append({
-            "step": state["step"],
-            "answer": user_response
-        })
-        
-        history_lines = [f"Step {ans['step']}: Answered '{ans['answer']}'" for ans in state.get("answers", [])]
-        history_summary = "\n".join(history_lines)
-        
-        grill_continue_prompt = (
-            f"[SYSTEM: GRILL-ME INTERVIEW STEP {state['step']}]\n"
-            f"The user selected/responded: \"{user_response}\"\n\n"
-            f"Previous responses collected in this session:\n{history_summary}\n\n"
-            "If you need to clarify more design decisions or project requirements (limit to 3 questions max overall), "
-            "please output the NEXT clarifying question in the exact same JSON format (ONLY the JSON object, no extra text, no markdown wrappers):\n"
-            "{\n"
-            '  "type": "question",\n'
-            '  "question": "The question text here?",\n'
-            '  "options": [\n'
-            '    "(Recommended) Choice A text",\n'
-            '    "Choice B text"\n'
-            "  ],\n"
-            '  "allow_other": true\n'
-            "}\n\n"
-            "If you have enough alignment or have reached 3 questions, please finish the interview by outputting "
-            "a friendly markdown summary of all decisions, how you will save and enforce them in the workspace, "
-            "and state that the alignment is complete. Do NOT use the JSON format for the final summary response."
-        )
-        
-        reply, resolved_cid = execute_selected(grill_continue_prompt)
-        
-        reply_clean = reply.strip()
-        if reply_clean.startswith("```json"):
-            reply_clean = reply_clean[7:]
-        if reply_clean.startswith("```"):
-            reply_clean = reply_clean[3:]
-        if reply_clean.endswith("```"):
-            reply_clean = reply_clean[:-3]
-        reply_clean = reply_clean.strip()
-        
-        is_question = False
-        try:
-            parsed = json.loads(reply_clean)
-            if isinstance(parsed, dict) and "question" in parsed:
-                reply = json.dumps(parsed)
-                is_question = True
+                is_valid_q = True
         except Exception:
             pass
             
-        if not is_question:
-            # Interview completed! Close state and save report
-            answers_collected = state.get("answers", [])
+        if not is_valid_q:
+            # Fallback to default interview question 1
+            reply = json.dumps(DEFAULT_INTERVIEW_QUESTIONS[0])
+
+    elif actual_cid in interview_states:
+        state = interview_states[actual_cid]
+        user_response = message.strip()
+        
+        state.setdefault("answers", []).append({
+            "step": len(state.get("answers", [])) + 1,
+            "answer": user_response
+        })
+        
+        answers_collected = state.get("answers", [])
+        num_answers = len(answers_collected)
+        
+        history_lines = [f"Question {ans['step']}: User answered '{ans['answer']}'" for ans in answers_collected]
+        history_summary = "\n".join(history_lines)
+        
+        if num_answers < 3:
+            next_q_num = num_answers + 1
+            grill_continue_prompt = (
+                f"[SYSTEM: GRILL-ME INTERVIEW - QUESTION {next_q_num} OF 3]\n"
+                f"The user selected/responded to Question {num_answers}: \"{user_response}\"\n\n"
+                f"Previous responses collected in this session:\n{history_summary}\n\n"
+                f"Please analyze the workspace context and previous answers, then output Question {next_q_num} of 3 in the exact JSON format below.\n"
+                "Output ONLY the JSON object, with no markdown code blocks or extra text outside the JSON:\n"
+                "{\n"
+                '  "type": "question",\n'
+                '  "question": "The question text here?",\n'
+                '  "options": [\n'
+                '    "(Recommended) Choice A text",\n'
+                '    "Choice B text"\n'
+                "  ],\n"
+                '  "allow_other": true\n'
+                "}"
+            )
+            
+            reply, resolved_cid = execute_selected(grill_continue_prompt)
+            
+            reply_clean = reply.strip()
+            if reply_clean.startswith("```json"):
+                reply_clean = reply_clean[7:]
+            if reply_clean.startswith("```"):
+                reply_clean = reply_clean[3:]
+            if reply_clean.endswith("```"):
+                reply_clean = reply_clean[:-3]
+            reply_clean = reply_clean.strip()
+            
+            is_valid_q = False
+            try:
+                parsed = json.loads(reply_clean)
+                if isinstance(parsed, dict) and parsed.get("type") == "question" and "question" in parsed and "options" in parsed:
+                    reply = json.dumps(parsed)
+                    is_valid_q = True
+            except Exception:
+                pass
+                
+            if not is_valid_q:
+                # Fallback to default interview question for this step
+                fallback_idx = min(next_q_num - 1, len(DEFAULT_INTERVIEW_QUESTIONS) - 1)
+                reply = json.dumps(DEFAULT_INTERVIEW_QUESTIONS[fallback_idx])
+        else:
+            # 3 questions answered! Conclude interview & trigger implementation
             del interview_states[actual_cid]
+            
+            grill_finish_prompt = (
+                "[SYSTEM: GRILL-ME INTERVIEW COMPLETED - IMPLEMENTATION & FINAL SUMMARY]\n"
+                f"The user has completed all 3 questions in the interactive grill-me alignment interview.\n\n"
+                f"User Selected Answers:\n{history_summary}\n\n"
+                "You MUST do the following:\n"
+                "1. Briefly summarize the 3 design/requirement decisions made by the user.\n"
+                "2. Proceed IMMEDIATELY to implement all 3 chosen preferences into the workspace codebase. Modify or create all necessary project files, code components, or configuration files to reflect the user's selected choices.\n"
+                "3. Provide a concise summary of the implementation actions and code changes executed."
+            )
+            
+            reply, resolved_cid = execute_selected(grill_finish_prompt)
             
             cwd_path = resolve_workspace_dir_safely(workspace)
             project_id = os.path.basename(cwd_path)

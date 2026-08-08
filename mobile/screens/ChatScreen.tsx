@@ -377,7 +377,12 @@ const getSpeechRecognitionModule = () => {
 
 const parseQuestionPayload = (content: string): QuestionPayload | null => {
   try {
-    const parsed = JSON.parse(content);
+    let clean = content.trim();
+    if (clean.startsWith('```json')) clean = clean.slice(7);
+    if (clean.startsWith('```')) clean = clean.slice(3);
+    if (clean.endsWith('```')) clean = clean.slice(0, -3);
+    clean = clean.trim();
+    const parsed = JSON.parse(clean);
     if (
       parsed?.type === 'question' &&
       typeof parsed.question === 'string' &&
