@@ -1772,13 +1772,9 @@ def map_model_name(model_ui_name: str) -> str:
     catalog = load_runtime_model_catalog()
     model = resolve_catalog_model(catalog, model_ui_name)
     if not model:
-        return "gemini-2.5-flash"
+        return model_ui_name or "Gemini 3.6 Flash (High)"
     cli_m = model.get("cli_model", "")
-    if not cli_m or "Gemini" in cli_m or " " in cli_m:
-        if "pro" in model_ui_name.lower():
-            return "gemini-2.5-pro"
-        return "gemini-2.5-flash"
-    return cli_m
+    return cli_m or model_ui_name
 
 # Helper: Kill processes locking the sqlite database or executing agy for this conversation
 def kill_processes_locking_db(conversation_id: str):

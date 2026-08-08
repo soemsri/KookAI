@@ -174,6 +174,28 @@ class ModelCatalogApiTests(unittest.TestCase):
         self.assertEqual(model["cli_model"], "muse-spark-1.2")
         self.assertEqual(main.map_model_name("Muse Spark 1.2"), "muse-spark-1.2")
 
+    def test_map_model_name_agy_models(self):
+        self.assertEqual(
+            main.map_model_name("Gemini 3.1 Pro (Low)"),
+            "Gemini 3.1 Pro (Low)",
+        )
+        self.assertEqual(
+            main.map_model_name("Claude Sonnet 4.6 (Thinking)"),
+            "Claude Sonnet 4.6 (Thinking)",
+        )
+        self.assertEqual(
+            main.map_model_name("Claude Opus 4.6 (Thinking)"),
+            "Claude Opus 4.6 (Thinking)",
+        )
+        self.assertEqual(
+            main.map_model_name("GPT-OSS 120B (Medium)"),
+            "GPT-OSS 120B (Medium)",
+        )
+        self.assertEqual(
+            main.map_model_name("Gemini 3.6 Flash (High)"),
+            "Gemini 3.6 Flash (High)",
+        )
+
     def test_runtime_catalog_registers_dynamic_codex_model(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)
         dynamic_model = {
