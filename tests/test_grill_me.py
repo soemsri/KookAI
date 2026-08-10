@@ -128,5 +128,28 @@ class TestGrillMeSkill(unittest.TestCase):
         self.assertIn("[WORKSPACE DESIGN ALIGNMENT & PREFERENCES IN EFFECT]", ctx)
         self.assertIn("User prefers dark mode and REST APIs.", ctx)
 
+    @patch("main.run_selected_cli")
+    def test_grill_with_docs_flow(self, mock_cli):
+        q1_json = json.dumps({
+            "type": "question",
+            "question": "Which architecture pattern should we document in CONTEXT.md?",
+            "options": ["(Recommended) Provider Failover Orchestrator", "Direct Provider API"],
+            "allow_other": True
+        })
+        mock_cli.return_value = (q1_json, "convo-docs-1")
+
+        req = main.ChatRequest(
+            message="/grill-with-docs",
+            conversation_id="convo-docs-1",
+            workspace=self.workspace_dir,
+            model="Gemini 3.6 Flash (High)",
+            target="Antigravity CLI"
+        )
+        res = main.build_chat_response(req)
+        reply = res.get("reply", "")
+        self.assertIn("CONTEXT.md", reply)
+        self.assertIn("convo-docs-1", main.interview_states)
+        self.assertEqual(main.interview_states["convo-docs-1"]["mode"], "grill-with-docs")
+
 if __name__ == "__main__":
     unittest.main()

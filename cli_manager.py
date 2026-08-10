@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -798,3 +799,178 @@ def sys_platform() -> str:
     import sys
 
     return sys.platform
+
+
+class ProviderHealthTracker:
+    """Tracks real-time health, latency (EMA), quota availability, and circuit breaker status for model providers."""
+
+    def __init__(self, failure_threshold: int = 3, cooldown_seconds: float = 60.0):
+        self.failure_threshold = failure_threshold
+        self.cooldown_seconds = cooldown_seconds
+        self._lock = threading.Lock()
+        self.metrics: dict[str, dict[str, Any]] = {}
+
+    def _get_or_create(self, cli_id: str) -> dict[str, Any]:
+        if cli_id not in self.metrics:
+            self.metrics[cli_id] = {
+                "health_status": "healthy",       # healthy, degraded, cooldown, unavailable
+                "circuit_state": "CLOSED",        # CLOSED, OPEN, HALF_OPEN
+                "latency_ema": 1.0,               # seconds (default baseline 1.0s)
+                "consecutive_failures": 0,
+                "total_calls": 0,
+                "successful_calls": 0,
+                "failed_calls": 0,
+                "quota_remaining_percent": 100.0,
+                "cooldown_until": 0.0,
+                "last_success_time": 0.0,
+                "last_failure_time": 0.0,
+                "last_error": "",
+            }
+        return self.metrics[cli_id]
+
+    def record_success(self, cli_id: str, latency_sec: float) -> None:
+        with self._lock:
+            m = self._get_or_create(cli_id)
+            now = time.time()
+            m["total_calls"] += 1
+            m["successful_calls"] += 1
+            m["consecutive_failures"] = 0
+            m["circuit_state"] = "CLOSED"
+            m["cooldown_until"] = 0.0
+            m["health_status"] = "healthy"
+            m["last_success_time"] = now
+            # Update EMA latency (alpha = 0.3)
+            alpha = 0.3
+            m["latency_ema"] = (alpha * latency_sec) + ((1.0 - alpha) * m["latency_ema"])
+
+    def record_failure(
+        self,
+        cli_id: str,
+        error_msg: str,
+        latency_sec: float = 0.0,
+        quota_exceeded: bool = False,
+    ) -> None:
+        with self._lock:
+            m = self._get_or_create(cli_id)
+            now = time.time()
+            m["total_calls"] += 1
+            m["failed_calls"] += 1
+            m["consecutive_failures"] += 1
+            m["last_failure_time"] = now
+            m["last_error"] = str(error_msg)[:300]
+
+            err_lower = str(error_msg).lower()
+            if (
+                quota_exceeded
+                or "rate limit" in err_lower
+                or "quota" in err_lower
+                or "429" in err_lower
+            ):
+                m["quota_remaining_percent"] = max(0.0, m["quota_remaining_percent"] - 25.0)
+                quota_trip = True
+            else:
+                quota_trip = False
+
+            if (
+                m["consecutive_failures"] >= self.failure_threshold
+                or quota_trip
+                or m["quota_remaining_percent"] <= 0.0
+            ):
+                m["circuit_state"] = "OPEN"
+                m["cooldown_until"] = now + self.cooldown_seconds
+                m["health_status"] = "cooldown"
+            else:
+                m["health_status"] = "degraded"
+
+    def get_circuit_state(self, cli_id: str) -> str:
+        with self._lock:
+            m = self._get_or_create(cli_id)
+            now = time.time()
+            if m["circuit_state"] == "OPEN":
+                if now >= m["cooldown_until"]:
+                    m["circuit_state"] = "HALF_OPEN"
+                    m["health_status"] = "degraded"
+                    return "HALF_OPEN"
+            return m["circuit_state"]
+
+    def is_circuit_open(self, cli_id: str) -> bool:
+        return self.get_circuit_state(cli_id) == "OPEN"
+
+    def get_provider_health_score(self, cli_id: str) -> float:
+        """Returns a scalar score for provider selection (higher score = higher priority)."""
+        with self._lock:
+            m = self._get_or_create(cli_id)
+            c_state = self.get_circuit_state(cli_id)
+            if c_state == "OPEN":
+                return -1000.0  # Penalize tripped circuits heavily
+            base = 100.0
+            if c_state == "HALF_OPEN":
+                base -= 30.0
+            # Deduct for high latency EMA
+            base -= min(50.0, m["latency_ema"] * 5.0)
+            # Deduct for consecutive failures
+            base -= (m["consecutive_failures"] * 15.0)
+            # Add weighting for quota availability
+            base += (m["quota_remaining_percent"] * 0.2)
+            return max(0.0, base)
+
+    def get_prioritized_providers(self, candidate_ids: list[str]) -> list[str]:
+        """Sort candidate CLI provider IDs dynamically by health score, latency, and quota."""
+        return sorted(candidate_ids, key=self.get_provider_health_score, reverse=True)
+
+    def get_all_health_statuses(self) -> dict[str, Any]:
+        with self._lock:
+            now = time.time()
+            out = {}
+            for cid in CLI_DEFINITIONS:
+                m = self._get_or_create(cid)
+                c_state = self.get_circuit_state(cid)
+                out[cid] = {
+                    "cli_id": cid,
+                    "name": CLI_DEFINITIONS[cid].name,
+                    "health_status": m["health_status"],
+                    "circuit_state": c_state,
+                    "latency_ema_ms": round(m["latency_ema"] * 1000, 2),
+                    "consecutive_failures": m["consecutive_failures"],
+                    "quota_remaining_percent": m["quota_remaining_percent"],
+                    "cooldown_remaining_sec": max(0, int(m["cooldown_until"] - now)) if c_state == "OPEN" else 0,
+                    "last_error": m["last_error"],
+                }
+            return out
+
+    def reset(self) -> None:
+        with self._lock:
+            self.metrics.clear()
+
+
+HEALTH_TRACKER = ProviderHealthTracker()
+
+
+def record_provider_success(cli_id: str, latency_sec: float) -> None:
+    HEALTH_TRACKER.record_success(cli_id, latency_sec)
+
+
+def record_provider_failure(
+    cli_id: str,
+    error_msg: str,
+    latency_sec: float = 0.0,
+    quota_exceeded: bool = False,
+) -> None:
+    HEALTH_TRACKER.record_failure(cli_id, error_msg, latency_sec, quota_exceeded)
+
+
+def is_provider_circuit_open(cli_id: str) -> bool:
+    return HEALTH_TRACKER.is_circuit_open(cli_id)
+
+
+def get_prioritized_providers(candidate_ids: list[str]) -> list[str]:
+    return HEALTH_TRACKER.get_prioritized_providers(candidate_ids)
+
+
+def get_provider_health_metrics() -> dict[str, Any]:
+    return HEALTH_TRACKER.get_all_health_statuses()
+
+
+def reset_provider_health_metrics() -> None:
+    HEALTH_TRACKER.reset()
+

@@ -3487,7 +3487,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         
         # Inject workspace alignment preferences if present and not currently initiating a new grill prompt
         align_ctx = get_workspace_alignment_context(cwd_path)
-        if align_ctx and not prompt.startswith("[SYSTEM: INTERACTIVE GRILL-ME MODE INITIATED]"):
+        if align_ctx and not (prompt.startswith("[SYSTEM: INTERACTIVE GRILL") or prompt.startswith("[SYSTEM: GRILL")):
             prompt = prompt + align_ctx
 
         return run_selected_cli(
@@ -3506,16 +3506,23 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
 
     msg_lower = message.strip().lower()
 
-    if msg_lower.startswith("/grill-me"):
+    if msg_lower.startswith("/grill-me") or msg_lower.startswith("/grill-with-docs"):
+        is_docs_mode = msg_lower.startswith("/grill-with-docs")
         # Initialize the 3-step grill interview state
         interview_states[actual_cid] = {
-            "mode": "grill",
+            "mode": "grill-with-docs" if is_docs_mode else "grill",
             "answers": []
         }
         
+        mode_label = "GRILL-WITH-DOCS" if is_docs_mode else "GRILL-ME"
+        docs_instruction = (
+            " Ground your questions in project documentation (CONTEXT.md, docs/adr/, software specs, and alignment_preferences.json)."
+            if is_docs_mode else ""
+        )
+        
         grill_init_prompt = (
-            "[SYSTEM: INTERACTIVE GRILL-ME MODE INITIATED (QUESTION 1 OF 3)]\n"
-            "The user wants to align on design decisions and project requirements for this workspace using an interactive grill-me interview.\n"
+            f"[SYSTEM: INTERACTIVE {mode_label} MODE INITIATED (QUESTION 1 OF 3)]\n"
+            f"The user wants to align on design decisions and project requirements for this workspace using an interactive {mode_label.lower()} interview.{docs_instruction}\n"
             "Please analyze the workspace files and codebase context to identify 3 important open questions, design choices, configuration options, tech stack preferences, or architectural trade-offs that need user alignment.\n"
             "Generate Question 1 of 3 in the following JSON format so the UI can render an interactive question card.\n"
             "Output ONLY the JSON object, with no markdown code blocks or extra text outside the JSON.\n\n"
@@ -3533,15 +3540,19 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         
         reply, resolved_cid = execute_selected(grill_init_prompt)
         
-        # Clean JSON format by stripping markdown formatting if present
+        # Clean JSON format by extracting JSON structure or stripping markdown formatting if present
         reply_clean = reply.strip()
-        if reply_clean.startswith("```json"):
-            reply_clean = reply_clean[7:]
-        if reply_clean.startswith("```"):
-            reply_clean = reply_clean[3:]
-        if reply_clean.endswith("```"):
-            reply_clean = reply_clean[:-3]
-        reply_clean = reply_clean.strip()
+        json_match = re.search(r'(\{[\s\S]*?"type"\s*:\s*"question"[\s\S]*?\})', reply_clean)
+        if json_match:
+            reply_clean = json_match.group(1).strip()
+        else:
+            if reply_clean.startswith("```json"):
+                reply_clean = reply_clean[7:]
+            elif reply_clean.startswith("```"):
+                reply_clean = reply_clean[3:]
+            if reply_clean.endswith("```"):
+                reply_clean = reply_clean[:-3]
+            reply_clean = reply_clean.strip()
         
         is_valid_q = False
         try:
@@ -3559,6 +3570,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     elif actual_cid in interview_states:
         state = interview_states[actual_cid]
         user_response = message.strip()
+        is_docs_mode = state.get("mode") == "grill-with-docs"
         
         state.setdefault("answers", []).append({
             "step": len(state.get("answers", [])) + 1,
@@ -3573,8 +3585,9 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         
         if num_answers < 3:
             next_q_num = num_answers + 1
+            mode_label = "GRILL-WITH-DOCS" if is_docs_mode else "GRILL-ME"
             grill_continue_prompt = (
-                f"[SYSTEM: GRILL-ME INTERVIEW - QUESTION {next_q_num} OF 3]\n"
+                f"[SYSTEM: {mode_label} INTERVIEW - QUESTION {next_q_num} OF 3]\n"
                 f"The user selected/responded to Question {num_answers}: \"{user_response}\"\n\n"
                 f"Previous responses collected in this session:\n{history_summary}\n\n"
                 f"Please analyze the workspace context and previous answers, then output Question {next_q_num} of 3 in the exact JSON format below.\n"
@@ -3593,13 +3606,17 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             reply, resolved_cid = execute_selected(grill_continue_prompt)
             
             reply_clean = reply.strip()
-            if reply_clean.startswith("```json"):
-                reply_clean = reply_clean[7:]
-            if reply_clean.startswith("```"):
-                reply_clean = reply_clean[3:]
-            if reply_clean.endswith("```"):
-                reply_clean = reply_clean[:-3]
-            reply_clean = reply_clean.strip()
+            json_match = re.search(r'(\{[\s\S]*?"type"\s*:\s*"question"[\s\S]*?\})', reply_clean)
+            if json_match:
+                reply_clean = json_match.group(1).strip()
+            else:
+                if reply_clean.startswith("```json"):
+                    reply_clean = reply_clean[7:]
+                elif reply_clean.startswith("```"):
+                    reply_clean = reply_clean[3:]
+                if reply_clean.endswith("```"):
+                    reply_clean = reply_clean[:-3]
+                reply_clean = reply_clean.strip()
             
             is_valid_q = False
             try:
@@ -3617,15 +3634,21 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         else:
             # 3 questions answered! Conclude interview & trigger implementation
             del interview_states[actual_cid]
+            mode_label = "GRILL-WITH-DOCS" if is_docs_mode else "GRILL-ME"
+            docs_reqs = (
+                "\n4. Update CONTEXT.md with any new domain terminology, architecture choices, or state rules.\n"
+                "5. Create a new Architecture Decision Record (ADR) file under docs/adr/NNNN-<title>.md documenting context, decision, and consequences."
+                if is_docs_mode else ""
+            )
             
             grill_finish_prompt = (
-                "[SYSTEM: GRILL-ME INTERVIEW COMPLETED - IMPLEMENTATION & FINAL SUMMARY]\n"
-                f"The user has completed all 3 questions in the interactive grill-me alignment interview.\n\n"
+                f"[SYSTEM: {mode_label} INTERVIEW COMPLETED - IMPLEMENTATION & FINAL SUMMARY]\n"
+                f"The user has completed all 3 questions in the interactive {mode_label.lower()} alignment interview.\n\n"
                 f"User Selected Answers:\n{history_summary}\n\n"
                 "You MUST do the following:\n"
                 "1. Briefly summarize the 3 design/requirement decisions made by the user.\n"
                 "2. Proceed IMMEDIATELY to implement all 3 chosen preferences into the workspace codebase. Modify or create all necessary project files, code components, or configuration files to reflect the user's selected choices.\n"
-                "3. Provide a concise summary of the implementation actions and code changes executed."
+                f"3. Provide a concise summary of the implementation actions and code changes executed.{docs_reqs}"
             )
             
             reply, resolved_cid = execute_selected(grill_finish_prompt)
@@ -3731,6 +3754,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             "- `/goal <task>`: Start an extra-thorough, goal-oriented workflow on the workspace.\n"
             "- `/browser <task>`: Command browser subagent for web tasks.\n"
             "- `/grill-me`: Start an interactive design/requirement alignment session and save preferences.\n"
+            "- `/grill-with-docs`: Start an interactive documentation-driven architecture alignment session (updates CONTEXT.md & generates ADRs).\n"
             "- `/learn <instruction>`: Instruct me to remember a specific rule or config for this workspace.\n"
             "- `@<filename>`: Reference file context in your message.\n\n"
             "Using model: **" + model + "** on target **" + target + "** inside workspace **" + workspace + "**."

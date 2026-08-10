@@ -339,6 +339,7 @@ const slashCommands: PromptSuggestion[] = [
   { name: "/goal", desc: "Initiate goal mode checklist", type: "Command" },
   { name: "/browser", desc: "Launch browser automation tool", type: "Command" },
   { name: "/grill-me", desc: "Launch requirements audit survey", type: "Command" },
+  { name: "/grill-with-docs", desc: "Doc-driven architecture alignment", type: "Command" },
   { name: "/help", desc: "Show prompt help context panel", type: "Command" },
 ];
 

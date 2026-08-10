@@ -1,11 +1,22 @@
 {
   "project": "KookAI",
-  "timestamp": "2026-08-02T16:23:59.520577",
-  "summary": "# Design Alignment Summary\n\nDate: 2026-08-02T16:23:59.520577\n\n# Design & Architecture Alignment Summary\n\nThe alignment interview for **agy-mobile** (KookAI) has been concluded.\n\n### Key Decisions Aligned\n1. **Model Provider Fallback & Failover**:\n   - **Preference**: Automatic failover to the next available configured provider in priority order with real-time UI status notifications.\n   - **Status**: Captured & Implemented.\n\n---\n\n### Workspace Application & Persistence\n- **Storage Location**: Alignment decisions are saved to alignment_preferences.json.\n- **Codebase Application**: Backend orchestration (in cli_manager.py and main.py) will enforce provider failover priorities and dispatch status updates to the UI layer.\n\n---\n\n**Alignment is complete!** Let me know what feature, bug fix, or task you'd like to focus on next.",
+  "timestamp": "2026-08-10T20:33:00.000000",
+  "summary": "# Design Alignment Summary\n\nDate: 2026-08-10T20:33:00.000000\n\n# Design & Architecture Alignment Summary\n\nThe alignment interview for **KookAI** has been concluded with 3 core architecture decisions:\n\n### Key Decisions Aligned\n1. **Dynamic Provider Prioritization**:\n   - **Preference**: Dynamic priority based on real-time provider health, latency, and quota availability tracked by `cli_manager.py`.\n   - **Status**: Captured & Implemented.\n\n2. **Real-time Event Streaming (SSE)**:\n   - **Preference**: Server-Sent Events (SSE) streaming real-time status notifications and provider failover alerts to web and mobile clients.\n   - **Status**: Captured & Implemented.\n\n3. **Resilience, Circuit Breaker & Degraded Response**:\n   - **Preference**: Exponential backoff retries with automated circuit breaker cooldowns and a graceful degraded response if all providers remain unavailable.\n   - **Status**: Captured & Implemented.\n\n---\n\n### Workspace Application & Persistence\n- **Storage Location**: Alignment decisions are saved to `alignment_preferences.json`.\n- **Codebase Application**: Backend orchestration (in `cli_manager.py` and `main.py`) enforces real-time health tracking, SSE streaming, circuit breaker cooldowns, exponential backoff retries, and graceful degraded responses.\n\n---\n\n**Alignment is complete!**",
   "answers": [
     {
       "step": 1,
-      "answer": "Automatic failover to next available configured provider in priority order with real-time UI status notifications."
+      "question": "Provider Failover & Dynamic Prioritization",
+      "answer": "Dynamic priority based on real-time provider health, latency, and quota availability tracked by cli_manager.py"
+    },
+    {
+      "step": 2,
+      "question": "Real-time Notification Architecture",
+      "answer": "Server-Sent Events (SSE) streaming real-time status notifications and provider failover alerts to web and mobile clients"
+    },
+    {
+      "step": 3,
+      "question": "Error Recovery & Failover Resilience",
+      "answer": "Exponential backoff retries with automated circuit breaker cooldowns and a graceful degraded response if all providers remain unavailable"
     }
   ]
 }
