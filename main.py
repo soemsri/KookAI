@@ -36,6 +36,7 @@ import urllib.parse
 import urllib.request
 import datetime
 import time
+import errno
 from collections import deque
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
@@ -1505,6 +1506,26 @@ WINDOWS_RESERVED_PROJECT_NAMES = {
     *(f"COM{number}" for number in range(1, 10)),
     *(f"LPT{number}" for number in range(1, 10)),
 }
+
+
+# Keep user-supplied project identifiers well below per-component filesystem
+# limits (typically 255 bytes on Linux). This prevents malformed client input
+# from reaching a filesystem API as a path.
+MAX_PROJECT_ID_BYTES = 200
+
+
+def validate_project_identifier(project_id: str) -> str:
+    if not isinstance(project_id, str):
+        raise ValueError("Invalid project ID")
+
+    project_id = clean_project_name(project_id)
+    if not project_id or os.path.basename(project_id) != project_id:
+        raise ValueError(f"Invalid project ID: {project_id!r}")
+    if "\x00" in project_id:
+        raise ValueError("Invalid project ID contains a null byte")
+    if len(project_id.encode("utf-8")) > MAX_PROJECT_ID_BYTES:
+        raise ValueError("Invalid project ID: value is too long")
+    return project_id
 
 
 def validate_new_project_name(project_name: str) -> str:

@@ -138,9 +138,11 @@ def make_muse_conversation_id(session_id: str) -> str:
 
 
 def _is_runnable_muse(path: str) -> bool:
-    if not path or not os.path.isfile(path):
+    if not path:
         return False
     try:
+        if not os.path.isfile(path):
+            return False
         probe = subprocess.run(
             [path, "--version"],
             stdin=subprocess.DEVNULL,

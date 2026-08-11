@@ -252,9 +252,11 @@ def _config_codex_cli_path() -> Optional[str]:
 
 
 def _is_runnable_codex(path: str) -> bool:
-    if not path or not os.path.isfile(path):
+    if not path:
         return False
     try:
+        if not os.path.isfile(path):
+            return False
         probe = subprocess.run(
             [path, "--version"],
             stdin=subprocess.DEVNULL,
