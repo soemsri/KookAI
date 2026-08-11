@@ -976,7 +976,10 @@ DEFAULT_INTERVIEW_QUESTIONS = [
 
 def get_workspace_alignment_context(cwd_path: str) -> str:
     """Read alignment_preferences.json or workspace rules and return formatted system prompt instructions."""
-    if not cwd_path or not os.path.exists(cwd_path):
+    try:
+        if not cwd_path or len(cwd_path.encode("utf-8")) > 255 or not os.path.exists(cwd_path):
+            return ""
+    except (OSError, ValueError):
         return ""
     
     pref_file = os.path.join(cwd_path, "alignment_preferences.json")
@@ -1609,33 +1612,44 @@ def get_desktop_projects():
 
 
 def resolve_project_directory(project_id: str) -> str:
-    if not project_id or os.path.basename(project_id) != project_id:
+    if not project_id:
         raise ValueError(f"Invalid project ID: {project_id!r}")
+    try:
+        if os.path.basename(project_id) != project_id:
+            raise ValueError(f"Invalid project ID: {project_id!r}")
+    except (OSError, ValueError) as e:
+        raise ValueError(f"Invalid project ID: {project_id!r}") from e
 
     for project_root in PROJECTS_ROOTS:
-        if not os.path.isdir(project_root):
-            continue
-        root_realpath = os.path.realpath(project_root)
         try:
+            if not os.path.isdir(project_root):
+                continue
+            root_realpath = os.path.realpath(project_root)
             entries = os.listdir(project_root)
         except OSError as e:
             logging.error(f"Error reading project root {project_root}: {e}")
             continue
         for entry in entries:
-            full_path = os.path.join(project_root, entry)
-            if not os.path.isdir(full_path) or entry.startswith(".") or entry in IGNORED_SYSTEM_DIRS:
+            try:
+                full_path = os.path.join(project_root, entry)
+                if not os.path.isdir(full_path) or entry.startswith(".") or entry in IGNORED_SYSTEM_DIRS:
+                    continue
+                if clean_project_name(entry) == project_id:
+                    resolved_path = os.path.realpath(full_path)
+                    if os.path.commonpath([resolved_path, root_realpath]) == root_realpath:
+                        return full_path
+            except (OSError, ValueError):
                 continue
-            if clean_project_name(entry) == project_id:
-                resolved_path = os.path.realpath(full_path)
-                if os.path.commonpath([resolved_path, root_realpath]) == root_realpath:
-                    return full_path
 
     # Safe fallback specifically for default 'agy' project ID from mobile app
     if project_id == "agy":
         for project_root in PROJECTS_ROOTS:
-            candidate = os.path.join(project_root, "KookAI")
-            if os.path.isdir(candidate):
-                return candidate
+            try:
+                candidate = os.path.join(project_root, "KookAI")
+                if os.path.isdir(candidate):
+                    return candidate
+            except (OSError, ValueError):
+                pass
         return os.getcwd()
 
     raise ValueError(
@@ -1645,8 +1659,11 @@ def resolve_project_directory(project_id: str) -> str:
 
 def resolve_workspace_dir_safely(workspace_str: str) -> str:
     """Safely resolve a workspace string (which may be an absolute path or a project name) to a directory."""
-    if workspace_str and os.path.isabs(workspace_str) and os.path.isdir(workspace_str):
-        return workspace_str
+    try:
+        if workspace_str and len(workspace_str.encode("utf-8")) <= 255 and os.path.isabs(workspace_str) and os.path.isdir(workspace_str):
+            return workspace_str
+    except (OSError, ValueError):
+        pass
     project_id = clean_project_name(workspace_str or "agy")
     try:
         return resolve_project_directory(project_id)

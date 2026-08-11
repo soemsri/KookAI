@@ -73,7 +73,7 @@ Today we are demonstrating KookAI.
         self.assertEqual(dropped, 0)
 
     def test_extract_video_target(self):
-        from video_processor import extract_video_target
+        from video_processor import extract_video_target, is_video_source
         self.assertIsNone(extract_video_target("/watch สวัสดี"))
         self.assertIsNone(extract_video_target("/watch help"))
         self.assertEqual(
@@ -84,6 +84,10 @@ Today we are demonstrating KookAI.
             extract_video_target("/watch", attached_media=["/tmp/test.mp4"]),
             "/tmp/test.mp4"
         )
+        # Test long prompt string (Thai text > 255 bytes) does not throw Errno 36 File name too long
+        long_prompt = "ตรวจสอบให้หน่อยว่า error จากอะไรเมื่อใส่ prompt นี้ใน project 3D \"สอบถามว่าตอนนี้เราสามารถ prompt ว่า \" สร้าง knight พร้อมท่า เดิน วิ่ง ฟัน กระโดด นั่ง ลงในฉากสนามรบ\" แล้วเราจะมีระบบออกมาทดสอบได้เลยไหม\""
+        self.assertFalse(is_video_source(long_prompt))
+        self.assertIsNone(extract_video_target(long_prompt))
 
     def test_multi_key_whisper_rotation(self):
         import os

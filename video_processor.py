@@ -85,16 +85,24 @@ def is_video_source(source: str) -> bool:
             return True
         path_suffix = Path(urlparse(s).path).suffix.lower()
         return path_suffix in VIDEO_EXTENSIONS
-    p = Path(s).expanduser()
-    return p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+    try:
+        if len(s.encode("utf-8")) > 255 or "\x00" in s or "\n" in s or "\r" in s:
+            return False
+        p = Path(s).expanduser()
+        return p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+    except (OSError, ValueError):
+        return False
 
 
 def extract_video_target(message_text: str, attached_media: list[str] | None = None) -> str | None:
     """Find a valid video URL or file path in the message text or attached media."""
     if attached_media:
         for path in attached_media:
-            if Path(path).suffix.lower() in VIDEO_EXTENSIONS:
-                return path
+            try:
+                if len(path.encode("utf-8")) <= 255 and Path(path).suffix.lower() in VIDEO_EXTENSIONS:
+                    return path
+            except (OSError, ValueError):
+                pass
 
     tokens = message_text.strip().split()
     for token in tokens:
@@ -103,10 +111,11 @@ def extract_video_target(message_text: str, attached_media: list[str] | None = N
             return clean_token
         if not is_url(clean_token):
             try:
-                p = Path(clean_token).expanduser()
-                if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS:
-                    return str(p)
-            except Exception:
+                if len(clean_token.encode("utf-8")) <= 255:
+                    p = Path(clean_token).expanduser()
+                    if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS:
+                        return str(p)
+            except (OSError, ValueError):
                 pass
 
     msg_trim = message_text.strip()
