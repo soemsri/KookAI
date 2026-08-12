@@ -71,14 +71,28 @@ class ModelCatalogTests(unittest.TestCase):
     def test_grok_models_are_available_by_display_name_and_cli_slug(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)
 
+        grok46 = resolve_catalog_model(catalog, "Grok 4.6")
+        grok46_cli = resolve_catalog_model(catalog, "grok-4.6")
         display_model = resolve_catalog_model(catalog, "Grok 4.5")
         cli_model = resolve_catalog_model(catalog, "grok-4.5")
+
+        self.assertIsNotNone(grok46)
+        self.assertEqual(grok46["provider"], "xai")
+        self.assertEqual(grok46["usage_bucket"], "xai")
+        self.assertEqual(grok46_cli["id"], "Grok 4.6")
 
         self.assertIsNotNone(display_model)
         self.assertEqual(display_model["provider"], "xai")
         self.assertEqual(display_model["usage_bucket"], "xai")
         self.assertEqual(display_model["capabilities"]["effort"], ["Low", "Medium", "High"])
         self.assertEqual(cli_model["id"], "Grok 4.5")
+
+    def test_deepseek_models_are_available(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+        deepseek = resolve_catalog_model(catalog, "DeepSeek Pro 0813")
+        self.assertIsNotNone(deepseek)
+        self.assertEqual(deepseek["provider"], "agy")
+        self.assertEqual(deepseek["usage_bucket"], "gpt")
 
     def test_muse_models_are_available_by_display_name_and_cli_slug(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)

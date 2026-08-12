@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 
 GROK_MODEL_MAP = {
+    "Grok 4.6": "grok-4.6",
     "Grok 4.5": "grok-4.5",
     "Grok 4.20 Reasoning": "grok-4.20",
     "Grok 4.20 Non-Reasoning": "grok-4.20-non-reasoning",
@@ -28,6 +29,7 @@ GROK_EFFORT_MAP = {
 }
 
 GROK_MODEL_EFFORTS = {
+    "Grok 4.6": {"low", "medium", "high"},
     "Grok 4.5": {"low", "medium", "high"},
 }
 

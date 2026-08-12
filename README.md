@@ -11,11 +11,11 @@
 ## ✨ Key Features
 
 - 🤖 **Multi-Provider AI CLI:** Integrated support for leading AI models and CLIs:
-  - **Antigravity (`agy`):** Gemini 2.5 Flash/Pro, Claude, GPT-OSS
+  - **Antigravity (`agy`):** Gemini 2.5 Flash/Pro, Claude, GPT-OSS, DeepSeek Pro 0813
   - **Codex (`codex`):** OpenAI 5.6 Sol / Terra / Luna
   - **Claude Code (`claude`):** Anthropic Claude 3.7 / 3.5
   - **Kimi Code (`kimi`):** Moonshot Kimi K3
-  - **xAI Grok (`grok`):** Grok 4.5 / 4.20 / Grok Build
+  - **xAI Grok (`grok`):** Grok 4.6 / 4.5 / 4.20 / Grok Build
   - **Meta Muse (`muse`):** Muse Spark 1.2
 - 🎥 **Universal Video Analysis & `/watch` Command:**
   - Extracts keyframes and audio tracks from YouTube, TikTok, Vimeo, direct URLs, or local video files (`.mp4`, `.mov`).
@@ -83,7 +83,7 @@ Sign up for free API keys at the [Groq Console](https://console.groq.com/keys) a
 | **Codex** | `codex` | 5.6 Sol, 5.6 Terra, 5.4 Mini | Effort (Low-Ultra), Speed (Fast/Std) |
 | **Claude Code** | `claude` | Claude 3.7 Sonnet, Opus | Effort (Low-Max), Extended Thinking |
 | **Kimi Code** | `kimi` | Kimi K3 | Stream-JSON, Resumable Session |
-| **xAI Grok** | `grok` | Grok 4.5, Grok Build 0.1 | Reasoning Effort (Low-High) |
+| **xAI Grok** | `grok` | Grok 4.6, Grok 4.5, Grok Build 0.1 | Reasoning Effort (Low-High) |
 | **Meta Muse** | `muse` | Muse Spark 1.2 | Effort (Low-High), Stream-JSON |
 
 ---

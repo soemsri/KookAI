@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-07-29.1",
+  "catalog_version": "2026-08-12.1",
   "default_model": "Gemini 3.5 Flash (High)",
   "models": [
     {
@@ -125,6 +125,17 @@
       "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
     },
     {
+      "id": "DeepSeek Pro 0813",
+      "label": "DeepSeek Pro 0813",
+      "description": "DeepSeek flagship reasoning and coding model",
+      "provider": "agy",
+      "cli_model": "DeepSeek Pro 0813",
+      "badge": "DeepSeek",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
       "id": "Kimi K3",
       "label": "Kimi K3",
       "description": "Native multimodal model for long-horizon coding",
@@ -134,6 +145,17 @@
       "usage_bucket": "gpt",
       "enabled": true,
       "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+    },
+    {
+      "id": "Grok 4.6",
+      "label": "Grok 4.6",
+      "description": "xAI next-generation flagship model for complex reasoning and coding",
+      "provider": "xai",
+      "cli_model": "grok-4.6",
+      "badge": "Grok",
+      "usage_bucket": "xai",
+      "enabled": true,
+      "capabilities": {"effort": ["Low", "Medium", "High"], "speed": [], "thinking": true, "thinking_required": true}
     },
     {
       "id": "Grok 4.5",

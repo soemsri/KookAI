@@ -11,14 +11,20 @@ import main
 
 class GrokBackendTests(unittest.TestCase):
     def test_model_provider_alias_and_effort_mapping(self):
+        self.assertEqual(grok_backend.grok_model_slug("Grok 4.6"), "grok-4.6")
         self.assertEqual(grok_backend.grok_model_slug("Grok 4.5"), "grok-4.5")
+        self.assertEqual(codex_backend.resolve_provider(None, "Grok 4.6"), "xai")
         self.assertEqual(codex_backend.resolve_provider(None, "Grok 4.5"), "xai")
+        self.assertEqual(
+            grok_backend.normalize_grok_effort("High", "Grok 4.6"),
+            ("High", "high"),
+        )
         self.assertEqual(
             grok_backend.normalize_grok_effort("High", "Grok 4.5"),
             ("High", "high"),
         )
         with self.assertRaises(ValueError):
-            codex_backend.resolve_provider("agy", "Grok 4.5")
+            codex_backend.resolve_provider("agy", "Grok 4.6")
 
     def test_build_new_sandbox_and_resumed_real_commands(self):
         sandbox_command = grok_backend.build_grok_command(

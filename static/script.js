@@ -116,6 +116,12 @@ document.addEventListener("DOMContentLoaded", () => {
     "Sonnet 4.6": { effort: true, extra: false }
   };
   let XAI_MODELS = {
+    "Grok 4.6": {
+      effort: true,
+      efforts: ["Low", "Medium", "High"],
+      extra: false,
+      thinkingRequired: true
+    },
     "Grok 4.5": {
       effort: true,
       efforts: ["Low", "Medium", "High"],
@@ -126,6 +132,7 @@ document.addEventListener("DOMContentLoaded", () => {
     "Grok Build 0.1": { effort: false, extra: false, thinkingRequired: true }
   };
   let XAI_MODEL_IDS = new Set([
+    "Grok 4.6",
     "Grok 4.5",
     "Grok 4.20 Reasoning",
     "Grok 4.20 Non-Reasoning",
