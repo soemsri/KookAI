@@ -2386,7 +2386,9 @@ allowQueue: false,
     const requestSpeed = options?.speed || selectedCodexSpeed;
     const requestThinking = options?.thinking ?? selectedClaudeThinking;
     const requestTarget = options?.target || selectedTarget;
-    const requestProject = options?.project || selectedProjectRef.current;
+    const rawProject = options?.project || selectedProjectRef.current;
+    const requestProject = (rawProject && rawProject.length <= 50 && !rawProject.includes('\n') && !rawProject.includes(' ')) ? rawProject : 'agy';
+    const safeProj = requestProject.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 30) || 'agy';
 
     // Add user message to display instantly (including local preview)
     const displayMsg = hasAttachments
@@ -2411,7 +2413,7 @@ allowQueue: false,
         && activeConvoProviderRef.current === requestProvider;
       const convoId = options?.conversationId || (shouldReuseConversation
       ? activeConvoIdRef.current
-      : `temp_${requestProject}_${Math.random().toString(36).substring(2, 11)}`);
+      : `temp_${safeProj}_${Math.random().toString(36).substring(2, 11)}`);
       if (!shouldReuseConversation || activeConvoIdRef.current !== convoId) {
         updateActiveConversation(convoId, requestProject, requestProvider);
       }

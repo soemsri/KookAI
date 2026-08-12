@@ -692,7 +692,18 @@ def launch_cli_login(cli_id: str, working_directory: str) -> dict[str, Any]:
         }
 
     login_line = _shell_login_line(executable, definition.connect_args)
-    cwd = os.path.abspath(working_directory)
+    try:
+        if (
+            working_directory
+            and len(working_directory.encode("utf-8")) <= 4096
+            and all(len(part.encode("utf-8")) <= 255 for part in working_directory.replace("\\", "/").split("/"))
+            and os.path.isdir(working_directory)
+        ):
+            cwd = os.path.abspath(working_directory)
+        else:
+            cwd = os.getcwd()
+    except (OSError, ValueError):
+        cwd = os.getcwd()
     if cli_id == "muse":
         import webbrowser
         try:

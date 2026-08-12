@@ -76,6 +76,8 @@ Today we are demonstrating KookAI.
         from video_processor import extract_video_target, is_video_source
         self.assertIsNone(extract_video_target("/watch สวัสดี"))
         self.assertIsNone(extract_video_target("/watch help"))
+        self.assertIsNone(extract_video_target("a" * 300))
+        self.assertFalse(is_video_source("a" * 300))
         self.assertEqual(
             extract_video_target("/watch https://youtu.be/dQw4w9WgXcQ เกิดอะไรขึ้น?"),
             "https://youtu.be/dQw4w9WgXcQ"

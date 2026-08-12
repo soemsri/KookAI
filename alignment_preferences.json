@@ -1,22 +1,77 @@
 {
   "project": "KookAI",
-  "timestamp": "2026-08-10T20:33:00.000000",
-  "summary": "# Design Alignment Summary\n\nDate: 2026-08-10T20:33:00.000000\n\n# Design & Architecture Alignment Summary\n\nThe alignment interview for **KookAI** has been concluded with 3 core architecture decisions:\n\n### Key Decisions Aligned\n1. **Dynamic Provider Prioritization**:\n   - **Preference**: Dynamic priority based on real-time provider health, latency, and quota availability tracked by `cli_manager.py`.\n   - **Status**: Captured & Implemented.\n\n2. **Real-time Event Streaming (SSE)**:\n   - **Preference**: Server-Sent Events (SSE) streaming real-time status notifications and provider failover alerts to web and mobile clients.\n   - **Status**: Captured & Implemented.\n\n3. **Resilience, Circuit Breaker & Degraded Response**:\n   - **Preference**: Exponential backoff retries with automated circuit breaker cooldowns and a graceful degraded response if all providers remain unavailable.\n   - **Status**: Captured & Implemented.\n\n---\n\n### Workspace Application & Persistence\n- **Storage Location**: Alignment decisions are saved to `alignment_preferences.json`.\n- **Codebase Application**: Backend orchestration (in `cli_manager.py` and `main.py`) enforces real-time health tracking, SSE streaming, circuit breaker cooldowns, exponential backoff retries, and graceful degraded responses.\n\n---\n\n**Alignment is complete!**",
+  "timestamp": "2026-08-10T20:45:00.000000",
+  "summary": "# Design & Architecture Alignment Summary\n\nDate: 2026-08-10\n\n### Key Decisions Aligned\n1. **Model Provider Fallback & Dynamic Failover**:\n   - **Preference**: Automatic failover to next available configured provider in priority order based on real-time health, latency, and quota availability tracked by `cli_manager.py` with real-time UI status notifications.\n   - **Status**: Captured & Implemented (ADR 0001).\n2. **Server Switcher & Pairing Protocol**:\n   - **Preference**: Persistent auth tokens with heartbeat validation, background multi-server status ping with auto-switch prompts, and local LAN QR fallback.\n   - **Status**: Documented in ADR 0002 & CONTEXT.md.\n3. **Video Processing & Multimodal Pipeline**:\n   - **Preference**: Hybrid downsampling failover, local/remote STT fallback, granular WebSocket progress dispatch, and LRU cache with immediate raw video purge.\n   - **Status**: Documented in ADR 0003 & CONTEXT.md.\n4. **Session Persistence & Parameter Matrix**:\n   - **Preference**: Unified canonical transcript store with on-the-fly CLI adapter synthesis, and semantic parameter abstraction matrix across model providers with safe degradation notifications.\n   - **Status**: Documented in ADR 0004 & CONTEXT.md.\n5. **Real-time Cross-Device Session Handoff & WebSocket State Synchronization Protocol**:\n   - **Preference**: WebSocket pub/sub token stream mirroring with master session locking, resumable ring buffer stream recovery, first-write-wins atomic mutex, and per-server heartbeat presence registry.\n   - **Status**: Documented in ADR 0005 & CONTEXT.md.",
   "answers": [
     {
       "step": 1,
       "question": "Provider Failover & Dynamic Prioritization",
-      "answer": "Dynamic priority based on real-time provider health, latency, and quota availability tracked by cli_manager.py"
+      "answer": "Automatic failover to next available configured provider in priority order based on real-time health, latency, and quota availability tracked by cli_manager.py with real-time UI status notifications."
     },
     {
       "step": 2,
-      "question": "Real-time Notification Architecture",
-      "answer": "Server-Sent Events (SSE) streaming real-time status notifications and provider failover alerts to web and mobile clients"
+      "question": "Server Switcher & Pairing Protocol",
+      "answer": "Persistent Auth Tokens with Instant Revocation & Heartbeat Validation"
     },
     {
       "step": 3,
-      "question": "Error Recovery & Failover Resilience",
-      "answer": "Exponential backoff retries with automated circuit breaker cooldowns and a graceful degraded response if all providers remain unavailable"
+      "question": "Multi-Server Availability",
+      "answer": "Background Multi-Server Ping with Auto-Switch Suggestion"
+    },
+    {
+      "step": 4,
+      "question": "Local Network Fallback",
+      "answer": "Local Network mDNS & LAN QR Code Fallback"
+    },
+    {
+      "step": 5,
+      "question": "Multimodal Failover Strategy",
+      "answer": "Hybrid Downsampling & Multimodal Provider Failover with Transcript Fallback"
+    },
+    {
+      "step": 6,
+      "question": "Speech-to-Text Fallback Strategy",
+      "answer": "Local ffmpeg Audio Chunking & Local Whisper Fallback with UI Warning Badge"
+    },
+    {
+      "step": 7,
+      "question": "Real-time Event Streaming",
+      "answer": "WebSocket & SSE Granular Step Event Dispatch (Download, Extract %, Transcribe, Generate)"
+    },
+    {
+      "step": 8,
+      "question": "Video Storage Lifecycle",
+      "answer": "LRU Video Asset Cache (1GB / 24h TTL) with Immediate Post-Extraction Raw Video Purge"
+    },
+    {
+      "step": 9,
+      "question": "Unified Conversation Session Persistence",
+      "answer": "Unified Canonical Transcript Store with On-the-Fly Adapter Synthesis"
+    },
+    {
+      "step": 10,
+      "question": "Cross-Provider Parameter Abstraction Matrix",
+      "answer": "Semantic Parameter Abstraction Mapping with UI Notifications for Unsupported Knobs"
+    },
+    {
+      "step": 11,
+      "question": "Real-time Cross-Device State Sync & Locking",
+      "answer": "WebSocket Pub/Sub Broadcast with Master Session Locking & Soft Handoff (Real-time token mirroring + 10s lock timeout)"
+    },
+    {
+      "step": 12,
+      "question": "Disconnection & Stream Recovery Protocol",
+      "answer": "Background Detached Execution with Resumable Stream Ring Buffer (60s ring buffer flush on reconnect, auto-commit to history)"
+    },
+    {
+      "step": 13,
+      "question": "Concurrent Command & Conflict Resolution",
+      "answer": "First-Write-Wins with Atomic Mutex Lock & Conflict Notification Toast (Reject concurrent commands with 409 Conflict & UI toast)"
+    },
+    {
+      "step": 14,
+      "question": "Multi-Server Presence & Subscription Lifecycle",
+      "answer": "Per-Server Heartbeat Presence with Server-Scoped WebSocket Subscriptions (15s ping/pong, local device registry)"
     }
   ]
 }

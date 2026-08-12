@@ -83,14 +83,19 @@ def is_video_source(source: str) -> bool:
         domain = urlparse(s).netloc.lower()
         if any(d in domain for d in ("youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "loom.com", "x.com", "twitter.com")):
             return True
-        path_suffix = Path(urlparse(s).path).suffix.lower()
-        return path_suffix in VIDEO_EXTENSIONS
+        try:
+            path_suffix = Path(urlparse(s).path).suffix.lower()
+            return path_suffix in VIDEO_EXTENSIONS
+        except Exception:
+            return False
     try:
-        if len(s.encode("utf-8")) > 255 or "\x00" in s or "\n" in s or "\r" in s:
+        if len(s.encode("utf-8")) > 4096 or "\x00" in s or "\n" in s or "\r" in s:
+            return False
+        if any(len(part.encode("utf-8")) > 255 for part in s.replace("\\", "/").split("/")):
             return False
         p = Path(s).expanduser()
         return p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
-    except (OSError, ValueError):
+    except (OSError, ValueError, Exception):
         return False
 
 
@@ -99,9 +104,9 @@ def extract_video_target(message_text: str, attached_media: list[str] | None = N
     if attached_media:
         for path in attached_media:
             try:
-                if len(path.encode("utf-8")) <= 255 and Path(path).suffix.lower() in VIDEO_EXTENSIONS:
+                if len(path.encode("utf-8")) <= 4096 and all(len(p.encode("utf-8")) <= 255 for p in path.replace("\\", "/").split("/")) and Path(path).suffix.lower() in VIDEO_EXTENSIONS:
                     return path
-            except (OSError, ValueError):
+            except Exception:
                 pass
 
     tokens = message_text.strip().split()
@@ -111,16 +116,19 @@ def extract_video_target(message_text: str, attached_media: list[str] | None = N
             return clean_token
         if not is_url(clean_token):
             try:
-                if len(clean_token.encode("utf-8")) <= 255:
+                if len(clean_token.encode("utf-8")) <= 4096 and all(len(p.encode("utf-8")) <= 255 for p in clean_token.replace("\\", "/").split("/")):
                     p = Path(clean_token).expanduser()
                     if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS:
                         return str(p)
-            except (OSError, ValueError):
+            except Exception:
                 pass
 
-    msg_trim = message_text.strip()
-    if is_video_source(msg_trim):
-        return msg_trim
+    try:
+        msg_trim = message_text.strip()
+        if is_video_source(msg_trim):
+            return msg_trim
+    except Exception:
+        pass
 
     return None
 
@@ -436,10 +444,13 @@ def extract_keyframes(
 # --- Subtitle & Whisper Transcription ---
 
 def parse_vtt(path: str) -> list[dict]:
-    p = Path(path)
-    if not p.exists():
+    try:
+        p = Path(path)
+        if not p.exists():
+            return []
+        text = p.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
         return []
-    text = p.read_text(encoding="utf-8", errors="ignore")
     lines = text.splitlines()
     segments = []
     i = 0
@@ -736,11 +747,16 @@ def process_video_source(
             if video_path:
                 break
     else:
-        p = Path(source).expanduser().resolve()
-        if not p.exists():
-            raise FileNotFoundError(f"Local video file not found: {p}")
-        video_path = str(p)
-        info = {"title": p.name, "url": str(p)}
+        try:
+            if len(source) > 1024:
+                raise FileNotFoundError(f"Local video file path is too long: {source[:50]}...")
+            p = Path(source).expanduser().resolve()
+            if not p.exists():
+                raise FileNotFoundError(f"Local video file not found: {p}")
+            video_path = str(p)
+            info = {"title": p.name, "url": str(p)}
+        except OSError as exc:
+            raise FileNotFoundError(f"Invalid local video file path: {exc}") from exc
 
     meta = get_video_metadata(video_path) if video_path else {}
     full_duration = meta.get("duration_seconds") or float(info.get("duration") or 0.0)

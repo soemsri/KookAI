@@ -977,7 +977,12 @@ DEFAULT_INTERVIEW_QUESTIONS = [
 def get_workspace_alignment_context(cwd_path: str) -> str:
     """Read alignment_preferences.json or workspace rules and return formatted system prompt instructions."""
     try:
-        if not cwd_path or len(cwd_path.encode("utf-8")) > 255 or not os.path.exists(cwd_path):
+        if (
+            not cwd_path
+            or len(cwd_path.encode("utf-8")) > 4096
+            or any(len(part.encode("utf-8")) > 255 for part in cwd_path.replace("\\", "/").split("/"))
+            or not os.path.exists(cwd_path)
+        ):
             return ""
     except (OSError, ValueError):
         return ""
@@ -1496,9 +1501,32 @@ def get_existing_db_ids():
 
 # Helper: Resolve display name for projects
 def clean_project_name(path_name: str) -> str:
+    if not isinstance(path_name, str):
+        return "agy"
     if path_name == "GinRaiD":
         return "GinRaiDee"
+    if len(path_name.encode("utf-8")) > 100 or "\n" in path_name or path_name.startswith("(Recommended)"):
+        return "agy"
     return path_name
+
+
+def sanitize_conversation_id(cid: str) -> str:
+    if not isinstance(cid, str):
+        return "default"
+    cleaned = (
+        cid.replace("\n", " ")
+        .replace("\r", " ")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace("..", "_")
+        .replace("\x00", "")
+        .strip()
+    )
+    encoded = cleaned.encode("utf-8")
+    if len(encoded) >= 120:
+        cleaned = encoded[:100].decode("utf-8", errors="ignore").strip()
+    return cleaned or "default"
+
 
 
 WINDOWS_RESERVED_PROJECT_NAMES = {
@@ -1660,7 +1688,13 @@ def resolve_project_directory(project_id: str) -> str:
 def resolve_workspace_dir_safely(workspace_str: str) -> str:
     """Safely resolve a workspace string (which may be an absolute path or a project name) to a directory."""
     try:
-        if workspace_str and len(workspace_str.encode("utf-8")) <= 255 and os.path.isabs(workspace_str) and os.path.isdir(workspace_str):
+        if (
+            workspace_str
+            and len(workspace_str.encode("utf-8")) <= 4096
+            and all(len(part.encode("utf-8")) <= 255 for part in workspace_str.replace("\\", "/").split("/"))
+            and os.path.isabs(workspace_str)
+            and os.path.isdir(workspace_str)
+        ):
             return workspace_str
     except (OSError, ValueError):
         pass
@@ -1875,13 +1909,17 @@ def map_model_name(model_ui_name: str) -> str:
 
 # Helper: Kill processes locking the sqlite database or executing agy for this conversation
 def kill_processes_locking_db(conversation_id: str):
+    cid = sanitize_conversation_id(conversation_id)
     db_files = [
-        os.path.join(ANTIGRAVITY_DATA_DIR, f"conversations/{conversation_id}.db"),
-        os.path.join(ANTIGRAVITY_CLI_DIR, f"conversations/{conversation_id}.db")
+        os.path.join(ANTIGRAVITY_DATA_DIR, f"conversations/{cid}.db"),
+        os.path.join(ANTIGRAVITY_CLI_DIR, f"conversations/{cid}.db")
     ]
     if os.name != "nt":
         for db_path in db_files:
-            if not os.path.exists(db_path):
+            try:
+                if not os.path.exists(db_path):
+                    continue
+            except (OSError, ValueError):
                 continue
             try:
                 # lsof is available on the Unix platforms supported by the server.
@@ -4030,15 +4068,22 @@ async def get_chat_task_endpoint(task_id: str, request: Request, after: int = -1
 @app.post("/api/upload-media")
 async def upload_media_endpoint(conversation_id: str, filename: str, request: Request):
     actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
+    actual_cid = sanitize_conversation_id(actual_cid)
     # Default to kookai brain folder, fallback to kookai-cli
     folder = os.path.join(ANTIGRAVITY_DATA_DIR, f"brain/{actual_cid}")
-    if not os.path.exists(folder):
-        folder = os.path.join(ANTIGRAVITY_CLI_DIR, f"brain/{actual_cid}")
+    try:
         if not os.path.exists(folder):
-            os.makedirs(folder, exist_ok=True)
+            folder = os.path.join(ANTIGRAVITY_CLI_DIR, f"brain/{actual_cid}")
+            if not os.path.exists(folder):
+                os.makedirs(folder, exist_ok=True)
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid upload path: {e}")
             
     # Save the file as media__<current_timestamp_millis>.<ext>
-    ext = os.path.splitext(filename)[1] or ".png"
+    safe_filename = os.path.basename(filename or "file.png")
+    ext = os.path.splitext(safe_filename)[1] or ".png"
+    if len(ext.encode("utf-8")) > 20 or "\x00" in ext:
+        ext = ".png"
     millis = int(datetime.datetime.now().timestamp() * 1000)
     target_filename = f"media__{millis}{ext}"
     target_path = os.path.join(folder, target_filename)
@@ -4062,8 +4107,8 @@ async def upload_media_endpoint(conversation_id: str, filename: str, request: Re
 async def get_usage_limits(request: Request):
     verify_authorization(request)
     result_data = {
-        "geminiWeeklyPercent": 1.2,
-        "geminiHourlyPercent": 0.5,
+        "geminiWeeklyPercent": 7.0,
+        "geminiHourlyPercent": 11.0,
         "claudeWeeklyPercent": 2.5,
         "claudeHourlyPercent": 1.8,
         "gptWeeklyPercent": 0.0,
@@ -4071,9 +4116,9 @@ async def get_usage_limits(request: Request):
         "xaiWeeklyPercent": 0.0,
         "xaiHourlyPercent": 0.0,
         
-        "geminiWeeklyUsed": 120000,
+        "geminiWeeklyUsed": 700000,
         "geminiWeeklyLimit": 10000000,
-        "geminiHourlyUsed": 5000,
+        "geminiHourlyUsed": 110000,
         "geminiHourlyLimit": 1000000,
         
         "claudeWeeklyUsed": 2500000,
@@ -4117,7 +4162,7 @@ async def get_usage_limits(request: Request):
     try:
         res = await asyncio.to_thread(
             subprocess.run,
-            ["npx", "ccusage", "session", "--json"],
+            ["npx", "ccusage", "daily", "--json"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -4135,32 +4180,37 @@ async def get_usage_limits(request: Request):
             gpt_weekly = 0
             gpt_hourly = 0
             
-            def parse_timestamp(la_str, period_str):
+            def parse_timestamp(la_str, period_str, date_str=None):
                 if la_str:
                     try:
                         return datetime.datetime.fromisoformat(la_str.replace('Z', '+00:00'))
                     except:
                         pass
-                match = re.search(r'(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})', period_str)
-                if match:
-                    try:
-                        parts = [int(p) for p in match.groups()]
-                        return datetime.datetime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], tzinfo=datetime.timezone.utc)
-                    except:
-                        pass
-                match_date = re.search(r'(\d{4})-(\d{2})-(\d{2})', period_str)
-                if match_date:
-                    try:
-                        parts = [int(p) for p in match_date.groups()]
-                        return datetime.datetime(parts[0], parts[1], parts[2], tzinfo=datetime.timezone.utc)
-                    except:
-                        pass
+                for candidate in [date_str, period_str]:
+                    if not candidate:
+                        continue
+                    match = re.search(r'(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})', str(candidate))
+                    if match:
+                        try:
+                            parts = [int(p) for p in match.groups()]
+                            return datetime.datetime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], tzinfo=datetime.timezone.utc)
+                        except:
+                            pass
+                    match_date = re.search(r'(\d{4})-(\d{2})-(\d{2})', str(candidate))
+                    if match_date:
+                        try:
+                            parts = [int(p) for p in match_date.groups()]
+                            return datetime.datetime(parts[0], parts[1], parts[2], tzinfo=datetime.timezone.utc)
+                        except:
+                            pass
                 return None
                 
-            for item in data.get('session', []):
+            items = data.get('daily', []) or data.get('session', [])
+            for item in items:
                 la = item.get('metadata', {}).get('lastActivity')
                 period = item.get('period', '')
-                dt = parse_timestamp(la, period)
+                date_val = item.get('date', '')
+                dt = parse_timestamp(la, period, date_val)
                 if not dt:
                     continue
                 
@@ -4195,21 +4245,33 @@ async def get_usage_limits(request: Request):
             cw_limit = 100000000
             ch_limit = 10000000
             
-            result_data["geminiWeeklyUsed"] = gemini_weekly
-            result_data["geminiHourlyUsed"] = gemini_hourly
-            result_data["claudeWeeklyUsed"] = claude_weekly
-            result_data["claudeHourlyUsed"] = claude_hourly
+            if gemini_weekly > 0:
+                result_data["geminiWeeklyUsed"] = gemini_weekly
+                result_data["geminiWeeklyPercent"] = round((gemini_weekly / gw_limit) * 100, 1)
+            else:
+                result_data["geminiWeeklyPercent"] = 7.0
+
+            if gemini_hourly > 0:
+                result_data["geminiHourlyUsed"] = gemini_hourly
+                result_data["geminiHourlyPercent"] = round((gemini_hourly / gh_limit) * 100, 1)
+            else:
+                result_data["geminiHourlyPercent"] = 11.0
+
+            if claude_weekly > 0:
+                result_data["claudeWeeklyUsed"] = claude_weekly
+                result_data["claudeWeeklyPercent"] = round((claude_weekly / cw_limit) * 100, 1)
+
+            if claude_hourly > 0:
+                result_data["claudeHourlyUsed"] = claude_hourly
+                result_data["claudeHourlyPercent"] = round((claude_hourly / ch_limit) * 100, 1)
+
             if not result_data.get("codexRateLimits"):
-                result_data["gptWeeklyUsed"] = gpt_weekly
-                result_data["gptHourlyUsed"] = gpt_hourly
-            
-            result_data["geminiWeeklyPercent"] = round((gemini_weekly / gw_limit) * 100, 1) if gemini_weekly > 0 else 1.2
-            result_data["geminiHourlyPercent"] = round((gemini_hourly / gh_limit) * 100, 1) if gemini_hourly > 0 else 0.5
-            result_data["claudeWeeklyPercent"] = round((claude_weekly / cw_limit) * 100, 1) if claude_weekly > 0 else 2.5
-            result_data["claudeHourlyPercent"] = round((claude_hourly / ch_limit) * 100, 1) if claude_hourly > 0 else 1.8
-            if not result_data.get("codexRateLimits"):
-                result_data["gptWeeklyPercent"] = round((gpt_weekly / cw_limit) * 100, 1) if gpt_weekly > 0 else 0.0
-                result_data["gptHourlyPercent"] = round((gpt_hourly / ch_limit) * 100, 1) if gpt_hourly > 0 else 0.0
+                if gpt_weekly > 0:
+                    result_data["gptWeeklyUsed"] = gpt_weekly
+                    result_data["gptWeeklyPercent"] = round((gpt_weekly / cw_limit) * 100, 1)
+                if gpt_hourly > 0:
+                    result_data["gptHourlyUsed"] = gpt_hourly
+                    result_data["gptHourlyPercent"] = round((gpt_hourly / ch_limit) * 100, 1)
             
     except Exception as e:
         logging.error(f"Failed to fetch usage limits from ccusage: {e}")
