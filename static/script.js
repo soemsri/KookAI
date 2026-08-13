@@ -173,6 +173,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextMuseModels = {};
     const groups = [
       ["agy", "Antigravity Models"],
+      ["deepseek", "DeepSeek Code CLI"],
       ["kimi", "Moonshot Kimi Code CLI"],
       ["xai", "xAI Grok Build CLI"],
       ["muse", "Meta Muse Code CLI"],
@@ -185,7 +186,7 @@ document.addEventListener("DOMContentLoaded", () => {
         !model
         || typeof model.id !== "string"
         || typeof model.label !== "string"
-        || !["agy", "claude", "codex", "kimi", "xai", "muse"].includes(model.provider)
+        || !["agy", "claude", "codex", "kimi", "xai", "muse", "deepseek"].includes(model.provider)
       ) {
         return;
       }
@@ -259,6 +260,8 @@ document.addEventListener("DOMContentLoaded", () => {
                   ? "Grok"
                   : provider === "muse"
                     ? "Muse"
+                    : provider === "deepseek"
+                      ? "DeepSeek"
                 : "AI"
         ));
         const badgeClass = provider === "codex"
@@ -271,6 +274,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? "grok"
                 : provider === "muse"
                   ? "muse"
+                  : provider === "deepseek"
+                    ? "deepseek"
             : badge.toLowerCase().replace(/[^a-z0-9_-]/g, "") || "gpt";
         return `
           <div class="dropdown-item" data-value="${escapeHtml(model.id)}">

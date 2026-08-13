@@ -10,8 +10,8 @@ from typing import Any, Optional
 
 
 SCHEMA_VERSION = 1
-PROVIDERS = {"agy", "claude", "codex", "kimi", "xai", "muse"}
-USAGE_BUCKETS = {"gemini", "claude", "gpt", "xai", "muse"}
+PROVIDERS = {"agy", "claude", "codex", "kimi", "xai", "muse", "deepseek"}
+USAGE_BUCKETS = {"gemini", "claude", "gpt", "xai", "muse", "deepseek"}
 EFFORT_VALUES = {
     "Light",
     "Low",

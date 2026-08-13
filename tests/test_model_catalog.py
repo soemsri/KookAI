@@ -89,10 +89,20 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_deepseek_models_are_available(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)
-        deepseek = resolve_catalog_model(catalog, "DeepSeek Pro 0813")
-        self.assertIsNotNone(deepseek)
-        self.assertEqual(deepseek["provider"], "agy")
-        self.assertEqual(deepseek["usage_bucket"], "gpt")
+        for model_name, cli_name in [
+            ("DeepSeek Pro 0813", "deepseek-pro-0813"),
+            ("DeepSeek V4", "deepseek-v4"),
+            ("DeepSeek R1", "deepseek-reasoner"),
+            ("DeepSeek V3", "deepseek-chat"),
+            ("DeepSeek Coder V2.5", "deepseek-coder"),
+            ("DeepSeek Coder 33B", "deepseek-coder-33b"),
+            ("DeepSeek Math 7B", "deepseek-math"),
+        ]:
+            deepseek = resolve_catalog_model(catalog, model_name)
+            self.assertIsNotNone(deepseek, f"Model {model_name} not resolved")
+            self.assertEqual(deepseek["provider"], "deepseek")
+            self.assertEqual(deepseek["usage_bucket"], "deepseek")
+            self.assertEqual(deepseek["cli_model"], cli_name)
 
     def test_muse_models_are_available_by_display_name_and_cli_slug(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)

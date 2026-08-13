@@ -19,6 +19,7 @@ from functools import lru_cache
 from typing import Any, Optional
 
 from claude_backend import is_claude_model
+from deepseek_backend import is_deepseek_model
 from grok_backend import is_grok_model
 from kimi_backend import is_kimi_model
 from muse_backend import is_muse_model
@@ -135,7 +136,7 @@ def is_codex_model(model_name: str) -> bool:
 
 def resolve_provider(provider: Optional[str], model_name: str) -> str:
     normalized = (provider or "").strip().lower()
-    if normalized and normalized not in {"agy", "codex", "claude", "kimi", "xai", "muse"}:
+    if normalized and normalized not in {"agy", "codex", "claude", "kimi", "xai", "muse", "deepseek"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
     if normalized == "codex" and not is_codex_model(model_name):
         raise ValueError(f"Model {model_name} is not a Codex model")
@@ -147,6 +148,8 @@ def resolve_provider(provider: Optional[str], model_name: str) -> str:
         raise ValueError(f"Model {model_name} is not an xAI model")
     if normalized == "muse" and not is_muse_model(model_name):
         raise ValueError(f"Model {model_name} is not a Meta Muse model")
+    if normalized == "deepseek" and not is_deepseek_model(model_name):
+        raise ValueError(f"Model {model_name} is not a DeepSeek model")
     if normalized == "agy" and is_codex_model(model_name):
         raise ValueError(f"Model {model_name} must use the Codex provider")
     if normalized == "agy" and is_claude_model(model_name):
@@ -157,6 +160,8 @@ def resolve_provider(provider: Optional[str], model_name: str) -> str:
         raise ValueError(f"Model {model_name} must use the xAI provider")
     if normalized == "agy" and is_muse_model(model_name):
         raise ValueError(f"Model {model_name} must use the Muse provider")
+    if normalized == "agy" and is_deepseek_model(model_name):
+        raise ValueError(f"Model {model_name} must use the DeepSeek provider")
     if normalized:
         return normalized
     if is_codex_model(model_name):
@@ -169,6 +174,8 @@ def resolve_provider(provider: Optional[str], model_name: str) -> str:
         return "xai"
     if is_muse_model(model_name):
         return "muse"
+    if is_deepseek_model(model_name):
+        return "deepseek"
     return "agy"
 
 

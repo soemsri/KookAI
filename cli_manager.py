@@ -109,6 +109,16 @@ CLI_DEFINITIONS: dict[str, CliDefinition] = {
         connect_help="Runs muse login and opens the Meta device authorization flow.",
         env_path="MUSE_CLI_PATH",
     ),
+    "deepseek": CliDefinition(
+        cli_id="deepseek",
+        name="DeepSeek Code",
+        executable="deepcode",
+        install_kind="native_deepseek",
+        install_source="https://api-docs.deepseek.com/quick_start/agent_integrations/deepcode/",
+        connect_args=("login",),
+        connect_help="Runs deepcode login and opens the DeepSeek device authorization flow.",
+        env_path="DEEPSEEK_CLI_PATH",
+    ),
 }
 
 _install_lock = threading.Lock()
@@ -215,6 +225,11 @@ def _known_cli_candidates(definition: CliDefinition) -> list[str]:
         candidates.extend(
             os.path.join(home, ".muse", "bin", executable_name)
             for executable_name in _candidate_executable_names("muse")
+        )
+    if definition.cli_id == "deepseek":
+        candidates.extend(
+            os.path.join(home, ".deepseek", "bin", executable_name)
+            for executable_name in _candidate_executable_names("deepcode") + _candidate_executable_names("deepseek")
         )
     return candidates
 

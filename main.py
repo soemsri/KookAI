@@ -103,6 +103,16 @@ from muse_backend import (
     parse_muse_streaming_json,
     resolve_muse_executable,
 )
+from deepseek_backend import (
+    DEEPSEEK_CONVERSATION_PREFIX,
+    build_deepseek_command,
+    classify_deepseek_progress_line,
+    configure_deepseek_catalog,
+    deepseek_session_id,
+    make_deepseek_conversation_id,
+    parse_deepseek_stream_json,
+    resolve_deepseek_executable,
+)
 from cli_manager import (
     auto_install_missing,
     get_cli_statuses,
@@ -188,6 +198,7 @@ def load_runtime_model_catalog() -> dict:
     configure_kimi_catalog(catalog["models"])
     configure_grok_catalog(catalog["models"])
     configure_muse_catalog(catalog["models"])
+    configure_deepseek_catalog(catalog["models"])
     return catalog
 
 def migrate_legacy_data_dir(old_path: str, new_path: str):
@@ -751,7 +762,7 @@ async def update_settings(payload: SettingsUpdate):
 @app.post("/api/cli/{cli_id}/install")
 async def install_cli_requirement(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
     status = await asyncio.to_thread(install_cli, cli_id)
     resolve_codex_executable.cache_clear()
@@ -759,6 +770,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
     resolve_kimi_executable.cache_clear()
     resolve_grok_executable.cache_clear()
     resolve_muse_executable.cache_clear()
+    resolve_deepseek_executable.cache_clear()
     return JSONResponse(
         status_code=200 if status["installed"] else 500,
         content={"cli": status},
@@ -768,7 +780,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
 @app.post("/api/cli/{cli_id}/connect")
 async def connect_cli_account(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
 
     statuses = {
@@ -827,6 +839,7 @@ async def update_models(request: Request):
         configure_kimi_catalog(catalog["models"])
         configure_grok_catalog(catalog["models"])
         configure_muse_catalog(catalog["models"])
+        configure_deepseek_catalog(catalog["models"])
     except (ModelCatalogError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(
@@ -1484,6 +1497,85 @@ def get_muse_conversations() -> List[dict]:
 def get_muse_conversation(conversation_id: str) -> Optional[dict]:
     with muse_conversations_lock:
         record = _load_muse_conversation_records().get(conversation_id)
+    return record if isinstance(record, dict) else None
+
+
+DEEPSEEK_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "deepseek_conversations.json")
+deepseek_conversations_lock = threading.Lock()
+
+
+def _load_deepseek_conversation_records() -> dict:
+    if not os.path.exists(DEEPSEEK_CONVERSATIONS_FILE):
+        return {}
+    try:
+        with open(DEEPSEEK_CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logging.error(f"Failed to load DeepSeek conversation history: {e}")
+        return {}
+
+
+def _save_deepseek_conversation_records(records: dict):
+    os.makedirs(os.path.dirname(DEEPSEEK_CONVERSATIONS_FILE), exist_ok=True)
+    temp_path = f"{DEEPSEEK_CONVERSATIONS_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, DEEPSEEK_CONVERSATIONS_FILE)
+
+
+def persist_deepseek_exchange(
+    conversation_id: str,
+    project: str,
+    model: str,
+    user_message: str,
+    assistant_message: str,
+):
+    if not conversation_id.startswith(DEEPSEEK_CONVERSATION_PREFIX):
+        return
+
+    now = datetime.datetime.now().timestamp()
+    with deepseek_conversations_lock:
+        records = _load_deepseek_conversation_records()
+        record = records.get(conversation_id, {})
+        messages = record.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        messages.extend([
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_message},
+        ])
+
+        clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", user_message).strip()
+        if not clean_title:
+            clean_title = "DeepSeek conversation"
+        if len(clean_title) > 40:
+            clean_title = clean_title[:40] + "..."
+
+        records[conversation_id] = {
+            "id": conversation_id,
+            "session_id": deepseek_session_id(conversation_id),
+            "title": record.get("title") or clean_title,
+            "project": project,
+            "provider": "deepseek",
+            "model": model,
+            "timestamp": now,
+            "messages": messages,
+        }
+        _save_deepseek_conversation_records(records)
+
+
+def get_deepseek_conversations() -> List[dict]:
+    with deepseek_conversations_lock:
+        records = _load_deepseek_conversation_records()
+    conversations = [value for value in records.values() if isinstance(value, dict)]
+    conversations.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
+    return conversations
+
+
+def get_deepseek_conversation(conversation_id: str) -> Optional[dict]:
+    with deepseek_conversations_lock:
+        record = _load_deepseek_conversation_records().get(conversation_id)
     return record if isinstance(record, dict) else None
 
 
@@ -2919,7 +3011,128 @@ def run_muse_cli(
         )
 
 
-PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "xai", "muse"]
+def run_deepseek_cli(
+    message: str,
+    model_ui_name: str,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    progress_callback=None,
+):
+    project_id = clean_project_name(workspace or "agy")
+    cwd_path = resolve_project_directory(project_id)
+    mapping_key = f"deepseek:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+    message_with_context = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+
+    def execute(run_conversation_id: Optional[str]):
+        stream_result = {"session_id": None, "parts": [], "errors": []}
+
+        def capture_deepseek_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_deepseek_stream_json(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["parts"].append(parsed_line["final_message"])
+            if parsed_line["errors"]:
+                stream_result["errors"].extend(parsed_line["errors"])
+
+        cmd = build_deepseek_command(
+            deepseek_path=resolve_deepseek_executable(),
+            prompt=message_with_context,
+            model_name=model_ui_name,
+            target=target,
+            conversation_id=run_conversation_id,
+            cwd_path=cwd_path,
+        )
+        logging.info(
+            "Executing DeepSeek Code CLI in %s with model=%s target=%s resume=%s",
+            cwd_path,
+            model_ui_name,
+            target,
+            bool(deepseek_session_id(run_conversation_id)),
+        )
+        result = run_agent_command(
+            cmd,
+            cwd_path,
+            timeout=AGY_CLI_TIMEOUT,
+            progress_callback=progress_callback,
+            progress_line_classifier=classify_deepseek_progress_line,
+            raw_line_callback=capture_deepseek_line,
+        )
+        parsed = parse_deepseek_stream_json(result.stdout or "")
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": "\n".join(stream_result["parts"]) if stream_result["parts"] else parsed["final_message"],
+            "errors": stream_result["errors"] or parsed["errors"],
+        }
+
+    try:
+        result, parsed = execute(actual_cid)
+        combined_error = "\n".join(
+            part
+            for part in [
+                (result.stderr or "").strip(),
+                "\n".join(parsed["errors"]).strip(),
+            ]
+            if part
+        )
+        recoverable_resume_error = deepseek_session_id(actual_cid) and any(
+            phrase in combined_error.lower()
+            for phrase in (
+                "session does not exist",
+                "session not found",
+                "failed to resume",
+                "unable to resume",
+            )
+        )
+        if result.returncode != 0 and recoverable_resume_error:
+            if progress_callback:
+                progress_callback(
+                    "progress",
+                    "DeepSeek session was unavailable; starting a fresh session.",
+                )
+            result, parsed = execute(None)
+            combined_error = "\n".join(
+                part
+                for part in [
+                    (result.stderr or "").strip(),
+                    "\n".join(parsed["errors"]).strip(),
+                ]
+                if part
+            )
+
+        session_id = parsed["session_id"]
+        resolved_cid = make_deepseek_conversation_id(session_id) if session_id else actual_cid
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+
+        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
+            return parsed["final_message"].strip(), resolved_cid
+
+        error_message = combined_error or "DeepSeek Code CLI did not return a final response."
+        return (
+            f"⚠️ **DeepSeek CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```",
+            resolved_cid,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("deepseek", exc), actual_cid
+    except Exception as e:
+        return (
+            "❌ **Execution Error**: Failed to run `deepseek` CLI. "
+            f"Install/authenticate DeepSeek Code or set `DEEPSEEK_CLI_PATH`. Details: `{str(e)}`",
+            actual_cid,
+        )
+
+
+PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "xai", "muse", "deepseek"]
 
 DEFAULT_PROVIDER_MODELS = {
     "agy": "Gemini 3.6 Flash (High)",
@@ -2928,6 +3141,7 @@ DEFAULT_PROVIDER_MODELS = {
     "kimi": "Kimi K3",
     "xai": "Grok 4.5",
     "muse": "Muse Spark 1.2",
+    "deepseek": "DeepSeek Pro 0813",
 }
 
 
@@ -2946,6 +3160,8 @@ def is_provider_available(prov: str) -> bool:
             return bool(resolve_grok_executable())
         elif prov == "muse":
             return bool(resolve_muse_executable())
+        elif prov == "deepseek":
+            return bool(resolve_deepseek_executable())
     except Exception:
         return False
     return False
@@ -3016,6 +3232,15 @@ def _invoke_provider_backend(
             effort,
             progress_callback,
         )
+    elif prov == "deepseek":
+        return run_deepseek_cli(
+            message,
+            prov_model,
+            conversation_id,
+            target,
+            workspace,
+            progress_callback,
+        )
     else:
         return run_agy_cli(
             message,
@@ -3052,7 +3277,7 @@ def run_selected_cli(
     selected_provider = (provider or "").strip().lower()
     if not selected_provider:
         selected_provider = resolve_provider(None, model_ui_name)
-    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai", "muse"}:
+    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai", "muse", "deepseek"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
 
     attempted_providers = set()
@@ -3227,7 +3452,8 @@ async def get_conversations(request: Request, project: Optional[str] = None):
     kimi_convos = get_kimi_conversations()
     grok_convos = get_grok_conversations()
     muse_convos = get_muse_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos
+    deepseek_convos = get_deepseek_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos + deepseek_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -3252,7 +3478,8 @@ async def get_chat_history(request: Request):
     kimi_convos = get_kimi_conversations()
     grok_convos = get_grok_conversations()
     muse_convos = get_muse_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos
+    deepseek_convos = get_deepseek_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos + deepseek_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -3277,6 +3504,7 @@ async def get_conversation_details(cid: str, request: Request):
     kimi_record = get_kimi_conversation(cid)
     grok_record = get_grok_conversation(cid)
     muse_record = get_muse_conversation(cid)
+    deepseek_record = get_deepseek_conversation(cid)
 
     # First check memory cache
     if cid in in_memory_chats:
@@ -3308,6 +3536,10 @@ async def get_conversation_details(cid: str, request: Request):
             provider = "muse"
             model = muse_record.get("model")
             effort = muse_record.get("effort")
+        elif deepseek_record:
+            project = deepseek_record.get("project")
+            provider = "deepseek"
+            model = deepseek_record.get("model")
     elif codex_record:
         messages = codex_record.get("messages", [])
         project = codex_record.get("project")
@@ -3344,6 +3576,12 @@ async def get_conversation_details(cid: str, request: Request):
         provider = "muse"
         model = muse_record.get("model")
         effort = muse_record.get("effort")
+        in_memory_chats[cid] = messages
+    elif deepseek_record:
+        messages = deepseek_record.get("messages", [])
+        project = deepseek_record.get("project")
+        provider = "deepseek"
+        model = deepseek_record.get("model")
         in_memory_chats[cid] = messages
     else:
         # Check seed conversations
@@ -3494,6 +3732,11 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     elif provider == "muse":
         actual_cid = convo_id_mapping.get(
             f"muse:{project_id}:{conversation_id}",
+            conversation_id,
+        )
+    elif provider == "deepseek":
+        actual_cid = convo_id_mapping.get(
+            f"deepseek:{project_id}:{conversation_id}",
             conversation_id,
         )
     else:
@@ -3908,6 +4151,14 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             project_id,
             model,
             effort if capabilities["effort"] else None,
+            user_visible_message,
+            reply,
+        )
+    elif provider == "deepseek":
+        persist_deepseek_exchange(
+            resolved_cid,
+            project_id,
+            model,
             user_visible_message,
             reply,
         )

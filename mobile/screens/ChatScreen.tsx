@@ -155,7 +155,13 @@ const FALLBACK_MODELS: ModelOption[] = [
   { value: "Claude Sonnet 4.6 (Thinking)", desc: "Advanced reasoning with thinking trace", provider: "agy" },
   { value: "Claude Opus 4.6 (Thinking)", desc: "Highest reasoning capacity model", provider: "agy" },
   { value: "GPT-OSS 120B (Medium)", desc: "Open-source large scale LLM", provider: "agy" },
-  { value: "DeepSeek Pro 0813", desc: "DeepSeek flagship reasoning and coding model", provider: "agy", badge: "DeepSeek", usageBucket: "gpt", thinkingRequired: true },
+  { value: "DeepSeek Pro 0813", desc: "DeepSeek flagship reasoning and coding model", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek", thinkingRequired: true },
+  { value: "DeepSeek V4", desc: "DeepSeek next-generation flagship model", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek" },
+  { value: "DeepSeek R1", desc: "DeepSeek open reasoning model with advanced chain-of-thought", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek", thinkingRequired: true },
+  { value: "DeepSeek V3", desc: "DeepSeek 671B parameter Mixture-of-Experts chat model", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek" },
+  { value: "DeepSeek Coder V2.5", desc: "DeepSeek specialized code generation and refactoring model", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek" },
+  { value: "DeepSeek Coder 33B", desc: "DeepSeek open-weights 33B code generation model", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek" },
+  { value: "DeepSeek Math 7B", desc: "DeepSeek specialized mathematical reasoning model", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek" },
   { value: "Kimi K3", desc: "Native multimodal model for long-horizon coding", provider: "kimi", badge: "Kimi", usageBucket: "gpt", thinkingRequired: true },
   { value: "Grok 4.6", desc: "xAI next-generation flagship model for complex reasoning and coding", provider: "xai", badge: "Grok", usageBucket: "xai", supportsClaudeEffort: true, claudeEfforts: ["Low", "Medium", "High"], thinkingRequired: true },
   { value: "Grok 4.5", desc: "xAI flagship model for coding, agents, and knowledge work", provider: "xai", badge: "Grok", usageBucket: "xai", supportsClaudeEffort: true, claudeEfforts: ["Low", "Medium", "High"], thinkingRequired: true },
@@ -231,6 +237,7 @@ const isClaudeModel = (modelName: string) => getModelOption(modelName)?.provider
 const isKimiModel = (modelName: string) => getModelOption(modelName)?.provider === "kimi";
 const isXaiModel = (modelName: string) => getModelOption(modelName)?.provider === "xai";
 const isMuseModel = (modelName: string) => getModelOption(modelName)?.provider === "muse";
+const isDeepSeekModel = (modelName: string) => getModelOption(modelName)?.provider === "deepseek";
 const usesClaudeStyleControls = (modelName: string) => (
   isClaudeModel(modelName) || isXaiModel(modelName) || isMuseModel(modelName)
 );
