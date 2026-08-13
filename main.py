@@ -4358,23 +4358,23 @@ async def upload_media_endpoint(conversation_id: str, filename: str, request: Re
 async def get_usage_limits(request: Request):
     verify_authorization(request)
     result_data = {
-        "geminiWeeklyPercent": 7.0,
-        "geminiHourlyPercent": 11.0,
-        "claudeWeeklyPercent": 2.5,
-        "claudeHourlyPercent": 1.8,
+        "geminiWeeklyPercent": 0.0,
+        "geminiHourlyPercent": 0.0,
+        "claudeWeeklyPercent": 0.0,
+        "claudeHourlyPercent": 0.0,
         "gptWeeklyPercent": 0.0,
         "gptHourlyPercent": 0.0,
         "xaiWeeklyPercent": 0.0,
         "xaiHourlyPercent": 0.0,
         
-        "geminiWeeklyUsed": 700000,
+        "geminiWeeklyUsed": 0,
         "geminiWeeklyLimit": 10000000,
-        "geminiHourlyUsed": 110000,
+        "geminiHourlyUsed": 0,
         "geminiHourlyLimit": 1000000,
         
-        "claudeWeeklyUsed": 2500000,
+        "claudeWeeklyUsed": 0,
         "claudeWeeklyLimit": 100000000,
-        "claudeHourlyUsed": 180000,
+        "claudeHourlyUsed": 0,
         "claudeHourlyLimit": 10000000,
 
         "gptWeeklyUsed": 0,
@@ -4400,11 +4400,11 @@ async def get_usage_limits(request: Request):
             primary = codex_rate_limits.get("primary") or {}
             secondary = codex_rate_limits.get("secondary") or {}
             if isinstance(primary.get("usedPercent"), int):
-                result_data["gptWeeklyPercent"] = primary["usedPercent"]
+                result_data["gptWeeklyPercent"] = float(primary["usedPercent"])
                 result_data["gptWeeklyUsed"] = primary["usedPercent"]
                 result_data["gptWeeklyLimit"] = 100
             if isinstance(secondary.get("usedPercent"), int):
-                result_data["gptHourlyPercent"] = secondary["usedPercent"]
+                result_data["gptHourlyPercent"] = float(secondary["usedPercent"])
                 result_data["gptHourlyUsed"] = secondary["usedPercent"]
                 result_data["gptHourlyLimit"] = 100
     except Exception as e:
@@ -4413,7 +4413,7 @@ async def get_usage_limits(request: Request):
     try:
         res = await asyncio.to_thread(
             subprocess.run,
-            ["npx", "ccusage", "daily", "--json"],
+            ["npx", "ccusage", "--sections", "daily,session", "--json"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -4434,60 +4434,86 @@ async def get_usage_limits(request: Request):
             def parse_timestamp(la_str, period_str, date_str=None):
                 if la_str:
                     try:
-                        return datetime.datetime.fromisoformat(la_str.replace('Z', '+00:00'))
-                    except:
+                        return datetime.datetime.fromisoformat(str(la_str).replace('Z', '+00:00'))
+                    except Exception:
                         pass
                 for candidate in [date_str, period_str]:
                     if not candidate:
                         continue
-                    match = re.search(r'(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})', str(candidate))
+                    match = re.search(r'(\d{4})[/-](\d{2})[/-](\d{2})T(\d{2})[:.-](\d{2})[:.-](\d{2})', str(candidate))
                     if match:
                         try:
                             parts = [int(p) for p in match.groups()]
                             return datetime.datetime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], tzinfo=datetime.timezone.utc)
-                        except:
+                        except Exception:
                             pass
-                    match_date = re.search(r'(\d{4})-(\d{2})-(\d{2})', str(candidate))
+                    match_date = re.search(r'(\d{4})[/-](\d{2})[/-](\d{2})', str(candidate))
                     if match_date:
                         try:
                             parts = [int(p) for p in match_date.groups()]
                             return datetime.datetime(parts[0], parts[1], parts[2], tzinfo=datetime.timezone.utc)
-                        except:
+                        except Exception:
                             pass
                 return None
+
+            def matches_provider(item, provider):
+                models = item.get('modelsUsed', [])
+                model_breakdowns = item.get('modelBreakdowns', [])
+                all_names = [str(m).lower() for m in models]
+                for mb in model_breakdowns:
+                    if isinstance(mb, dict) and mb.get('modelName'):
+                        all_names.append(str(mb['modelName']).lower())
+                agent_name = str(item.get('agent', '')).lower()
                 
-            items = data.get('daily', []) or data.get('session', [])
-            for item in items:
-                la = item.get('metadata', {}).get('lastActivity')
+                if provider == 'gemini':
+                    return any(('gemini' in name or 'agy' in name) for name in all_names) or 'gemini' in agent_name or 'agy' in agent_name
+                elif provider == 'claude':
+                    return any('claude' in name for name in all_names) or 'claude' in agent_name
+                elif provider == 'gpt':
+                    return any(('gpt' in name or 'openai' in name or 'codex' in name) for name in all_names) or 'codex' in agent_name or 'openai' in agent_name
+                return False
+
+            daily_items = data.get('daily', [])
+            if not daily_items and isinstance(data, list):
+                daily_items = data
+
+            for item in daily_items:
+                if not isinstance(item, dict):
+                    continue
+                la = item.get('metadata', {}).get('lastActivity') if isinstance(item.get('metadata'), dict) else None
                 period = item.get('period', '')
                 date_val = item.get('date', '')
                 dt = parse_timestamp(la, period, date_val)
                 if not dt:
                     continue
-                
                 hours_ago = (now - dt).total_seconds() / 3600.0
-                # Subtract cacheReadTokens (prompt cache read hits) as they do not count against rate limits
-                tokens = item.get('totalTokens', 0) - item.get('cacheReadTokens', 0)
-                
-                models = item.get('modelsUsed', [])
-                is_gemini = any('gemini' in m.lower() for m in models)
-                is_claude = any('claude' in m.lower() for m in models)
-                is_gpt = any(('gpt' in m.lower() or 'openai' in m.lower()) for m in models)
-                
-                if is_gemini:
-                    if hours_ago <= 168:
+                tokens = max(0, item.get('totalTokens', 0) - item.get('cacheReadTokens', 0))
+                if hours_ago <= 168:
+                    if matches_provider(item, 'gemini'):
                         gemini_weekly += tokens
-                    if hours_ago <= 5:
-                        gemini_hourly += tokens
-                if is_claude:
-                    if hours_ago <= 168:
+                    if matches_provider(item, 'claude'):
                         claude_weekly += tokens
-                    if hours_ago <= 5:
-                        claude_hourly += tokens
-                if is_gpt:
-                    if hours_ago <= 168:
+                    if matches_provider(item, 'gpt'):
                         gpt_weekly += tokens
-                    if hours_ago <= 5:
+
+            session_items = data.get('session', []) or daily_items
+            for item in session_items:
+                if not isinstance(item, dict):
+                    continue
+                la = item.get('metadata', {}).get('lastActivity') if isinstance(item.get('metadata'), dict) else None
+                period = item.get('period', '')
+                date_val = item.get('date', '')
+                dt = parse_timestamp(la, period, date_val)
+                if not dt:
+                    continue
+                hours_ago = (now - dt).total_seconds() / 3600.0
+                tokens = max(0, item.get('totalTokens', 0) - item.get('cacheReadTokens', 0))
+                if hours_ago <= 5:
+                    if matches_provider(item, 'gemini'):
+                        gemini_hourly += tokens
+                    if matches_provider(item, 'claude'):
+                        claude_hourly += tokens
+                    if matches_provider(item, 'gpt'):
                         gpt_hourly += tokens
                         
             # Limits
@@ -4496,33 +4522,21 @@ async def get_usage_limits(request: Request):
             cw_limit = 100000000
             ch_limit = 10000000
             
-            if gemini_weekly > 0:
-                result_data["geminiWeeklyUsed"] = gemini_weekly
-                result_data["geminiWeeklyPercent"] = round((gemini_weekly / gw_limit) * 100, 1)
-            else:
-                result_data["geminiWeeklyPercent"] = 7.0
+            result_data["geminiWeeklyUsed"] = gemini_weekly
+            result_data["geminiWeeklyPercent"] = min(100.0, round((gemini_weekly / gw_limit) * 100, 1))
+            result_data["geminiHourlyUsed"] = gemini_hourly
+            result_data["geminiHourlyPercent"] = min(100.0, round((gemini_hourly / gh_limit) * 100, 1))
 
-            if gemini_hourly > 0:
-                result_data["geminiHourlyUsed"] = gemini_hourly
-                result_data["geminiHourlyPercent"] = round((gemini_hourly / gh_limit) * 100, 1)
-            else:
-                result_data["geminiHourlyPercent"] = 11.0
-
-            if claude_weekly > 0:
-                result_data["claudeWeeklyUsed"] = claude_weekly
-                result_data["claudeWeeklyPercent"] = round((claude_weekly / cw_limit) * 100, 1)
-
-            if claude_hourly > 0:
-                result_data["claudeHourlyUsed"] = claude_hourly
-                result_data["claudeHourlyPercent"] = round((claude_hourly / ch_limit) * 100, 1)
+            result_data["claudeWeeklyUsed"] = claude_weekly
+            result_data["claudeWeeklyPercent"] = min(100.0, round((claude_weekly / cw_limit) * 100, 1))
+            result_data["claudeHourlyUsed"] = claude_hourly
+            result_data["claudeHourlyPercent"] = min(100.0, round((claude_hourly / ch_limit) * 100, 1))
 
             if not result_data.get("codexRateLimits"):
-                if gpt_weekly > 0:
-                    result_data["gptWeeklyUsed"] = gpt_weekly
-                    result_data["gptWeeklyPercent"] = round((gpt_weekly / cw_limit) * 100, 1)
-                if gpt_hourly > 0:
-                    result_data["gptHourlyUsed"] = gpt_hourly
-                    result_data["gptHourlyPercent"] = round((gpt_hourly / ch_limit) * 100, 1)
+                result_data["gptWeeklyUsed"] = gpt_weekly
+                result_data["gptWeeklyPercent"] = min(100.0, round((gpt_weekly / cw_limit) * 100, 1))
+                result_data["gptHourlyUsed"] = gpt_hourly
+                result_data["gptHourlyPercent"] = min(100.0, round((gpt_hourly / ch_limit) * 100, 1))
             
     except Exception as e:
         logging.error(f"Failed to fetch usage limits from ccusage: {e}")

@@ -2197,23 +2197,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const usagePopup = document.getElementById("usagePopup");
   const usageToggleSwitch = document.getElementById("usageToggleSwitch");
 
-  // Data structure for limits (with realistic fallback defaults)
+  // Data structure for limits
   let usageData = {
-    geminiWeeklyPercent: 1.2,
-    geminiHourlyPercent: 0.5,
-    claudeWeeklyPercent: 2.5,
-    claudeHourlyPercent: 1.8,
+    geminiWeeklyPercent: 0,
+    geminiHourlyPercent: 0,
+    claudeWeeklyPercent: 0,
+    claudeHourlyPercent: 0,
     gptWeeklyPercent: 0,
     gptHourlyPercent: 0,
 
-    geminiWeeklyUsed: 120000,
+    geminiWeeklyUsed: 0,
     geminiWeeklyLimit: 10000000,
-    geminiHourlyUsed: 5000,
+    geminiHourlyUsed: 0,
     geminiHourlyLimit: 1000000,
 
-    claudeWeeklyUsed: 2500000,
+    claudeWeeklyUsed: 0,
     claudeWeeklyLimit: 100000000,
-    claudeHourlyUsed: 180000,
+    claudeHourlyUsed: 0,
     claudeHourlyLimit: 10000000,
 
     gptWeeklyUsed: 0,
