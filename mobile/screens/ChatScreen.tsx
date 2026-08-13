@@ -90,11 +90,11 @@ message: string;
 
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
-type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai' | 'muse';
+type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai' | 'muse' | 'deepseek';
 type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
 type CodexSpeed = 'Standard' | 'Fast';
 type ClaudeEffort = 'Low' | 'Medium' | 'High' | 'Extra' | 'Max';
-type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai' | 'muse';
+type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai' | 'muse' | 'deepseek';
 type UsagePeriodKey = 'Weekly' | 'Hourly';
 
 interface ModelOption {
@@ -341,6 +341,8 @@ const PREFERENCE_KEYS = {
   codexSpeed: 'settings_codex_speed',
   claudeEffort: 'settings_claude_effort',
   claudeThinking: 'settings_claude_thinking',
+  convoId: 'last_selected_convo_id',
+  project: 'last_selected_project',
 };
 
 const slashCommands: PromptSuggestion[] = [
@@ -1021,6 +1023,7 @@ const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const pendingConversationScrollRef = useRef(false);
   const usageLimitControllerRef = useRef<AbortController | null>(null);
   const activeTaskIdRef = useRef<string | null>(null);
+  const savedConvoIdRef = useRef<string | null>(null);
 
   // Sidebar expand/collapse state & animation
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -1108,54 +1111,70 @@ throw err;
 };
 
 const updateActiveConversation = (
-conversationId: string,
-project: string,
-provider: AgentProvider = activeConvoProviderRef.current,
+  conversationId: string,
+  project: string,
+  provider: AgentProvider = activeConvoProviderRef.current,
 ) => {
-activeConvoIdRef.current = conversationId;
-activeConvoProjectRef.current = project;
-activeConvoProviderRef.current = provider;
-selectedProjectRef.current = project;
-setActiveConvoId(conversationId);
-setActiveConvoProject(project);
-setActiveConvoProvider(provider);
-setSelectedProject(project);
+  activeConvoIdRef.current = conversationId;
+  activeConvoProjectRef.current = project;
+  activeConvoProviderRef.current = provider;
+  selectedProjectRef.current = project;
+  setActiveConvoId(conversationId);
+  setActiveConvoProject(project);
+  setActiveConvoProvider(provider);
+  setSelectedProject(project);
+
+  if (conversationId && !conversationId.startsWith('temp_')) {
+    SecureStore.setItemAsync(PREFERENCE_KEYS.convoId, conversationId).catch((err) => {
+      console.error("Error saving active conversation ID:", err);
+    });
+  } else {
+    SecureStore.deleteItemAsync(PREFERENCE_KEYS.convoId).catch(() => {});
+  }
+  if (project) {
+    SecureStore.setItemAsync(PREFERENCE_KEYS.project, project).catch((err) => {
+      console.error("Error saving active project:", err);
+    });
+  }
 };
 
 const setQueuedPromptList = (nextQueue: QueuedPrompt[]) => {
-queuedPromptsRef.current = nextQueue;
-setQueuedPrompts(nextQueue);
+  queuedPromptsRef.current = nextQueue;
+  setQueuedPrompts(nextQueue);
 };
 
 const applySelectedModel = (modelName: string) => {
-const nextModel = getModelOption(modelName);
-if (!nextModel) return;
-const currentProvider = getModelOption(selectedModel)?.provider || 'agy';
+  const nextModel = getModelOption(modelName);
+  if (!nextModel) return;
+  const currentProvider = getModelOption(selectedModel)?.provider || 'agy';
 
-if (!nextModel.supportsUltra && selectedCodexEffort === 'Ultra') {
-setSelectedCodexEffort('Medium');
-}
-if (!nextModel.supportsFast && selectedCodexSpeed === 'Fast') {
-setSelectedCodexSpeed('Standard');
-}
-if (
-nextModel.supportsClaudeEffort
-&& !getClaudeEfforts(modelName).some((item) => item.value === selectedClaudeEffort)
-) {
-setSelectedClaudeEffort(
-  getClaudeEfforts(modelName).some((item) => item.value === 'Medium') ? 'Medium' : 'High'
-);
-}
-if (nextModel.thinkingRequired) {
-setSelectedClaudeThinking(true);
-}
+  if (!nextModel.supportsUltra && selectedCodexEffort === 'Ultra') {
+    setSelectedCodexEffort('Medium');
+  }
+  if (!nextModel.supportsFast && selectedCodexSpeed === 'Fast') {
+    setSelectedCodexSpeed('Standard');
+  }
+  if (
+    nextModel.supportsClaudeEffort
+    && !getClaudeEfforts(modelName).some((item) => item.value === selectedClaudeEffort)
+  ) {
+    setSelectedClaudeEffort(
+      getClaudeEfforts(modelName).some((item) => item.value === 'Medium') ? 'Medium' : 'High'
+    );
+  }
+  if (nextModel.thinkingRequired) {
+    setSelectedClaudeThinking(true);
+  }
 
-if (currentProvider !== nextModel.provider && activeConvoIdRef.current) {
-  activeConvoProviderRef.current = nextModel.provider;
-  setActiveConvoProvider(nextModel.provider);
-}
+  if (currentProvider !== nextModel.provider && activeConvoIdRef.current) {
+    activeConvoProviderRef.current = nextModel.provider;
+    setActiveConvoProvider(nextModel.provider);
+  }
 
-setSelectedModel(modelName);
+  setSelectedModel(modelName);
+  SecureStore.setItemAsync(PREFERENCE_KEYS.model, modelName).catch((err) => {
+    console.error("Error saving selected model preference:", err);
+  });
 };
 
 const applyModelCatalog = (catalog: ModelCatalog) => {
@@ -1225,6 +1244,8 @@ selectedProjectRef.current = selectedProject;
         savedCodexSpeed,
         savedClaudeEffort,
         savedClaudeThinking,
+        savedConvoId,
+        savedProject,
       ] = await Promise.all([
         SecureStore.getItemAsync(PREFERENCE_KEYS.model),
         SecureStore.getItemAsync(PREFERENCE_KEYS.target),
@@ -1235,7 +1256,17 @@ selectedProjectRef.current = selectedProject;
         SecureStore.getItemAsync(PREFERENCE_KEYS.codexSpeed),
         SecureStore.getItemAsync(PREFERENCE_KEYS.claudeEffort),
         SecureStore.getItemAsync(PREFERENCE_KEYS.claudeThinking),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.convoId),
+        SecureStore.getItemAsync(PREFERENCE_KEYS.project),
       ]);
+
+      if (savedProject) {
+        setSelectedProject(savedProject);
+        selectedProjectRef.current = savedProject;
+      }
+      if (savedConvoId) {
+        savedConvoIdRef.current = savedConvoId;
+      }
 
       const effectiveModel = savedModel && activeModelsList.some((model) => model.value === savedModel)
         ? savedModel
@@ -1909,114 +1940,131 @@ setCreatingProject(false);
   };
 
 const loadConversations = async (autoSelect = true) => {
-if (autoSelect) {
-setLoadingConvList(true);
-}
-try {
-const data = await callHostApi('/api/chat-history');
-const list = data.conversations || [];
-setConversations(list);
+  if (autoSelect) {
+    setLoadingConvList(true);
+  }
+  try {
+    const data = await callHostApi('/api/chat-history');
+    const list = data.conversations || [];
+    setConversations(list);
 
-// Auto-select most recent conversation only on initial load.
-if (autoSelect && list.length > 0 && !activeConvoId) {
-await selectConversation(list[0].id, list[0].project);
-}
-    } catch (err) {
-      console.error("Error loading conversations:", err);
-} finally {
-if (autoSelect) {
-setLoadingConvList(false);
-}
-}
+    // Auto-select conversation on initial load: attempt saved conversation first, fallback to list[0]
+    if (autoSelect && list.length > 0 && !activeConvoIdRef.current) {
+      const targetSavedId = savedConvoIdRef.current;
+      const targetConvo = targetSavedId ? list.find((c: Conversation) => c.id === targetSavedId) : null;
+      if (targetConvo) {
+        await selectConversation(targetConvo.id, targetConvo.project);
+      } else {
+        await selectConversation(list[0].id, list[0].project);
+      }
+    }
+  } catch (err) {
+    console.error("Error loading conversations:", err);
+  } finally {
+    if (autoSelect) {
+      setLoadingConvList(false);
+    }
+  }
 };
 
 const selectConversation = async (cid: string, projectName?: string) => {
-const selectedConversation = conversations.find((convo) => convo.id === cid);
-const conversationProject = projectName || selectedConversation?.project;
-const conversationProvider = selectedConversation?.provider
-  || (
-    cid.startsWith('codex_')
-      ? 'codex'
-      : cid.startsWith('claude_')
-        ? 'claude'
-        : cid.startsWith('kimi_')
-          ? 'kimi'
-          : cid.startsWith('grok_')
-            ? 'xai'
-            : cid.startsWith('muse_')
-              ? 'muse'
-              : 'agy'
-  );
-if (conversationProject) {
-setSelectedProject(conversationProject);
-selectedProjectRef.current = conversationProject;
-updateActiveConversation(cid, conversationProject, conversationProvider);
-} else {
-activeConvoIdRef.current = cid;
-setActiveConvoId(cid);
-}
-setQueuedPromptList([]);
-setLoadingState(true);
-    try {
-const data = await callHostApi(`/api/conversation/${cid}`);
-const resolvedProject = data.project || conversationProject;
-const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai', 'muse'].includes(data.provider)
-  ? data.provider
-  : conversationProvider;
-if (resolvedProject) {
-setSelectedProject(resolvedProject);
-selectedProjectRef.current = resolvedProject;
-updateActiveConversation(cid, resolvedProject, resolvedProvider);
-}
-if (data.model && getModelOption(data.model)) {
-  setSelectedModel(data.model);
-  if (data.effort) {
-    if (getCodexEfforts(data.model).some((item) => item.value === data.effort)) {
-      setSelectedCodexEffort(data.effort);
-    }
-    if (getClaudeEfforts(data.model).some((item) => item.value === data.effort)) {
-      setSelectedClaudeEffort(data.effort);
+  const selectedConversation = conversations.find((convo) => convo.id === cid);
+  const conversationProject = projectName || selectedConversation?.project;
+  const conversationProvider = selectedConversation?.provider
+    || (
+      cid.startsWith('codex_')
+        ? 'codex'
+        : cid.startsWith('claude_')
+          ? 'claude'
+          : cid.startsWith('kimi_')
+            ? 'kimi'
+            : cid.startsWith('grok_')
+              ? 'xai'
+              : cid.startsWith('muse_')
+                ? 'muse'
+                : cid.startsWith('deepseek_')
+                  ? 'deepseek'
+                  : 'agy'
+    );
+  if (conversationProject) {
+    setSelectedProject(conversationProject);
+    selectedProjectRef.current = conversationProject;
+    updateActiveConversation(cid, conversationProject, conversationProvider);
+  } else {
+    activeConvoIdRef.current = cid;
+    setActiveConvoId(cid);
+    if (!cid.startsWith('temp_')) {
+      SecureStore.setItemAsync(PREFERENCE_KEYS.convoId, cid).catch(() => {});
     }
   }
-  if (data.speed && getCodexSpeeds(data.model).some((item) => item.value === data.speed)) {
-    setSelectedCodexSpeed(data.speed);
-  }
-  if (data.thinking !== undefined) {
-    setSelectedClaudeThinking(data.thinking !== false);
-  }
-}
-pendingConversationScrollRef.current = true;
-updateMessages(data.messages || []);
-      setTimeout(() => scrollMessagesToBottom(false), 250);
-    } catch (err: any) {
-      Alert.alert("Error", "Failed to load chat logs.");
-    } finally {
-      setLoadingState(false);
-      checkAndAttachActiveTask(cid, conversationProject);
+  setQueuedPromptList([]);
+  setLoadingState(true);
+  try {
+    const data = await callHostApi(`/api/conversation/${cid}`);
+    const resolvedProject = data.project || conversationProject;
+    const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai', 'muse', 'deepseek'].includes(data.provider)
+      ? data.provider
+      : conversationProvider;
+    if (resolvedProject) {
+      setSelectedProject(resolvedProject);
+      selectedProjectRef.current = resolvedProject;
+      updateActiveConversation(cid, resolvedProject, resolvedProvider);
     }
-  };
+    if (data.model && getModelOption(data.model)) {
+      applySelectedModel(data.model);
+      if (data.effort) {
+        if (getCodexEfforts(data.model).some((item) => item.value === data.effort)) {
+          setSelectedCodexEffort(data.effort);
+          SecureStore.setItemAsync(PREFERENCE_KEYS.codexEffort, data.effort).catch(() => {});
+        }
+        if (getClaudeEfforts(data.model).some((item) => item.value === data.effort)) {
+          setSelectedClaudeEffort(data.effort);
+          SecureStore.setItemAsync(PREFERENCE_KEYS.claudeEffort, data.effort).catch(() => {});
+        }
+      }
+      if (data.speed && getCodexSpeeds(data.model).some((item) => item.value === data.speed)) {
+        setSelectedCodexSpeed(data.speed);
+        SecureStore.setItemAsync(PREFERENCE_KEYS.codexSpeed, data.speed).catch(() => {});
+      }
+      if (data.thinking !== undefined) {
+        setSelectedClaudeThinking(data.thinking !== false);
+        SecureStore.setItemAsync(PREFERENCE_KEYS.claudeThinking, String(data.thinking !== false)).catch(() => {});
+      }
+    }
+    pendingConversationScrollRef.current = true;
+    updateMessages(data.messages || []);
+    setTimeout(() => scrollMessagesToBottom(false), 250);
+  } catch (err: any) {
+    Alert.alert("Error", "Failed to load chat logs.");
+  } finally {
+    setLoadingState(false);
+    checkAndAttachActiveTask(cid, conversationProject);
+  }
+};
 
 const startNewChat = () => {
-const newId = `temp_${selectedProject}_${Math.random().toString(36).substring(2, 11)}`;
-updateActiveConversation(newId, selectedProject, getModelOption(selectedModel)?.provider || 'agy');
-setQueuedPromptList([]);
-updateMessages([]);
-checkAndAttachActiveTask(newId, selectedProject);
+  const newId = `temp_${selectedProject}_${Math.random().toString(36).substring(2, 11)}`;
+  updateActiveConversation(newId, selectedProject, getModelOption(selectedModel)?.provider || 'agy');
+  setQueuedPromptList([]);
+  updateMessages([]);
+  checkAndAttachActiveTask(newId, selectedProject);
 };
 
 const handleSelectProject = (project: string) => {
-setSelectedProject(project);
-selectedProjectRef.current = project;
-activeConvoIdRef.current = '';
-activeConvoProjectRef.current = project;
-activeConvoProviderRef.current = getModelOption(selectedModel)?.provider || 'agy';
-setActiveConvoId('');
-setActiveConvoProject(project);
-setActiveConvoProvider(activeConvoProviderRef.current);
-setQueuedPromptList([]);
-updateMessages([]);
-setIsProjectModalOpen(false);
-checkAndAttachActiveTask('', project);
+  setSelectedProject(project);
+  selectedProjectRef.current = project;
+  activeConvoIdRef.current = '';
+  activeConvoProjectRef.current = project;
+  activeConvoProviderRef.current = getModelOption(selectedModel)?.provider || 'agy';
+  setActiveConvoId('');
+  setActiveConvoProject(project);
+  setActiveConvoProvider(activeConvoProviderRef.current);
+  setQueuedPromptList([]);
+  updateMessages([]);
+  setIsProjectModalOpen(false);
+  checkAndAttachActiveTask('', project);
+  SecureStore.setItemAsync(PREFERENCE_KEYS.project, project).catch(() => {});
+  SecureStore.deleteItemAsync(PREFERENCE_KEYS.convoId).catch(() => {});
 };
 
 const ensureActiveConversationForContext = () => {
