@@ -144,6 +144,9 @@ const colors = {
 };
 
 const FALLBACK_MODELS: ModelOption[] = [
+  { value: "Gemini 3.7 Flash (High)", desc: "Fastest response, ideal for coding tasks", provider: "agy" },
+  { value: "Gemini 3.7 Flash (Medium)", desc: "Balanced speed and performance", provider: "agy" },
+  { value: "Gemini 3.7 Flash (Low)", desc: "Fast, low resource usage", provider: "agy" },
   { value: "Gemini 3.6 Flash (High)", desc: "Fastest response, ideal for coding tasks", provider: "agy" },
   { value: "Gemini 3.6 Flash (Medium)", desc: "Balanced speed and performance", provider: "agy" },
   { value: "Gemini 3.6 Flash (Low)", desc: "Fast, low resource usage", provider: "agy" },
@@ -187,7 +190,7 @@ const FALLBACK_MODELS: ModelOption[] = [
 ];
 
 let activeModelsList: ModelOption[] = FALLBACK_MODELS;
-let activeDefaultModel = "Gemini 3.5 Flash (High)";
+let activeDefaultModel = "Gemini 3.7 Flash (High)";
 
 const catalogToModelOptions = (catalog: ModelCatalog): ModelOption[] => (
   catalog.models
@@ -920,7 +923,7 @@ const [conversations, setConversations] = useState<Conversation[]>([]);
 // Model, Target & Project Pickers
 const [modelsList, setModelsList] = useState<ModelOption[]>(FALLBACK_MODELS);
 const [modelCatalogVersion, setModelCatalogVersion] = useState('built-in');
-const [selectedModel, setSelectedModel] = useState("Gemini 3.5 Flash (High)");
+const [selectedModel, setSelectedModel] = useState("Gemini 3.7 Flash (High)");
 const [selectedCodexEffort, setSelectedCodexEffort] = useState<CodexEffort>("Medium");
 const [selectedCodexSpeed, setSelectedCodexSpeed] = useState<CodexSpeed>("Standard");
 const [selectedClaudeEffort, setSelectedClaudeEffort] = useState<ClaudeEffort>("Medium");

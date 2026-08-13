@@ -81,7 +81,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // State Variables
   let currentWorkspace = "agy";
-  let currentModel = "Gemini 3.5 Flash (High)";
+  let currentModel = "Gemini 3.7 Flash (High)";
   let currentProvider = "agy";
   let currentCodexEffort = "Medium";
   let currentCodexSpeed = "Standard";
