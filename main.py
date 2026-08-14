@@ -4354,9 +4354,61 @@ async def upload_media_endpoint(conversation_id: str, filename: str, request: Re
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
+def fetch_antigravity_token_usage(now_epoch: float) -> tuple[int, int]:
+    """Calculate token usage for Antigravity / Gemini from local transcripts."""
+    brain_paths = [
+        os.path.join(LEGACY_ANTIGRAVITY_DATA_DIR, "brain/*"),
+        os.path.join(ANTIGRAVITY_CLI_DIR, "brain/*"),
+        os.path.join(ANTIGRAVITY_DATA_DIR, "brain/*"),
+        os.path.expanduser("~/.gemini/antigravity/brain/*"),
+    ]
+    weekly_tokens = 0
+    hourly_tokens = 0
+    scanned_folders = set()
+    
+    for pattern in brain_paths:
+        for folder in glob.glob(pattern):
+            norm_folder = os.path.normcase(os.path.abspath(folder))
+            if norm_folder in scanned_folders:
+                continue
+            scanned_folders.add(norm_folder)
+            
+            transcript_path = os.path.join(folder, ".system_generated", "logs", "transcript_full.jsonl")
+            if not os.path.exists(transcript_path):
+                transcript_path = os.path.join(folder, ".system_generated", "logs", "transcript.jsonl")
+            if not os.path.exists(transcript_path):
+                continue
+            try:
+                mtime = os.path.getmtime(transcript_path)
+                age_hours = (now_epoch - mtime) / 3600.0
+                if age_hours > 168:
+                    continue
+                folder_tokens = 0
+                with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line_str = line.strip()
+                        if not line_str:
+                            continue
+                        try:
+                            step = json.loads(line_str)
+                            scontent = step.get("content", "")
+                            if scontent and isinstance(scontent, str):
+                                folder_tokens += max(1, len(scontent) // 4)
+                        except Exception:
+                            pass
+                weekly_tokens += folder_tokens
+                if age_hours <= 5:
+                    hourly_tokens += folder_tokens
+            except Exception:
+                pass
+                
+    return weekly_tokens, hourly_tokens
+
+
 @app.get("/api/usage-limits")
 async def get_usage_limits(request: Request):
     verify_authorization(request)
+    
     result_data = {
         "geminiWeeklyPercent": 0.0,
         "geminiHourlyPercent": 0.0,
@@ -4366,17 +4418,14 @@ async def get_usage_limits(request: Request):
         "gptHourlyPercent": 0.0,
         "xaiWeeklyPercent": 0.0,
         "xaiHourlyPercent": 0.0,
-        
         "geminiWeeklyUsed": 0,
         "geminiWeeklyLimit": 10000000,
         "geminiHourlyUsed": 0,
         "geminiHourlyLimit": 1000000,
-        
         "claudeWeeklyUsed": 0,
         "claudeWeeklyLimit": 100000000,
         "claudeHourlyUsed": 0,
         "claudeHourlyLimit": 10000000,
-
         "gptWeeklyUsed": 0,
         "gptWeeklyLimit": 100000000,
         "gptHourlyUsed": 0,
@@ -4387,6 +4436,7 @@ async def get_usage_limits(request: Request):
         "xaiHourlyLimit": 0,
         "codexRateLimits": None,
         "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop.",
+        "geminiUsageNote": "Gemini models use your Google AI / Antigravity workspace quota. Token usage reflects active workspace sessions and recent prompt activity.",
         "xaiUsageNote": "Grok usage and billing are managed by your xAI account. Grok Build does not currently expose an account-wide quota percentage here.",
     }
 
@@ -4410,6 +4460,13 @@ async def get_usage_limits(request: Request):
     except Exception as e:
         logging.error(f"Failed to fetch Codex account rate limits: {e}")
     
+    gemini_weekly = 0
+    gemini_hourly = 0
+    claude_weekly = 0
+    claude_hourly = 0
+    gpt_weekly = 0
+    gpt_hourly = 0
+
     try:
         res = await asyncio.to_thread(
             subprocess.run,
@@ -4423,13 +4480,6 @@ async def get_usage_limits(request: Request):
         if res.returncode == 0:
             data = json.loads(res.stdout)
             now = datetime.datetime.now(datetime.timezone.utc)
-            
-            gemini_weekly = 0
-            gemini_hourly = 0
-            claude_weekly = 0
-            claude_hourly = 0
-            gpt_weekly = 0
-            gpt_hourly = 0
             
             def parse_timestamp(la_str, period_str, date_str=None):
                 if la_str:
@@ -4515,32 +4565,40 @@ async def get_usage_limits(request: Request):
                         claude_hourly += tokens
                     if matches_provider(item, 'gpt'):
                         gpt_hourly += tokens
-                        
-            # Limits
-            gw_limit = 10000000
-            gh_limit = 1000000
-            cw_limit = 100000000
-            ch_limit = 10000000
-            
-            result_data["geminiWeeklyUsed"] = gemini_weekly
-            result_data["geminiWeeklyPercent"] = min(100.0, round((gemini_weekly / gw_limit) * 100, 1))
-            result_data["geminiHourlyUsed"] = gemini_hourly
-            result_data["geminiHourlyPercent"] = min(100.0, round((gemini_hourly / gh_limit) * 100, 1))
-
-            result_data["claudeWeeklyUsed"] = claude_weekly
-            result_data["claudeWeeklyPercent"] = min(100.0, round((claude_weekly / cw_limit) * 100, 1))
-            result_data["claudeHourlyUsed"] = claude_hourly
-            result_data["claudeHourlyPercent"] = min(100.0, round((claude_hourly / ch_limit) * 100, 1))
-
-            if not result_data.get("codexRateLimits"):
-                result_data["gptWeeklyUsed"] = gpt_weekly
-                result_data["gptWeeklyPercent"] = min(100.0, round((gpt_weekly / cw_limit) * 100, 1))
-                result_data["gptHourlyUsed"] = gpt_hourly
-                result_data["gptHourlyPercent"] = min(100.0, round((gpt_hourly / ch_limit) * 100, 1))
-            
     except Exception as e:
         logging.error(f"Failed to fetch usage limits from ccusage: {e}")
-        
+
+    # Fallback to local Antigravity transcript scan if ccusage reports zero for Gemini
+    if gemini_weekly == 0 and gemini_hourly == 0:
+        try:
+            agy_weekly, agy_hourly = fetch_antigravity_token_usage(datetime.datetime.now(datetime.timezone.utc).timestamp())
+            gemini_weekly = agy_weekly
+            gemini_hourly = agy_hourly
+        except Exception as exc:
+            logging.warning(f"Failed to calculate local Antigravity usage: {exc}")
+
+    # Limits
+    gw_limit = 10000000
+    gh_limit = 1000000
+    cw_limit = 100000000
+    ch_limit = 10000000
+
+    result_data["geminiWeeklyUsed"] = gemini_weekly
+    result_data["geminiWeeklyPercent"] = min(100.0, round((gemini_weekly / gw_limit) * 100, 1))
+    result_data["geminiHourlyUsed"] = gemini_hourly
+    result_data["geminiHourlyPercent"] = min(100.0, round((gemini_hourly / gh_limit) * 100, 1))
+
+    result_data["claudeWeeklyUsed"] = claude_weekly
+    result_data["claudeWeeklyPercent"] = min(100.0, round((claude_weekly / cw_limit) * 100, 1))
+    result_data["claudeHourlyUsed"] = claude_hourly
+    result_data["claudeHourlyPercent"] = min(100.0, round((claude_hourly / ch_limit) * 100, 1))
+
+    if not result_data.get("codexRateLimits"):
+        result_data["gptWeeklyUsed"] = gpt_weekly
+        result_data["gptWeeklyPercent"] = min(100.0, round((gpt_weekly / cw_limit) * 100, 1))
+        result_data["gptHourlyUsed"] = gpt_hourly
+        result_data["gptHourlyPercent"] = min(100.0, round((gpt_hourly / ch_limit) * 100, 1))
+
     return JSONResponse(content=result_data)
 
 @app.get("/api/media")

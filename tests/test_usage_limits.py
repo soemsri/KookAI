@@ -63,8 +63,9 @@ class TestUsageLimitsAPI(unittest.TestCase):
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_token_usage", return_value=(0, 0))
     @patch("subprocess.run")
-    def test_get_usage_limits_empty_fallback_to_zero(self, mock_subprocess, mock_codex, mock_auth):
+    def test_get_usage_limits_empty_fallback_to_zero(self, mock_subprocess, mock_agy, mock_codex, mock_auth):
         proc_mock = MagicMock()
         proc_mock.returncode = 1
         proc_mock.stdout = ""
@@ -74,13 +75,33 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()
         
-        # Should be 0 instead of fake defaults (700000, 110000, 7.0, 11.0)
+        # Should be 0 when no usage data exists
         self.assertEqual(data["geminiWeeklyUsed"], 0)
         self.assertEqual(data["geminiWeeklyPercent"], 0.0)
         self.assertEqual(data["geminiHourlyUsed"], 0)
         self.assertEqual(data["geminiHourlyPercent"], 0.0)
         self.assertEqual(data["claudeWeeklyUsed"], 0)
         self.assertEqual(data["claudeWeeklyPercent"], 0.0)
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_token_usage", return_value=(725000, 90000))
+    @patch("subprocess.run")
+    def test_get_usage_limits_antigravity_fallback(self, mock_subprocess, mock_agy, mock_codex, mock_auth):
+        proc_mock = MagicMock()
+        proc_mock.returncode = 0
+        proc_mock.stdout = json.dumps({"daily": [], "session": []})
+        mock_subprocess.return_value = proc_mock
+
+        res = self.client.get("/api/usage-limits")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        
+        # Should reflect Antigravity transcript scan
+        self.assertEqual(data["geminiWeeklyUsed"], 725000)
+        self.assertEqual(data["geminiWeeklyPercent"], 7.2)
+        self.assertEqual(data["geminiHourlyUsed"], 90000)
+        self.assertEqual(data["geminiHourlyPercent"], 9.0)
 
 if __name__ == "__main__":
     unittest.main()
