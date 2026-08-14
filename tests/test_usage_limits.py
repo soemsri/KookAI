@@ -13,15 +13,20 @@ class TestUsageLimitsAPI(unittest.TestCase):
     @patch("main.fetch_codex_rate_limits", return_value=None)
     @patch("subprocess.run")
     def test_get_usage_limits_with_mock_ccusage(self, mock_subprocess, mock_codex, mock_auth):
+        from datetime import datetime, timezone, timedelta
+        now_dt = datetime.now(timezone.utc)
+        daily_dt = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        recent_iso = (now_dt - timedelta(minutes=30)).isoformat()
+
         mock_output = {
             "daily": [
                 {
                     "agent": "gemini",
-                    "period": "2026-08-13",
+                    "period": daily_dt,
                     "totalTokens": 500000,
                     "cacheReadTokens": 100000,
                     "modelsUsed": ["gemini-3.6-flash"],
-                    "metadata": {"lastActivity": "2026-08-13T10:00:00Z"}
+                    "metadata": {"lastActivity": recent_iso}
                 }
             ],
             "session": [
@@ -31,7 +36,7 @@ class TestUsageLimitsAPI(unittest.TestCase):
                     "totalTokens": 150000,
                     "cacheReadTokens": 50000,
                     "modelsUsed": ["gemini-3.6-flash"],
-                    "metadata": {"lastActivity": "2026-08-13T14:00:00Z"}
+                    "metadata": {"lastActivity": recent_iso}
                 }
             ]
         }
