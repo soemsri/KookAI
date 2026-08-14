@@ -11,8 +11,9 @@ class TestUsageLimitsAPI(unittest.TestCase):
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
     @patch("subprocess.run")
-    def test_get_usage_limits_with_mock_ccusage(self, mock_subprocess, mock_codex, mock_auth):
+    def test_get_usage_limits_with_mock_ccusage(self, mock_subprocess, mock_ls, mock_codex, mock_auth):
         from datetime import datetime, timezone, timedelta
         now_dt = datetime.now(timezone.utc)
         daily_dt = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -63,9 +64,10 @@ class TestUsageLimitsAPI(unittest.TestCase):
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
     @patch("main.fetch_antigravity_token_usage", return_value=(0, 0))
     @patch("subprocess.run")
-    def test_get_usage_limits_empty_fallback_to_zero(self, mock_subprocess, mock_agy, mock_codex, mock_auth):
+    def test_get_usage_limits_empty_fallback_to_zero(self, mock_subprocess, mock_agy, mock_ls, mock_codex, mock_auth):
         proc_mock = MagicMock()
         proc_mock.returncode = 1
         proc_mock.stdout = ""
@@ -85,9 +87,10 @@ class TestUsageLimitsAPI(unittest.TestCase):
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
     @patch("main.fetch_antigravity_token_usage", return_value=(725000, 90000))
     @patch("subprocess.run")
-    def test_get_usage_limits_antigravity_fallback(self, mock_subprocess, mock_agy, mock_codex, mock_auth):
+    def test_get_usage_limits_antigravity_fallback(self, mock_subprocess, mock_agy, mock_ls, mock_codex, mock_auth):
         proc_mock = MagicMock()
         proc_mock.returncode = 0
         proc_mock.stdout = json.dumps({"daily": [], "session": []})
@@ -102,6 +105,40 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertEqual(data["geminiWeeklyPercent"], 7.2)
         self.assertEqual(data["geminiHourlyUsed"], 90000)
         self.assertEqual(data["geminiHourlyPercent"], 9.0)
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota")
+    @patch("subprocess.run")
+    def test_get_usage_limits_antigravity_language_server_quota(self, mock_subprocess, mock_ls, mock_codex, mock_auth):
+        mock_ls.return_value = {
+            "userTier": {"name": "Google AI Ultra"},
+            "cascadeModelConfigData": {
+                "clientModelConfigs": [
+                    {
+                        "modelId": "gemini-3.7-flash-high",
+                        "quotaInfo": {
+                            "remainingFraction": 0.965,
+                            "resetTime": "2026-08-14T04:57:06Z"
+                        }
+                    }
+                ]
+            }
+        }
+        proc_mock = MagicMock()
+        proc_mock.returncode = 0
+        proc_mock.stdout = json.dumps({"daily": [], "session": []})
+        mock_subprocess.return_value = proc_mock
+
+        res = self.client.get("/api/usage-limits")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        
+        self.assertIsNotNone(data.get("geminiRateLimits"))
+        self.assertEqual(data["geminiRateLimits"]["remainingPercent"], 96.5)
+        self.assertEqual(data["geminiRateLimits"]["usedPercent"], 3.5)
+        self.assertEqual(data["geminiWeeklyPercent"], 3.5)
+        self.assertEqual(data["geminiHourlyPercent"], 3.5)
 
 if __name__ == "__main__":
     unittest.main()

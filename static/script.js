@@ -2370,7 +2370,52 @@ document.addEventListener("DOMContentLoaded", () => {
       mainCircle.setAttribute("stroke-dasharray", `${mainVal}, 100`);
     }
 
+    function formatResetDuration(resetIso) {
+      if (!resetIso) return '';
+      try {
+        const resetMs = new Date(resetIso).getTime();
+        const diffMs = resetMs - Date.now();
+        if (diffMs <= 0) return 'shortly';
+        const diffMins = Math.round(diffMs / 60000);
+        if (diffMins < 60) return `in ${diffMins} minutes`;
+        const diffHours = Math.floor(diffMins / 60);
+        const remainingMins = diffMins % 60;
+        if (diffHours < 24) return remainingMins > 0 ? `in ${diffHours}h ${remainingMins}m` : `in ${diffHours} hours`;
+        const diffDays = Math.floor(diffHours / 24);
+        return `in ${diffDays} days`;
+      } catch {
+        return '';
+      }
+    }
+
     function updateSection(dataPrefix, limitName, elementPrefix = dataPrefix) {
+      if (dataPrefix.startsWith("gemini") && usageData.geminiRateLimits) {
+        const rateLimits = usageData.geminiRateLimits;
+        const usedPercent = Number(rateLimits.usedPercent || 0);
+        const remainingPercent = Number(rateLimits.remainingPercent || Math.max(0, 100 - usedPercent));
+        const val = isUsage ? usedPercent : remainingPercent;
+        const percentEl = document.getElementById(`${elementPrefix}Percent`);
+        const chartEl = document.getElementById(`${elementPrefix}Chart`);
+        const descEl = document.getElementById(`${elementPrefix}Desc`);
+
+        if (percentEl) percentEl.textContent = `${val.toFixed(0)}%`;
+        if (chartEl) chartEl.setAttribute("stroke-dasharray", `${val}, 100`);
+
+        if (descEl) {
+          const resetText = formatResetDuration(rateLimits.resetTime);
+          if (dataPrefix === "geminiWeekly") {
+            descEl.textContent = isUsage
+              ? `Used ${usedPercent.toFixed(0)}% of your weekly quota`
+              : `You have used some of your weekly limit${resetText ? `, it will fully refresh ${resetText}` : ''}.`;
+          } else {
+            descEl.textContent = isUsage
+              ? `Used ${usedPercent.toFixed(0)}% of your 5-hour limit`
+              : `You have used some of your 5-hour limit${resetText ? `, it will fully refresh ${resetText}` : ''}.`;
+          }
+        }
+        return;
+      }
+
       const usedPercent = Number(usageData[`${dataPrefix}Percent`] || 0);
       const usedTokens = Number(usageData[`${dataPrefix}Used`] || 0);
       const limitTokens = Number(usageData[`${dataPrefix}Limit`] || 0);

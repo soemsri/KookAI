@@ -2678,11 +2678,56 @@ allowQueue: false,
     );
   };
 
+  const formatResetDuration = (resetIso?: string) => {
+    if (!resetIso) return '';
+    try {
+      const resetMs = new Date(resetIso).getTime();
+      const diffMs = resetMs - Date.now();
+      if (diffMs <= 0) return 'shortly';
+      const diffMins = Math.round(diffMs / 60000);
+      if (diffMins < 60) return `in ${diffMins} minutes`;
+      const diffHours = Math.floor(diffMins / 60);
+      const remainingMins = diffMins % 60;
+      if (diffHours < 24) return remainingMins > 0 ? `in ${diffHours}h ${remainingMins}m` : `in ${diffHours} hours`;
+      const diffDays = Math.floor(diffHours / 24);
+      return `in ${diffDays} days`;
+    } catch {
+      return '';
+    }
+  };
+
   const renderUsageLimitRow = (
     bucket: UsageBucketKey,
     period: UsagePeriodKey,
     label: string,
   ) => {
+    if (bucket === 'gemini' && usageLimitData?.geminiRateLimits) {
+      const rateLimits = usageLimitData.geminiRateLimits;
+      const usedPercent = Number(rateLimits.usedPercent ?? 0);
+      const remainingPercent = Number(rateLimits.remainingPercent ?? Math.max(0, 100 - usedPercent));
+      const displayPercent = usageMode === 'usage' ? usedPercent : remainingPercent;
+      const resetText = formatResetDuration(rateLimits.resetTime);
+      const periodDesc = period === 'Weekly'
+        ? (usageMode === 'usage'
+            ? `Used ${usedPercent.toFixed(0)}% of your weekly quota`
+            : `You have used some of your weekly limit${resetText ? `, it will fully refresh ${resetText}` : ''}`)
+        : (usageMode === 'usage'
+            ? `Used ${usedPercent.toFixed(0)}% of your 5-hour limit`
+            : `You have used some of your 5-hour limit${resetText ? `, it will fully refresh ${resetText}` : ''}`);
+
+      return (
+        <View style={styles.usageRow}>
+          <View style={styles.usageRowLabel}>
+            <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>{label}</Text>
+            <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
+              {periodDesc}
+            </Text>
+          </View>
+          {renderCircularChart(displayPercent, theme.statusGreen)}
+        </View>
+      );
+    }
+
     const used = getUsageMetric(bucket, period, 'Used');
     const limit = getUsageMetric(bucket, period, 'Limit');
     const usedPercent = getUsageMetric(bucket, period, 'Percent');

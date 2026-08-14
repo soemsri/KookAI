@@ -4354,6 +4354,57 @@ async def upload_media_endpoint(conversation_id: str, filename: str, request: Re
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
+def fetch_antigravity_language_server_quota() -> Optional[dict[str, Any]]:
+    """Fetch live model quota status directly from Antigravity Language Server."""
+    try:
+        import psutil
+        import ssl
+        import urllib.request
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        for p in psutil.process_iter(["pid", "name", "cmdline"]):
+            pname = (p.info.get("name") or "").lower()
+            if "language_server" not in pname:
+                continue
+            cmdline = p.info.get("cmdline") or []
+            csrf_token = None
+            for i, arg in enumerate(cmdline):
+                if arg == "--csrf_token" and i + 1 < len(cmdline):
+                    csrf_token = cmdline[i + 1]
+                    break
+            if not csrf_token:
+                continue
+
+            proc = psutil.Process(p.info["pid"])
+            for conn in proc.net_connections():
+                if conn.status == "LISTEN" and conn.laddr.ip == "127.0.0.1":
+                    port = conn.laddr.port
+                    url = f"https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUserStatus"
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps({"metadata": {"ide_name": "antigravity"}}).encode(),
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-Codeium-Csrf-Token": csrf_token,
+                        },
+                    )
+                    try:
+                        with urllib.request.urlopen(req, context=ctx, timeout=2) as resp:
+                            if resp.status == 200:
+                                data = json.loads(resp.read().decode())
+                                user_status = data.get("userStatus")
+                                if isinstance(user_status, dict):
+                                    return user_status
+                    except Exception:
+                        continue
+    except Exception as exc:
+        logging.debug(f"Could not query Antigravity LanguageServer: {exc}")
+    return None
+
+
 def fetch_antigravity_token_usage(now_epoch: float) -> tuple[int, int]:
     """Calculate token usage for Antigravity / Gemini from local transcripts."""
     brain_paths = [
@@ -4434,6 +4485,7 @@ async def get_usage_limits(request: Request):
         "xaiWeeklyLimit": 0,
         "xaiHourlyUsed": 0,
         "xaiHourlyLimit": 0,
+        "geminiRateLimits": None,
         "codexRateLimits": None,
         "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop.",
         "geminiUsageNote": "Gemini models use your Google AI / Antigravity workspace quota. Token usage reflects active workspace sessions and recent prompt activity.",
@@ -4459,6 +4511,41 @@ async def get_usage_limits(request: Request):
                 result_data["gptHourlyLimit"] = 100
     except Exception as e:
         logging.error(f"Failed to fetch Codex account rate limits: {e}")
+
+    try:
+        antigravity_status = await asyncio.to_thread(fetch_antigravity_language_server_quota)
+        if antigravity_status:
+            user_tier = antigravity_status.get("userTier", {})
+            plan_name = user_tier.get("name") or "Google AI Ultra"
+            result_data["antigravityPlan"] = plan_name
+            
+            model_configs = antigravity_status.get("cascadeModelConfigData", {}).get("clientModelConfigs", [])
+            gemini_quota = None
+            for m in model_configs:
+                model_id = str(m.get("modelId", "")).lower()
+                if "gemini-3.7" in model_id or "gemini" in model_id:
+                    qi = m.get("quotaInfo")
+                    if qi and "remainingFraction" in qi:
+                        gemini_quota = qi
+                        break
+            
+            if gemini_quota:
+                rem_fraction = float(gemini_quota.get("remainingFraction", 1.0))
+                used_pct = round(max(0.0, (1.0 - rem_fraction) * 100.0), 1)
+                rem_pct = round(min(100.0, rem_fraction * 100.0), 1)
+                result_data["geminiHourlyPercent"] = used_pct
+                result_data["geminiWeeklyPercent"] = used_pct
+                result_data["geminiHourlyUsed"] = int(used_pct * 10000)
+                result_data["geminiWeeklyUsed"] = int(used_pct * 100000)
+                result_data["geminiRateLimits"] = {
+                    "available": True,
+                    "planName": plan_name,
+                    "usedPercent": used_pct,
+                    "remainingPercent": rem_pct,
+                    "resetTime": gemini_quota.get("resetTime")
+                }
+    except Exception as e:
+        logging.debug(f"Failed to process Antigravity LanguageServer status: {e}")
     
     gemini_weekly = 0
     gemini_hourly = 0
@@ -4568,25 +4655,26 @@ async def get_usage_limits(request: Request):
     except Exception as e:
         logging.error(f"Failed to fetch usage limits from ccusage: {e}")
 
-    # Fallback to local Antigravity transcript scan if ccusage reports zero for Gemini
-    if gemini_weekly == 0 and gemini_hourly == 0:
-        try:
-            agy_weekly, agy_hourly = fetch_antigravity_token_usage(datetime.datetime.now(datetime.timezone.utc).timestamp())
-            gemini_weekly = agy_weekly
-            gemini_hourly = agy_hourly
-        except Exception as exc:
-            logging.warning(f"Failed to calculate local Antigravity usage: {exc}")
-
     # Limits
     gw_limit = 10000000
     gh_limit = 1000000
     cw_limit = 100000000
     ch_limit = 10000000
 
-    result_data["geminiWeeklyUsed"] = gemini_weekly
-    result_data["geminiWeeklyPercent"] = min(100.0, round((gemini_weekly / gw_limit) * 100, 1))
-    result_data["geminiHourlyUsed"] = gemini_hourly
-    result_data["geminiHourlyPercent"] = min(100.0, round((gemini_hourly / gh_limit) * 100, 1))
+    if not result_data.get("geminiRateLimits"):
+        # Fallback to local Antigravity transcript scan if ccusage reports zero for Gemini
+        if gemini_weekly == 0 and gemini_hourly == 0:
+            try:
+                agy_weekly, agy_hourly = fetch_antigravity_token_usage(datetime.datetime.now(datetime.timezone.utc).timestamp())
+                gemini_weekly = agy_weekly
+                gemini_hourly = agy_hourly
+            except Exception as exc:
+                logging.warning(f"Failed to calculate local Antigravity usage: {exc}")
+
+        result_data["geminiWeeklyUsed"] = gemini_weekly
+        result_data["geminiWeeklyPercent"] = min(100.0, round((gemini_weekly / gw_limit) * 100, 1))
+        result_data["geminiHourlyUsed"] = gemini_hourly
+        result_data["geminiHourlyPercent"] = min(100.0, round((gemini_hourly / gh_limit) * 100, 1))
 
     result_data["claudeWeeklyUsed"] = claude_weekly
     result_data["claudeWeeklyPercent"] = min(100.0, round((claude_weekly / cw_limit) * 100, 1))
