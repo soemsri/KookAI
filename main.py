@@ -4367,9 +4367,9 @@ def fetch_antigravity_language_server_quota() -> Optional[dict[str, Any]]:
 
         for p in psutil.process_iter(["pid", "name", "cmdline"]):
             pname = (p.info.get("name") or "").lower()
-            if "language_server" not in pname:
-                continue
             cmdline = p.info.get("cmdline") or []
+            if "language_server" not in pname and not any("language_server" in str(arg).lower() for arg in cmdline):
+                continue
             csrf_token = None
             for i, arg in enumerate(cmdline):
                 if arg == "--csrf_token" and i + 1 < len(cmdline):
@@ -4378,28 +4378,60 @@ def fetch_antigravity_language_server_quota() -> Optional[dict[str, Any]]:
             if not csrf_token:
                 continue
 
-            proc = psutil.Process(p.info["pid"])
-            for conn in proc.net_connections():
-                if conn.status == "LISTEN" and conn.laddr.ip == "127.0.0.1":
-                    port = conn.laddr.port
-                    url = f"https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUserStatus"
-                    req = urllib.request.Request(
-                        url,
-                        data=json.dumps({"metadata": {"ide_name": "antigravity"}}).encode(),
-                        headers={
-                            "Content-Type": "application/json",
-                            "X-Codeium-Csrf-Token": csrf_token,
-                        },
-                    )
+            try:
+                proc = psutil.Process(p.info["pid"])
+                conns = proc.net_connections()
+            except Exception:
+                conns = []
+
+            ports_to_try = [c.laddr.port for c in conns if c.status == "LISTEN" and c.laddr.ip in ("127.0.0.1", "0.0.0.0", "::1")]
+
+            for port in ports_to_try:
+                for scheme in ["https", "http"]:
+                    user_status = None
+                    quota_summary = None
+
+                    # 1. Try RetrieveUserQuotaSummary (gives explicit weekly & 5h buckets)
                     try:
-                        with urllib.request.urlopen(req, context=ctx, timeout=2) as resp:
+                        url_quota = f"{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+                        req_quota = urllib.request.Request(
+                            url_quota,
+                            data=json.dumps({"metadata": {"ide_name": "antigravity"}}).encode(),
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-Codeium-Csrf-Token": csrf_token,
+                            },
+                        )
+                        with urllib.request.urlopen(req_quota, context=ctx, timeout=2) as resp:
                             if resp.status == 200:
-                                data = json.loads(resp.read().decode())
-                                user_status = data.get("userStatus")
-                                if isinstance(user_status, dict):
-                                    return user_status
+                                q_data = json.loads(resp.read().decode())
+                                quota_summary = q_data.get("response")
                     except Exception:
-                        continue
+                        pass
+
+                    # 2. Try GetUserStatus (gives user tier & plan name)
+                    try:
+                        url_user = f"{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUserStatus"
+                        req_user = urllib.request.Request(
+                            url_user,
+                            data=json.dumps({"metadata": {"ide_name": "antigravity"}}).encode(),
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-Codeium-Csrf-Token": csrf_token,
+                            },
+                        )
+                        with urllib.request.urlopen(req_user, context=ctx, timeout=2) as resp:
+                            if resp.status == 200:
+                                u_data = json.loads(resp.read().decode())
+                                user_status = u_data.get("userStatus")
+                    except Exception:
+                        pass
+
+                    if quota_summary or user_status:
+                        return {
+                            "userStatus": user_status,
+                            "quotaSummary": quota_summary,
+                        }
     except Exception as exc:
         logging.debug(f"Could not query Antigravity LanguageServer: {exc}")
     return None
@@ -4486,66 +4518,153 @@ async def get_usage_limits(request: Request):
         "xaiHourlyUsed": 0,
         "xaiHourlyLimit": 0,
         "geminiRateLimits": None,
+        "claudeRateLimits": None,
         "codexRateLimits": None,
         "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop.",
         "geminiUsageNote": "Gemini models use your Google AI / Antigravity workspace quota. Token usage reflects active workspace sessions and recent prompt activity.",
         "xaiUsageNote": "Grok usage and billing are managed by your xAI account. Grok Build does not currently expose an account-wide quota percentage here.",
     }
 
-    try:
-        codex_rate_limits = await asyncio.to_thread(
-            fetch_codex_rate_limits,
-            timeout_seconds=8,
-        )
-        if codex_rate_limits:
-            result_data["codexRateLimits"] = codex_rate_limits
-            primary = codex_rate_limits.get("primary") or {}
-            secondary = codex_rate_limits.get("secondary") or {}
-            if isinstance(primary.get("usedPercent"), int):
-                result_data["gptWeeklyPercent"] = float(primary["usedPercent"])
-                result_data["gptWeeklyUsed"] = primary["usedPercent"]
-                result_data["gptWeeklyLimit"] = 100
-            if isinstance(secondary.get("usedPercent"), int):
-                result_data["gptHourlyPercent"] = float(secondary["usedPercent"])
-                result_data["gptHourlyUsed"] = secondary["usedPercent"]
-                result_data["gptHourlyLimit"] = 100
-    except Exception as e:
-        logging.error(f"Failed to fetch Codex account rate limits: {e}")
+    # Fetch provider rate limits and Language Server status concurrently
+    codex_task = asyncio.to_thread(fetch_codex_rate_limits, timeout_seconds=3)
+    agy_task = asyncio.to_thread(fetch_antigravity_language_server_quota)
 
-    try:
-        antigravity_status = await asyncio.to_thread(fetch_antigravity_language_server_quota)
-        if antigravity_status:
-            user_tier = antigravity_status.get("userTier", {})
-            plan_name = user_tier.get("name") or "Google AI Ultra"
-            result_data["antigravityPlan"] = plan_name
-            
-            model_configs = antigravity_status.get("cascadeModelConfigData", {}).get("clientModelConfigs", [])
-            gemini_quota = None
+    codex_rate_limits, antigravity_status = await asyncio.gather(
+        codex_task, agy_task, return_exceptions=True
+    )
+
+    if isinstance(codex_rate_limits, Exception):
+        logging.error(f"Failed to fetch Codex account rate limits: {codex_rate_limits}")
+        codex_rate_limits = None
+
+    if isinstance(antigravity_status, Exception):
+        logging.debug(f"Failed to fetch Antigravity language server status: {antigravity_status}")
+        antigravity_status = None
+
+    if codex_rate_limits:
+        result_data["codexRateLimits"] = codex_rate_limits
+        primary = codex_rate_limits.get("primary") or {}
+        secondary = codex_rate_limits.get("secondary") or {}
+        if isinstance(primary.get("usedPercent"), int):
+            result_data["gptWeeklyPercent"] = float(primary["usedPercent"])
+            result_data["gptWeeklyUsed"] = primary["usedPercent"]
+            result_data["gptWeeklyLimit"] = 100
+        if isinstance(secondary.get("usedPercent"), int):
+            result_data["gptHourlyPercent"] = float(secondary["usedPercent"])
+            result_data["gptHourlyUsed"] = secondary["usedPercent"]
+            result_data["gptHourlyLimit"] = 100
+
+    if antigravity_status:
+        user_status = antigravity_status.get("userStatus") if isinstance(antigravity_status.get("userStatus"), dict) else antigravity_status
+        quota_summary = antigravity_status.get("quotaSummary") if isinstance(antigravity_status.get("quotaSummary"), dict) else None
+
+        user_tier = user_status.get("userTier", {}) if isinstance(user_status, dict) else {}
+        plan_name = user_tier.get("name") or "Google AI Ultra"
+        result_data["antigravityPlan"] = plan_name
+
+        gemini_weekly_bucket = None
+        gemini_hourly_bucket = None
+        claude_weekly_bucket = None
+        claude_hourly_bucket = None
+
+        if quota_summary and isinstance(quota_summary.get("groups"), list):
+            for group in quota_summary["groups"]:
+                gname = (group.get("displayName") or "").lower()
+                buckets = group.get("buckets", [])
+                if "gemini" in gname:
+                    for b in buckets:
+                        bid = (b.get("bucketId") or "").lower()
+                        b_window = (b.get("window") or "").lower()
+                        rem_fraction = float(b.get("remainingFraction", 1.0))
+                        used_pct = round(max(0.0, (1.0 - rem_fraction) * 100.0), 1)
+                        rem_pct = round(min(100.0, rem_fraction * 100.0), 1)
+                        b_data = {
+                            "usedPercent": used_pct,
+                            "remainingPercent": rem_pct,
+                            "resetTime": b.get("resetTime"),
+                            "description": b.get("description"),
+                        }
+                        if "weekly" in bid or "weekly" in b_window:
+                            gemini_weekly_bucket = b_data
+                            result_data["geminiWeeklyPercent"] = used_pct
+                            result_data["geminiWeeklyUsed"] = int(used_pct * 100000)
+                        elif "5h" in bid or "5h" in b_window or "hourly" in bid:
+                            gemini_hourly_bucket = b_data
+                            result_data["geminiHourlyPercent"] = used_pct
+                            result_data["geminiHourlyUsed"] = int(used_pct * 10000)
+                elif "claude" in gname or "3p" in gname or "gpt" in gname:
+                    for b in buckets:
+                        bid = (b.get("bucketId") or "").lower()
+                        b_window = (b.get("window") or "").lower()
+                        rem_fraction = float(b.get("remainingFraction", 1.0))
+                        used_pct = round(max(0.0, (1.0 - rem_fraction) * 100.0), 1)
+                        rem_pct = round(min(100.0, rem_fraction * 100.0), 1)
+                        b_data = {
+                            "usedPercent": used_pct,
+                            "remainingPercent": rem_pct,
+                            "resetTime": b.get("resetTime"),
+                            "description": b.get("description"),
+                        }
+                        if "weekly" in bid or "weekly" in b_window:
+                            claude_weekly_bucket = b_data
+                            result_data["claudeWeeklyPercent"] = used_pct
+                            result_data["claudeWeeklyUsed"] = int(used_pct * 1000000)
+                        elif "5h" in bid or "5h" in b_window or "hourly" in bid:
+                            claude_hourly_bucket = b_data
+                            result_data["claudeHourlyPercent"] = used_pct
+                            result_data["claudeHourlyUsed"] = int(used_pct * 100000)
+
+        # Fallback to model configs if RetrieveUserQuotaSummary was empty
+        if not gemini_weekly_bucket and not gemini_hourly_bucket and isinstance(user_status, dict):
+            model_configs = user_status.get("cascadeModelConfigData", {}).get("clientModelConfigs", [])
             for m in model_configs:
                 model_id = str(m.get("modelId", "")).lower()
-                if "gemini-3.7" in model_id or "gemini" in model_id:
+                if "gemini" in model_id:
                     qi = m.get("quotaInfo")
                     if qi and "remainingFraction" in qi:
-                        gemini_quota = qi
+                        rem_fraction = float(qi.get("remainingFraction", 1.0))
+                        used_pct = round(max(0.0, (1.0 - rem_fraction) * 100.0), 1)
+                        rem_pct = round(min(100.0, rem_fraction * 100.0), 1)
+                        gemini_hourly_bucket = {
+                            "usedPercent": used_pct,
+                            "remainingPercent": rem_pct,
+                            "resetTime": qi.get("resetTime"),
+                            "description": None,
+                        }
+                        gemini_weekly_bucket = dict(gemini_hourly_bucket)
+                        result_data["geminiHourlyPercent"] = used_pct
+                        result_data["geminiWeeklyPercent"] = used_pct
+                        result_data["geminiHourlyUsed"] = int(used_pct * 10000)
+                        result_data["geminiWeeklyUsed"] = int(used_pct * 100000)
                         break
-            
-            if gemini_quota:
-                rem_fraction = float(gemini_quota.get("remainingFraction", 1.0))
-                used_pct = round(max(0.0, (1.0 - rem_fraction) * 100.0), 1)
-                rem_pct = round(min(100.0, rem_fraction * 100.0), 1)
-                result_data["geminiHourlyPercent"] = used_pct
-                result_data["geminiWeeklyPercent"] = used_pct
-                result_data["geminiHourlyUsed"] = int(used_pct * 10000)
-                result_data["geminiWeeklyUsed"] = int(used_pct * 100000)
-                result_data["geminiRateLimits"] = {
-                    "available": True,
-                    "planName": plan_name,
-                    "usedPercent": used_pct,
-                    "remainingPercent": rem_pct,
-                    "resetTime": gemini_quota.get("resetTime")
-                }
-    except Exception as e:
-        logging.debug(f"Failed to process Antigravity LanguageServer status: {e}")
+
+        if gemini_weekly_bucket or gemini_hourly_bucket:
+            primary_gemini = gemini_hourly_bucket or gemini_weekly_bucket
+            weekly_gemini = gemini_weekly_bucket or gemini_hourly_bucket
+            result_data["geminiRateLimits"] = {
+                "available": True,
+                "planName": plan_name,
+                "weekly": weekly_gemini,
+                "hourly": primary_gemini,
+                "usedPercent": primary_gemini.get("usedPercent", 0.0),
+                "remainingPercent": primary_gemini.get("remainingPercent", 100.0),
+                "resetTime": primary_gemini.get("resetTime"),
+                "description": primary_gemini.get("description"),
+            }
+
+        if claude_weekly_bucket or claude_hourly_bucket:
+            primary_claude = claude_hourly_bucket or claude_weekly_bucket
+            weekly_claude = claude_weekly_bucket or claude_hourly_bucket
+            result_data["claudeRateLimits"] = {
+                "available": True,
+                "planName": plan_name,
+                "weekly": weekly_claude,
+                "hourly": primary_claude,
+                "usedPercent": primary_claude.get("usedPercent", 0.0),
+                "remainingPercent": primary_claude.get("remainingPercent", 100.0),
+                "resetTime": primary_claude.get("resetTime"),
+                "description": primary_claude.get("description"),
+            }
     
     gemini_weekly = 0
     gemini_hourly = 0
@@ -4560,7 +4679,7 @@ async def get_usage_limits(request: Request):
             ["npx", "ccusage", "--sections", "daily,session", "--json"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=2,
             shell=(os.name == 'nt'),
             **hidden_subprocess_kwargs(),
         )
@@ -4653,7 +4772,7 @@ async def get_usage_limits(request: Request):
                     if matches_provider(item, 'gpt'):
                         gpt_hourly += tokens
     except Exception as e:
-        logging.error(f"Failed to fetch usage limits from ccusage: {e}")
+        logging.debug(f"Failed to fetch usage limits from ccusage: {e}")
 
     # Limits
     gw_limit = 10000000
@@ -4676,10 +4795,11 @@ async def get_usage_limits(request: Request):
         result_data["geminiHourlyUsed"] = gemini_hourly
         result_data["geminiHourlyPercent"] = min(100.0, round((gemini_hourly / gh_limit) * 100, 1))
 
-    result_data["claudeWeeklyUsed"] = claude_weekly
-    result_data["claudeWeeklyPercent"] = min(100.0, round((claude_weekly / cw_limit) * 100, 1))
-    result_data["claudeHourlyUsed"] = claude_hourly
-    result_data["claudeHourlyPercent"] = min(100.0, round((claude_hourly / ch_limit) * 100, 1))
+    if not result_data.get("claudeRateLimits"):
+        result_data["claudeWeeklyUsed"] = claude_weekly
+        result_data["claudeWeeklyPercent"] = min(100.0, round((claude_weekly / cw_limit) * 100, 1))
+        result_data["claudeHourlyUsed"] = claude_hourly
+        result_data["claudeHourlyPercent"] = min(100.0, round((claude_hourly / ch_limit) * 100, 1))
 
     if not result_data.get("codexRateLimits"):
         result_data["gptWeeklyUsed"] = gpt_weekly

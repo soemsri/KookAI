@@ -357,7 +357,7 @@ const slashCommands: PromptSuggestion[] = [
   { name: "/help", desc: "Show prompt help context panel", type: "Command" },
 ];
 
-const USAGE_LIMIT_TIMEOUT_MS = 5000;
+const USAGE_LIMIT_TIMEOUT_MS = 8000;
 const DEFAULT_USAGE_LIMIT_DATA = {
   geminiWeeklyPercent: 0,
   geminiHourlyPercent: 0,
@@ -2633,6 +2633,18 @@ allowQueue: false,
       }
     }
     const bucket = getUsageBucketForModel(selectedModel);
+    if (bucket.key === 'gemini' && usageLimitData.geminiRateLimits) {
+      const hourly = usageLimitData.geminiRateLimits.hourly || usageLimitData.geminiRateLimits;
+      return usageMode === 'usage'
+        ? Number(hourly.usedPercent ?? 0)
+        : Number(hourly.remainingPercent ?? Math.max(0, 100 - (hourly.usedPercent ?? 0)));
+    }
+    if (bucket.key === 'claude' && usageLimitData.claudeRateLimits) {
+      const hourly = usageLimitData.claudeRateLimits.hourly || usageLimitData.claudeRateLimits;
+      return usageMode === 'usage'
+        ? Number(hourly.usedPercent ?? 0)
+        : Number(hourly.remainingPercent ?? Math.max(0, 100 - (hourly.usedPercent ?? 0)));
+    }
     const activeHourlyPercent = Number(usageLimitData[`${bucket.key}HourlyPercent`] ?? 0);
     return usageMode === 'usage' ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent);
   };
@@ -2701,19 +2713,39 @@ allowQueue: false,
     period: UsagePeriodKey,
     label: string,
   ) => {
-    if (bucket === 'gemini' && usageLimitData?.geminiRateLimits) {
-      const rateLimits = usageLimitData.geminiRateLimits;
-      const usedPercent = Number(rateLimits.usedPercent ?? 0);
-      const remainingPercent = Number(rateLimits.remainingPercent ?? Math.max(0, 100 - usedPercent));
+    const rateLimits = bucket === 'gemini'
+      ? usageLimitData?.geminiRateLimits
+      : bucket === 'claude'
+        ? usageLimitData?.claudeRateLimits
+        : null;
+
+    if (rateLimits) {
+      const bucketData = period === 'Weekly' ? (rateLimits.weekly || rateLimits) : (rateLimits.hourly || rateLimits.fiveHour || rateLimits);
+      const usedPercent = Number(bucketData?.usedPercent ?? rateLimits.usedPercent ?? 0);
+      const remainingPercent = Number(bucketData?.remainingPercent ?? rateLimits.remainingPercent ?? Math.max(0, 100 - usedPercent));
       const displayPercent = usageMode === 'usage' ? usedPercent : remainingPercent;
-      const resetText = formatResetDuration(rateLimits.resetTime);
-      const periodDesc = period === 'Weekly'
-        ? (usageMode === 'usage'
-            ? `Used ${usedPercent.toFixed(0)}% of your weekly quota`
-            : `You have used some of your weekly limit${resetText ? `, it will fully refresh ${resetText}` : ''}`)
-        : (usageMode === 'usage'
-            ? `Used ${usedPercent.toFixed(0)}% of your 5-hour limit`
-            : `You have used some of your 5-hour limit${resetText ? `, it will fully refresh ${resetText}` : ''}`);
+      const resetTime = bucketData?.resetTime ?? rateLimits.resetTime;
+      const resetText = formatResetDuration(resetTime);
+      const customDesc = bucketData?.description;
+
+      let periodDesc = '';
+      if (usageMode === 'usage') {
+        periodDesc = period === 'Weekly'
+          ? `Used ${usedPercent.toFixed(0)}% of your weekly quota`
+          : `Used ${usedPercent.toFixed(0)}% of your 5-hour limit`;
+      } else {
+        if (customDesc) {
+          periodDesc = customDesc;
+        } else if (remainingPercent >= 100) {
+          periodDesc = period === 'Weekly'
+            ? 'You have 100% of your weekly limit remaining'
+            : 'You have 100% of your 5-hour limit remaining';
+        } else {
+          periodDesc = period === 'Weekly'
+            ? `You have used some of your weekly limit${resetText ? `, it will fully refresh ${resetText}` : ''}`
+            : `You have used some of your 5-hour limit${resetText ? `, it will fully refresh ${resetText}` : ''}`;
+        }
+      }
 
       return (
         <View style={styles.usageRow}>

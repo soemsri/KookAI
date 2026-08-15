@@ -2389,10 +2389,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function updateSection(dataPrefix, limitName, elementPrefix = dataPrefix) {
-      if (dataPrefix.startsWith("gemini") && usageData.geminiRateLimits) {
-        const rateLimits = usageData.geminiRateLimits;
-        const usedPercent = Number(rateLimits.usedPercent || 0);
-        const remainingPercent = Number(rateLimits.remainingPercent || Math.max(0, 100 - usedPercent));
+      const isGemini = dataPrefix.startsWith("gemini") && usageData.geminiRateLimits;
+      const isClaudeRateLimit = dataPrefix.startsWith("claude") && usageData.claudeRateLimits;
+      
+      if (isGemini || isClaudeRateLimit) {
+        const rateLimits = isGemini ? usageData.geminiRateLimits : usageData.claudeRateLimits;
+        const isWeekly = dataPrefix.toLowerCase().includes("weekly");
+        const bucketData = isWeekly ? (rateLimits.weekly || rateLimits) : (rateLimits.hourly || rateLimits.fiveHour || rateLimits);
+        const usedPercent = Number(bucketData.usedPercent !== undefined ? bucketData.usedPercent : (rateLimits.usedPercent || 0));
+        const remainingPercent = Number(bucketData.remainingPercent !== undefined ? bucketData.remainingPercent : (rateLimits.remainingPercent || Math.max(0, 100 - usedPercent)));
         const val = isUsage ? usedPercent : remainingPercent;
         const percentEl = document.getElementById(`${elementPrefix}Percent`);
         const chartEl = document.getElementById(`${elementPrefix}Chart`);
@@ -2402,15 +2407,23 @@ document.addEventListener("DOMContentLoaded", () => {
         if (chartEl) chartEl.setAttribute("stroke-dasharray", `${val}, 100`);
 
         if (descEl) {
-          const resetText = formatResetDuration(rateLimits.resetTime);
-          if (dataPrefix === "geminiWeekly") {
-            descEl.textContent = isUsage
+          if (isUsage) {
+            descEl.textContent = isWeekly
               ? `Used ${usedPercent.toFixed(0)}% of your weekly quota`
-              : `You have used some of your weekly limit${resetText ? `, it will fully refresh ${resetText}` : ''}.`;
+              : `Used ${usedPercent.toFixed(0)}% of your 5-hour limit`;
           } else {
-            descEl.textContent = isUsage
-              ? `Used ${usedPercent.toFixed(0)}% of your 5-hour limit`
-              : `You have used some of your 5-hour limit${resetText ? `, it will fully refresh ${resetText}` : ''}.`;
+            if (bucketData.description) {
+              descEl.textContent = bucketData.description;
+            } else if (remainingPercent >= 100) {
+              descEl.textContent = isWeekly
+                ? `You have 100% of your weekly limit remaining.`
+                : `You have 100% of your 5-hour limit remaining.`;
+            } else {
+              const resetText = formatResetDuration(bucketData.resetTime || rateLimits.resetTime);
+              descEl.textContent = isWeekly
+                ? `You have used some of your weekly limit${resetText ? `, it will fully refresh ${resetText}` : ''}.`
+                : `You have used some of your 5-hour limit${resetText ? `, it will fully refresh ${resetText}` : ''}.`;
+            }
           }
         }
         return;
