@@ -4384,7 +4384,7 @@ def fetch_antigravity_language_server_quota() -> Optional[dict[str, Any]]:
             except Exception:
                 conns = []
 
-            ports_to_try = [c.laddr.port for c in conns if c.status == "LISTEN" and c.laddr.ip in ("127.0.0.1", "0.0.0.0", "::1")]
+            ports_to_try = list(dict.fromkeys([c.laddr.port for c in conns if getattr(c, "status", None) == "LISTEN"]))
 
             for port in ports_to_try:
                 for scheme in ["https", "http"]:
