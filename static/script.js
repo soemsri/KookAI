@@ -297,10 +297,15 @@ document.addEventListener("DOMContentLoaded", () => {
       ))
       .join("");
 
-    if (!nextCatalog[currentModel]) {
+    const savedModel = (localStorage.getItem("kookai_model") || localStorage.getItem("antigravity_model"));
+    if (savedModel && nextCatalog[savedModel]) {
+      currentModel = savedModel;
+    } else if (!nextCatalog[currentModel]) {
       currentModel = defaultCatalogModel;
     }
-    settingsDefaultModel.value = currentModel;
+    if (settingsDefaultModel) {
+      settingsDefaultModel.value = currentModel;
+    }
     const diagModelCatalog = document.getElementById("diagModelCatalog");
     if (diagModelCatalog) {
       diagModelCatalog.textContent = `${modelCatalogVersion} · ${models.length} models`;
@@ -431,6 +436,9 @@ document.addEventListener("DOMContentLoaded", () => {
     currentModel = Object.keys(MODEL_CATALOG).length && !MODEL_CATALOG[model]
       ? defaultCatalogModel
       : model;
+    if (settingsDefaultModel) {
+      settingsDefaultModel.value = currentModel;
+    }
     updateCodexControls();
     if (startFreshOnProviderChange && activeConversationId) {
       startNewConversation();
@@ -473,6 +481,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function saveAppPreferences() {
+    localStorage.setItem("kookai_workspace", currentWorkspace);
+    localStorage.setItem("kookai_project", currentWorkspace);
     localStorage.setItem("kookai_model", currentModel);
     localStorage.setItem("kookai_codex_effort", currentCodexEffort);
     localStorage.setItem("kookai_codex_speed", currentCodexSpeed);
@@ -483,6 +493,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function loadAppPreferences() {
+    const savedWorkspace = (localStorage.getItem("kookai_workspace") || localStorage.getItem("kookai_project") || localStorage.getItem("antigravity_workspace") || localStorage.getItem("antigravity_project"));
     const savedModel = (localStorage.getItem("kookai_model") || localStorage.getItem("antigravity_model"));
     const savedTarget = (localStorage.getItem("kookai_target") || localStorage.getItem("antigravity_target"));
     const savedThemeMode = (localStorage.getItem("kookai_theme") || localStorage.getItem("antigravity_theme"));
@@ -490,6 +501,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const savedCodexSpeed = (localStorage.getItem("kookai_codex_speed") || localStorage.getItem("antigravity_codex_speed"));
     const savedClaudeEffort = localStorage.getItem("kookai_claude_effort");
     const savedClaudeThinking = localStorage.getItem("kookai_claude_thinking");
+
+    if (savedWorkspace) {
+      currentWorkspace = savedWorkspace;
+      if (headerProject) headerProject.textContent = currentWorkspace;
+    }
 
     if (["Light", "Medium", "High", "Extra High", "Ultra"].includes(savedCodexEffort)) {
       currentCodexEffort = savedCodexEffort;
@@ -515,6 +531,9 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     } else if (Object.keys(MODEL_CATALOG).length) {
       applyModelSelection(defaultCatalogModel, false);
+    }
+    if (settingsDefaultModel) {
+      settingsDefaultModel.value = currentModel;
     }
     updateCodexControls();
 
@@ -610,6 +629,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (headerProject) {
           headerProject.textContent = currentWorkspace || "No workspace";
         }
+        saveAppPreferences();
+      } else if (headerProject) {
+        headerProject.textContent = currentWorkspace;
       }
       if (projData.workspace_dir) {
         const diagWorkspace = document.getElementById("diagWorkspace");
@@ -794,8 +816,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     autoCloseMobileSidebar();
     activeConversationId = cid;
-    currentWorkspace = project;
-    if (headerProject) headerProject.textContent = project;
+    if (project) {
+      currentWorkspace = project;
+      if (headerProject) headerProject.textContent = project;
+      saveAppPreferences();
+    }
 
     const convoObj = conversationsList.find(c => c.id === cid);
     const convoTitle = convoObj ? convoObj.title : "Building Python Web App";
@@ -858,6 +883,12 @@ document.addEventListener("DOMContentLoaded", () => {
     activeConversationId = generateUUID();
     messagesContainer.innerHTML = "";
     welcomeScreen.classList.remove("hidden");
+
+    // Restore saved default model if available
+    const savedModel = (localStorage.getItem("kookai_model") || localStorage.getItem("antigravity_model"));
+    if (savedModel && (!Object.keys(MODEL_CATALOG).length || MODEL_CATALOG[savedModel])) {
+      applyModelSelection(savedModel, false);
+    }
 
     if (headerProject) headerProject.textContent = currentWorkspace;
     if (headerConvo) headerConvo.textContent = "New Conversation";
@@ -1569,6 +1600,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentWorkspace = val;
     if (headerProject) headerProject.textContent = val;
     workspaceDropdown.classList.add("hidden");
+    saveAppPreferences();
     startNewConversation();
   });
 

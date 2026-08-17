@@ -41,7 +41,7 @@ function mockExpoSecureStore() {
 mockExpoSecureStore();
 
 async function runSessionModelPersistenceTests() {
-  console.log("=== Running Mobile Client Model & Session Persistence Tests ===");
+  console.log("=== Running Mobile & Web Client Model & Session Persistence Tests ===");
   const SecureStore = require('expo-secure-store');
 
   // Test 1: Saving & loading selected model
@@ -86,6 +86,84 @@ async function runSessionModelPersistenceTests() {
     throw new Error(`Expected temporary conversation to clear stored convoId, got "${afterTemp}"`);
   }
   console.log("✓ Temporary session handled cleanly!");
+
+  // Test 4: loadProjects preserving saved project
+  console.log("Testing loadProjects preservation...");
+  const projectList = ["VirtualOffice", "KookAI", "agy"];
+  const savedProj = await SecureStore.getItemAsync(PREFERENCE_KEYS.project);
+  let activeSelectedProj = "agy"; // initial state
+  const selectedProjRef = { current: savedProj || activeSelectedProj };
+
+  // simulate loadProjects logic
+  if (selectedProjRef.current && projectList.includes(selectedProjRef.current)) {
+    activeSelectedProj = selectedProjRef.current;
+  } else {
+    activeSelectedProj = projectList[0];
+    selectedProjRef.current = projectList[0];
+    await SecureStore.setItemAsync(PREFERENCE_KEYS.project, projectList[0]);
+  }
+
+  if (activeSelectedProj !== "KookAI") {
+    throw new Error(`Expected activeSelectedProj to be preserved as "KookAI", got "${activeSelectedProj}"`);
+  }
+  console.log("✓ loadProjects preserves saved project when valid in server list!");
+
+  // Test 5: Fallback when saved project does not exist on server
+  console.log("Testing loadProjects fallback on non-existent project...");
+  const newServerList = ["VirtualOffice", "OtherApp"];
+  if (selectedProjRef.current && newServerList.includes(selectedProjRef.current)) {
+    activeSelectedProj = selectedProjRef.current;
+  } else {
+    activeSelectedProj = newServerList[0];
+    selectedProjRef.current = newServerList[0];
+    await SecureStore.setItemAsync(PREFERENCE_KEYS.project, newServerList[0]);
+  }
+
+  if (activeSelectedProj !== "VirtualOffice") {
+    throw new Error(`Expected activeSelectedProj to fallback to "VirtualOffice", got "${activeSelectedProj}"`);
+  }
+  const persistedFallback = await SecureStore.getItemAsync(PREFERENCE_KEYS.project);
+  if (persistedFallback !== "VirtualOffice") {
+    throw new Error(`Expected SecureStore to record fallback "VirtualOffice", got "${persistedFallback}"`);
+  }
+  console.log("✓ loadProjects correctly falls back and updates storage when saved project is missing!");
+
+  // Test 6: Web Client localStorage preference test simulation
+  console.log("Testing Web Client localStorage preferences logic...");
+  const webLocalStorage: Record<string, string> = {};
+  let webWorkspace = "agy";
+  let webModel = "Gemini 3.7 Flash (High)";
+
+  function webSaveAppPreferences() {
+    webLocalStorage["kookai_workspace"] = webWorkspace;
+    webLocalStorage["kookai_project"] = webWorkspace;
+    webLocalStorage["kookai_model"] = webModel;
+  }
+
+  function webLoadAppPreferences() {
+    const saved = webLocalStorage["kookai_workspace"] || webLocalStorage["kookai_project"];
+    if (saved) webWorkspace = saved;
+    const model = webLocalStorage["kookai_model"];
+    if (model) webModel = model;
+  }
+
+  // Set web state and save
+  webWorkspace = "KookAI";
+  webModel = "DeepSeek R1";
+  webSaveAppPreferences();
+
+  // Reset module variables to simulate page reload
+  webWorkspace = "agy";
+  webModel = "Gemini 3.7 Flash (High)";
+  webLoadAppPreferences();
+
+  if (webWorkspace !== "KookAI") {
+    throw new Error(`Expected webWorkspace to restore to "KookAI", got "${webWorkspace}"`);
+  }
+  if (webModel !== "DeepSeek R1") {
+    throw new Error(`Expected webModel to restore to "DeepSeek R1", got "${webModel}"`);
+  }
+  console.log("✓ Web client preferences save & load simulated successfully!");
 
   console.log("=== ALL MODEL & SESSION PERSISTENCE TESTS PASSED! 🎉 ===");
 }

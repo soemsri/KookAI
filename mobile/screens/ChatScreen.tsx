@@ -1266,6 +1266,8 @@ selectedProjectRef.current = selectedProject;
       if (savedProject) {
         setSelectedProject(savedProject);
         selectedProjectRef.current = savedProject;
+        activeConvoProjectRef.current = savedProject;
+        setActiveConvoProject(savedProject);
       }
       if (savedConvoId) {
         savedConvoIdRef.current = savedConvoId;
@@ -1276,8 +1278,10 @@ selectedProjectRef.current = selectedProject;
         : activeDefaultModel;
       if (savedModel && activeModelsList.some((model) => model.value === savedModel)) {
         setSelectedModel(savedModel);
+        setDraftSettingsModel(savedModel);
       } else {
         setSelectedModel(effectiveModel);
+        setDraftSettingsModel(effectiveModel);
       }
       if (
         savedCodexEffort
@@ -1582,6 +1586,7 @@ fetchUsageLimits();
       selectedProjectRef.current = list[0];
       setActiveConvoProject(list[0]);
       activeConvoProjectRef.current = list[0];
+      SecureStore.setItemAsync(PREFERENCE_KEYS.project, list[0]).catch(() => {});
       await loadConversations(true);
       showToast(`Switched to "${server.name}"`);
     } catch (err) {
@@ -1599,6 +1604,7 @@ fetchUsageLimits();
     selectedProjectRef.current = workspaceId;
     setActiveConvoProject(workspaceId);
     activeConvoProjectRef.current = workspaceId;
+    SecureStore.setItemAsync(PREFERENCE_KEYS.project, workspaceId).catch(() => {});
     showToast(`Switched workspace to "${workspaceId}"`);
     setIsServerSwitcherOpen(false);
   };
@@ -1623,21 +1629,25 @@ fetchUsageLimits();
   };
 
   const loadProjects = async () => {
-setLoadingProjects(true);
-try {
-const data = await callHostApi('/api/projects');
-const list = Array.isArray(data.projects) && data.projects.length > 0 ? data.projects : ["agy"];
-setProjects(list);
-if (!list.includes(selectedProject)) {
-setSelectedProject(list[0]);
-selectedProjectRef.current = list[0];
-}
-} catch (err) {
-console.error("Error loading projects:", err);
-} finally {
-setLoadingProjects(false);
-}
-};
+    setLoadingProjects(true);
+    try {
+      const data = await callHostApi('/api/projects');
+      const list = Array.isArray(data.projects) && data.projects.length > 0 ? data.projects : ["agy"];
+      setProjects(list);
+      const targetProject = selectedProjectRef.current;
+      if (targetProject && list.includes(targetProject)) {
+        setSelectedProject(targetProject);
+      } else {
+        setSelectedProject(list[0]);
+        selectedProjectRef.current = list[0];
+        SecureStore.setItemAsync(PREFERENCE_KEYS.project, list[0]).catch(() => {});
+      }
+    } catch (err) {
+      console.error("Error loading projects:", err);
+    } finally {
+      setLoadingProjects(false);
+    }
+  };
 
 const closeProjectModal = () => {
 if (creatingProject) return;
@@ -1951,14 +1961,20 @@ const loadConversations = async (autoSelect = true) => {
     const list = data.conversations || [];
     setConversations(list);
 
-    // Auto-select conversation on initial load: attempt saved conversation first, fallback to list[0]
-    if (autoSelect && list.length > 0 && !activeConvoIdRef.current) {
+    // Auto-select conversation on initial load: attempt saved conversation first, fallback to current project's conversation or fresh chat
+    if (autoSelect && !activeConvoIdRef.current) {
       const targetSavedId = savedConvoIdRef.current;
       const targetConvo = targetSavedId ? list.find((c: Conversation) => c.id === targetSavedId) : null;
       if (targetConvo) {
-        await selectConversation(targetConvo.id, targetConvo.project);
+        await selectConversation(targetConvo.id, targetConvo.project, false);
       } else {
-        await selectConversation(list[0].id, list[0].project);
+        const currentProj = selectedProjectRef.current;
+        const matchingConvo = list.find((c: Conversation) => c.project === currentProj);
+        if (matchingConvo) {
+          await selectConversation(matchingConvo.id, matchingConvo.project, false);
+        } else {
+          startNewChat();
+        }
       }
     }
   } catch (err) {
@@ -1970,7 +1986,7 @@ const loadConversations = async (autoSelect = true) => {
   }
 };
 
-const selectConversation = async (cid: string, projectName?: string) => {
+const selectConversation = async (cid: string, projectName?: string, updateModelPreference = false) => {
   const selectedConversation = conversations.find((convo) => convo.id === cid);
   const conversationProject = projectName || selectedConversation?.project;
   const conversationProvider = selectedConversation?.provider
@@ -2014,24 +2030,35 @@ const selectConversation = async (cid: string, projectName?: string) => {
       updateActiveConversation(cid, resolvedProject, resolvedProvider);
     }
     if (data.model && getModelOption(data.model)) {
-      applySelectedModel(data.model);
+      setSelectedModel(data.model);
+      if (updateModelPreference) {
+        SecureStore.setItemAsync(PREFERENCE_KEYS.model, data.model).catch(() => {});
+      }
       if (data.effort) {
         if (getCodexEfforts(data.model).some((item) => item.value === data.effort)) {
           setSelectedCodexEffort(data.effort);
-          SecureStore.setItemAsync(PREFERENCE_KEYS.codexEffort, data.effort).catch(() => {});
+          if (updateModelPreference) {
+            SecureStore.setItemAsync(PREFERENCE_KEYS.codexEffort, data.effort).catch(() => {});
+          }
         }
         if (getClaudeEfforts(data.model).some((item) => item.value === data.effort)) {
           setSelectedClaudeEffort(data.effort);
-          SecureStore.setItemAsync(PREFERENCE_KEYS.claudeEffort, data.effort).catch(() => {});
+          if (updateModelPreference) {
+            SecureStore.setItemAsync(PREFERENCE_KEYS.claudeEffort, data.effort).catch(() => {});
+          }
         }
       }
       if (data.speed && getCodexSpeeds(data.model).some((item) => item.value === data.speed)) {
         setSelectedCodexSpeed(data.speed);
-        SecureStore.setItemAsync(PREFERENCE_KEYS.codexSpeed, data.speed).catch(() => {});
+        if (updateModelPreference) {
+          SecureStore.setItemAsync(PREFERENCE_KEYS.codexSpeed, data.speed).catch(() => {});
+        }
       }
       if (data.thinking !== undefined) {
         setSelectedClaudeThinking(data.thinking !== false);
-        SecureStore.setItemAsync(PREFERENCE_KEYS.claudeThinking, String(data.thinking !== false)).catch(() => {});
+        if (updateModelPreference) {
+          SecureStore.setItemAsync(PREFERENCE_KEYS.claudeThinking, String(data.thinking !== false)).catch(() => {});
+        }
       }
     }
     pendingConversationScrollRef.current = true;
@@ -2045,12 +2072,19 @@ const selectConversation = async (cid: string, projectName?: string) => {
   }
 };
 
-const startNewChat = () => {
-  const newId = `temp_${selectedProject}_${Math.random().toString(36).substring(2, 11)}`;
-  updateActiveConversation(newId, selectedProject, getModelOption(selectedModel)?.provider || 'agy');
+const startNewChat = async () => {
+  try {
+    const savedModel = await SecureStore.getItemAsync(PREFERENCE_KEYS.model);
+    if (savedModel && activeModelsList.some((m) => m.value === savedModel)) {
+      setSelectedModel(savedModel);
+    }
+  } catch {}
+  const project = selectedProjectRef.current || selectedProject;
+  const newId = `temp_${project}_${Math.random().toString(36).substring(2, 11)}`;
+  updateActiveConversation(newId, project, getModelOption(selectedModel)?.provider || 'agy');
   setQueuedPromptList([]);
   updateMessages([]);
-  checkAndAttachActiveTask(newId, selectedProject);
+  checkAndAttachActiveTask(newId, project);
 };
 
 const handleSelectProject = (project: string) => {
