@@ -2004,7 +2004,11 @@ def kill_processes_locking_db(conversation_id: str):
     cid = sanitize_conversation_id(conversation_id)
     db_files = [
         os.path.join(ANTIGRAVITY_DATA_DIR, f"conversations/{cid}.db"),
-        os.path.join(ANTIGRAVITY_CLI_DIR, f"conversations/{cid}.db")
+        os.path.join(ANTIGRAVITY_CLI_DIR, f"conversations/{cid}.db"),
+        os.path.join(ANTIGRAVITY_DATA_DIR, f"conversations/{cid}.db-wal"),
+        os.path.join(ANTIGRAVITY_CLI_DIR, f"conversations/{cid}.db-wal"),
+        os.path.join(ANTIGRAVITY_DATA_DIR, f"conversations/{cid}.db-shm"),
+        os.path.join(ANTIGRAVITY_CLI_DIR, f"conversations/{cid}.db-shm"),
     ]
     if os.name != "nt":
         for db_path in db_files:
@@ -2275,6 +2279,17 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
             or "locked" in output
             or "agent execution terminated due to error" in output
             or "terminated due to error" in output
+            or "timeout waiting for response" in output
+            or "timeout waiting" in output
+            or "timed out" in output
+            or "context deadline exceeded" in output
+            or "deadline exceeded" in output
+            or "connection reset" in output
+            or "broken pipe" in output
+            or "failed to create conversation" in output
+            or "failed to get conversation" in output
+            or "server shutting down" in output
+            or "stream goroutine exited" in output
         )
     
     # Resolve temporary frontend ID if mapped
@@ -2322,18 +2337,21 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
         # Check stderr and stdout; agy can report conversation failures with exit code 0.
         if result.returncode != 0 or is_recoverable_conversation_error(result):
             err_msg = command_output(result) or "Unknown error"
-            if is_recoverable_conversation_error(result):
-                logging.info(f"Trajectory {actual_cid} locked or not found. Attempting to kill locking processes...")
+            if is_recoverable_conversation_error(result) and use_continue:
+                logging.info(f"Trajectory/session {actual_cid} locked or error ({err_msg[:100]}). Attempting to kill locking processes...")
                 kill_processes_locking_db(actual_cid)
                 
                 # Wait 500ms for lock to clear
                 import time
                 time.sleep(0.5)
                 
-                logging.info(f"Retrying command after killing locking processes: {' '.join(cmd)}")
+                logging.info(f"Retrying command after clearing conversation lock: {' '.join(cmd)}")
                 if progress_callback:
-                    progress_callback("progress", "Retrying after clearing conversation lock.")
-                result = run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
+                    progress_callback("progress", "Retrying after clearing conversation lock...")
+                try:
+                    result = run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
+                except subprocess.TimeoutExpired:
+                    result = subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Error: timeout waiting for response")
 
                 # If it STILL fails after killing, do fallback to a new conversation
                 if result.returncode != 0 or is_recoverable_conversation_error(result):
@@ -2348,13 +2366,13 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
                         if token == "--conversation":
                             skip_next = True
                             continue
-                        if token == "--continue" or token == "-c":
+                        if token in ("--continue", "-c"):
                             continue
                         fallback_cmd.append(token)
 
                     logging.info(f"Executing fallback agy CLI in {cwd_path}: {' '.join(fallback_cmd)}")
                     if progress_callback:
-                        progress_callback("progress", "Starting a fresh conversation after retry failed.")
+                        progress_callback("progress", "Starting a fresh conversation after retry failed...")
                     result = run_agy_command(fallback_cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
                     use_continue = False # We've started a new conversation
         
@@ -2375,6 +2393,33 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
             return f"⚠️ **agy CLI Error (Exit Code {result.returncode})**\n\n```\n{err_msg}\n```", resolved_cid
             
     except subprocess.TimeoutExpired as exc:
+        if use_continue:
+            logging.warning(f"agy CLI timed out while continuing conversation {actual_cid}. Attempting fallback to fresh conversation...")
+            kill_processes_locking_db(actual_cid)
+            if progress_callback:
+                progress_callback("progress", "Conversation timed out; restarting in a fresh session...")
+            try:
+                fallback_cmd = []
+                skip_next = False
+                for token in cmd:
+                    if skip_next:
+                        skip_next = False
+                        continue
+                    if token == "--conversation":
+                        skip_next = True
+                        continue
+                    if token in ("--continue", "-c"):
+                        continue
+                    fallback_cmd.append(token)
+                result = run_agy_command(fallback_cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
+                if result.returncode == 0 and not is_recoverable_conversation_error(result):
+                    after_dbs = get_existing_db_ids()
+                    new_ids = after_dbs - before_dbs
+                    resolved_cid = list(new_ids)[0] if new_ids else conversation_id
+                    convo_id_mapping[mapping_key] = resolved_cid
+                    return result.stdout.strip(), resolved_cid
+            except Exception as fb_err:
+                logging.warning(f"Fresh session fallback after timeout failed: {fb_err}")
         return cli_timeout_message("agy", exc), actual_cid
     except Exception as e:
         return f"❌ **Execution Error**: Failed to run `agy` CLI. Details: `{str(e)}`", actual_cid
@@ -2478,6 +2523,10 @@ def run_codex_cli(
                 "failed to resume",
                 "unable to resume",
                 "no rollout found",
+                "timeout waiting for response",
+                "timeout",
+                "timed out",
+                "deadline exceeded",
             )
         )
         if result.returncode != 0 and recoverable_resume_error:
@@ -2603,6 +2652,10 @@ def run_claude_cli(
                 "no conversation found",
                 "failed to resume",
                 "unable to resume",
+                "timeout waiting for response",
+                "timeout",
+                "timed out",
+                "deadline exceeded",
             )
         )
         if result.returncode != 0 and recoverable_resume_error:
@@ -2721,6 +2774,10 @@ def run_kimi_cli(
                 "failed to resume",
                 "unable to resume",
                 "no session found",
+                "timeout waiting for response",
+                "timeout",
+                "timed out",
+                "deadline exceeded",
             )
         )
         if result.returncode != 0 and recoverable_resume_error:
@@ -2845,6 +2902,10 @@ def run_grok_cli(
                 "session not found",
                 "failed to resume",
                 "unable to resume",
+                "timeout waiting for response",
+                "timeout",
+                "timed out",
+                "deadline exceeded",
             )
         )
         if result.returncode != 0 and recoverable_resume_error:
@@ -2969,6 +3030,10 @@ def run_muse_cli(
                 "session not found",
                 "failed to resume",
                 "unable to resume",
+                "timeout waiting for response",
+                "timeout",
+                "timed out",
+                "deadline exceeded",
             )
         )
         if result.returncode != 0 and recoverable_resume_error:
@@ -3090,6 +3155,10 @@ def run_deepseek_cli(
                 "session not found",
                 "failed to resume",
                 "unable to resume",
+                "timeout waiting for response",
+                "timeout",
+                "timed out",
+                "deadline exceeded",
             )
         )
         if result.returncode != 0 and recoverable_resume_error:
@@ -3256,7 +3325,15 @@ def is_execution_failure(reply_text: Any) -> bool:
     if not isinstance(reply_text, str):
         return True
     clean = reply_text.strip()
-    if "CLI Error (Exit Code" in clean or clean.startswith("❌ **Execution Error**") or "Failed to run `" in clean:
+    if (
+        "CLI Error (Exit Code" in clean
+        or clean.startswith("❌ **Execution Error**")
+        or clean.startswith("⏱️ **Timeout Error**")
+        or "⏱️ **Timeout Error**" in clean
+        or "Failed to run `" in clean
+        or "timeout waiting for response" in clean.lower()
+        or "timeout error" in clean.lower()
+    ):
         return True
     return False
 

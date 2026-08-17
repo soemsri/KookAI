@@ -272,7 +272,101 @@ class CliApiTests(unittest.TestCase):
             any("failing over to 'agy'" in msg.lower() for _, msg in progress_events)
         )
 
+    def test_is_execution_failure_detects_timeouts_and_cli_errors(self):
+        self.assertTrue(main.is_execution_failure("⏱️ **Timeout Error**: The request to `agy` CLI exceeded the 600-second limit."))
+        self.assertTrue(main.is_execution_failure("⏱️ **Timeout Error**: The `agy` CLI produced no output for 600 seconds and was stopped because it may be stuck."))
+        self.assertTrue(main.is_execution_failure("⚠️ **agy CLI Error (Exit Code 1)**\n\n```\nError: timeout waiting for response\n```"))
+        self.assertTrue(main.is_execution_failure("❌ **Execution Error**: Failed to run `agy` CLI."))
+        self.assertFalse(main.is_execution_failure("Here is the completed code you requested."))
+
+    def test_run_selected_cli_failover_on_timeout_error(self):
+        progress_events = []
+
+        def mock_progress(evt_type, msg):
+            progress_events.append((evt_type, msg))
+
+        def mock_invoke(
+            prov,
+            prov_model,
+            message,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            speed,
+            thinking,
+            image_paths,
+            progress_callback,
+        ):
+            if prov == "agy":
+                return (
+                    "⚠️ **agy CLI Error (Exit Code 1)**\n\n```\nError: timeout waiting for response\n```",
+                    conversation_id,
+                )
+            elif prov == "claude":
+                return "Hello from Claude fallback", "claude-cid-1"
+            return "❌ **Execution Error**: Unsupported", conversation_id
+
+        with (
+            mock.patch.object(main, "_invoke_provider_backend", side_effect=mock_invoke),
+            mock.patch.object(
+                main, "is_provider_available", side_effect=lambda p: p in {"agy", "claude"}
+            ),
+        ):
+            reply, cid = main.run_selected_cli(
+                message="Test timeout failover",
+                model_ui_name="Gemini 3.7 Flash (High)",
+                conversation_id="conv-456",
+                target="Sandbox",
+                workspace="agy",
+                provider="agy",
+                progress_callback=mock_progress,
+            )
+
+        self.assertIn("Automatic Failover", reply)
+        self.assertIn("failed over to **claude**", reply)
+        self.assertIn("Hello from Claude fallback", reply)
+        self.assertEqual(cid, "claude-cid-1")
+
+    def test_run_agy_cli_recovers_from_timeout_response(self):
+        calls = []
+
+        def mock_run_command(cmd, cwd_path, timeout=600, progress_callback=None):
+            calls.append(list(cmd))
+            # First attempt with --continue returns timeout error
+            if "--continue" in cmd:
+                return subprocess.CompletedProcess(
+                    cmd, 1, stdout="", stderr="Error: timeout waiting for response"
+                )
+            # Fallback fresh conversation succeeds
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="Success response after recovery", stderr=""
+            )
+
+        with (
+            mock.patch.object(main, "get_existing_db_ids", side_effect=[{"conv-existing"}, {"conv-existing", "conv-new"}]),
+            mock.patch.object(main, "get_conversation_project", return_value="KookAI"),
+            mock.patch.object(main, "run_agy_command", side_effect=mock_run_command),
+            mock.patch.object(main, "kill_processes_locking_db") as mock_kill,
+        ):
+            reply, cid = main.run_agy_cli(
+                message="Hello after timeout",
+                model_ui_name="Gemini 3.7 Flash (High)",
+                conversation_id="conv-existing",
+                target="Sandbox",
+                workspace="KookAI",
+            )
+
+        self.assertEqual(reply, "Success response after recovery")
+        self.assertEqual(cid, "conv-new")
+        self.assertTrue(mock_kill.called)
+        self.assertGreaterEqual(len(calls), 2)
+        # Verify fallback command removed --continue and --conversation
+        self.assertNotIn("--continue", calls[-1])
+        self.assertNotIn("--conversation", calls[-1])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
