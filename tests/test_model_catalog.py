@@ -116,6 +116,20 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(display_model["capabilities"]["effort"], ["Low", "Medium", "High"])
         self.assertEqual(cli_model["id"], "Muse Spark 1.2")
 
+    def test_zai_glm_models_are_available(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+        for model_name, cli_name in [
+            ("GLM 5.2", "zai-coding-plan/glm-5.2"),
+            ("GLM 5 Turbo", "zai-coding-plan/glm-5-turbo"),
+            ("GLM 4.7", "zai-coding-plan/glm-4.7"),
+            ("GLM 4.5 Air", "zai-coding-plan/glm-4.5-air"),
+        ]:
+            model = resolve_catalog_model(catalog, model_name)
+            self.assertIsNotNone(model)
+            self.assertEqual(model["provider"], "zai")
+            self.assertEqual(model["usage_bucket"], "zai")
+            self.assertEqual(model["cli_model"], cli_name)
+
 
 class ModelCatalogApiTests(unittest.TestCase):
     @staticmethod

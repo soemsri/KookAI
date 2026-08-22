@@ -90,11 +90,11 @@ message: string;
 
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
-type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai' | 'muse' | 'deepseek';
+type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai' | 'muse' | 'deepseek' | 'zai';
 type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
 type CodexSpeed = 'Standard' | 'Fast';
 type ClaudeEffort = 'Low' | 'Medium' | 'High' | 'Extra' | 'Max';
-type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai' | 'muse' | 'deepseek';
+type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai' | 'muse' | 'deepseek' | 'zai';
 type UsagePeriodKey = 'Weekly' | 'Hourly';
 
 interface ModelOption {
@@ -158,6 +158,10 @@ const FALLBACK_MODELS: ModelOption[] = [
   { value: "Claude Sonnet 4.6 (Thinking)", desc: "Advanced reasoning with thinking trace", provider: "agy" },
   { value: "Claude Opus 4.6 (Thinking)", desc: "Highest reasoning capacity model", provider: "agy" },
   { value: "GPT-OSS 120B (Medium)", desc: "Open-source large scale LLM", provider: "agy" },
+  { value: "GLM 5.2", desc: "Z.ai flagship agentic coding model via OpenCode", provider: "zai", badge: "GLM", usageBucket: "zai", thinkingRequired: true },
+  { value: "GLM 5 Turbo", desc: "Fast Z.ai coding model for everyday development", provider: "zai", badge: "GLM", usageBucket: "zai", thinkingRequired: true },
+  { value: "GLM 4.7", desc: "Balanced Z.ai coding model", provider: "zai", badge: "GLM", usageBucket: "zai", thinkingRequired: true },
+  { value: "GLM 4.5 Air", desc: "Lightweight and fast Z.ai coding model", provider: "zai", badge: "GLM", usageBucket: "zai", thinkingRequired: true },
   { value: "DeepSeek Pro 0813", desc: "DeepSeek flagship reasoning and coding model", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek", thinkingRequired: true },
   { value: "DeepSeek V4", desc: "DeepSeek next-generation flagship model", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek" },
   { value: "DeepSeek R1", desc: "DeepSeek open reasoning model with advanced chain-of-thought", provider: "deepseek", badge: "DeepSeek", usageBucket: "deepseek", thinkingRequired: true },
@@ -303,6 +307,13 @@ const getUsageBucketForModel = (modelName: string): {
       key: 'muse',
       title: 'Muse Models (Meta AI)',
       note: 'Muse Code usage is managed by Meta Model API.',
+    };
+  }
+  if (getModelOption(modelName)?.provider === 'zai') {
+    return {
+      key: 'zai',
+      title: 'GLM Models (Z.ai Coding Plan)',
+      note: 'GLM usage is managed by your Z.ai Coding Plan account.',
     };
   }
 
@@ -2003,6 +2014,8 @@ const selectConversation = async (cid: string, projectName?: string, updateModel
                 ? 'muse'
                 : cid.startsWith('deepseek_')
                   ? 'deepseek'
+                  : cid.startsWith('zai_')
+                    ? 'zai'
                   : 'agy'
     );
   if (conversationProject) {
@@ -2021,7 +2034,7 @@ const selectConversation = async (cid: string, projectName?: string, updateModel
   try {
     const data = await callHostApi(`/api/conversation/${cid}`);
     const resolvedProject = data.project || conversationProject;
-    const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai', 'muse', 'deepseek'].includes(data.provider)
+    const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai', 'muse', 'deepseek', 'zai'].includes(data.provider)
       ? data.provider
       : conversationProvider;
     if (resolvedProject) {

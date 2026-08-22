@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-08-13.1",
+  "catalog_version": "2026-08-22.1",
   "default_model": "Gemini 3.7 Flash (High)",
   "models": [
     {
@@ -156,6 +156,50 @@
       "usage_bucket": "gpt",
       "enabled": true,
       "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "GLM 5.2",
+      "label": "GLM 5.2",
+      "description": "Z.ai flagship agentic coding model via OpenCode",
+      "provider": "zai",
+      "cli_model": "zai-coding-plan/glm-5.2",
+      "badge": "GLM",
+      "usage_bucket": "zai",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+    },
+    {
+      "id": "GLM 5 Turbo",
+      "label": "GLM 5 Turbo",
+      "description": "Fast Z.ai coding model for everyday development",
+      "provider": "zai",
+      "cli_model": "zai-coding-plan/glm-5-turbo",
+      "badge": "GLM",
+      "usage_bucket": "zai",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+    },
+    {
+      "id": "GLM 4.7",
+      "label": "GLM 4.7",
+      "description": "Balanced Z.ai coding model",
+      "provider": "zai",
+      "cli_model": "zai-coding-plan/glm-4.7",
+      "badge": "GLM",
+      "usage_bucket": "zai",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+    },
+    {
+      "id": "GLM 4.5 Air",
+      "label": "GLM 4.5 Air",
+      "description": "Lightweight and fast Z.ai coding model",
+      "provider": "zai",
+      "cli_model": "zai-coding-plan/glm-4.5-air",
+      "badge": "GLM",
+      "usage_bucket": "zai",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
     },
     {
       "id": "DeepSeek Pro 0813",

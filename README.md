@@ -17,6 +17,7 @@
   - **Kimi Code (`kimi`):** Moonshot Kimi K3
   - **xAI Grok (`grok`):** Grok 4.6 / 4.5 / 4.20 / Grok Build
   - **Meta Muse (`muse`):** Muse Spark 1.2
+  - **Z.ai GLM (`opencode`):** GLM 5.2, GLM 5 Turbo, GLM 4.7, GLM 4.5 Air
 - 🎥 **Universal Video Analysis & `/watch` Command:**
   - Extracts keyframes and audio tracks from YouTube, TikTok, Vimeo, direct URLs, or local video files (`.mp4`, `.mov`).
   - High-precision Thai/English speech-to-text powered by **Groq / OpenAI Whisper (`whisper-large-v3`)**.
@@ -36,9 +37,30 @@
 # Windows
 run_server.bat  # (or python main.py)
 ```
-> **Note:** On first launch, the system automatically creates a virtual environment, installs Python dependencies, and downloads any missing CLI executables (`agy`, `claude`, `codex`, `kimi`, `grok`, `muse`).
+> **Note:** On first launch, the system automatically creates a virtual environment, installs Python dependencies, and downloads any missing CLI executables (`agy`, `claude`, `codex`, `kimi`, `grok`, `muse`, `opencode`).
 
-### 2. Meta Muse Spark Setup (`muse login`)
+### 2. Connect Z.ai GLM Coding Plan
+
+KookAI runs GLM through OpenCode, an officially supported Z.ai CLI integration.
+
+```bash
+npm install -g opencode-ai
+opencode auth login
+```
+
+Choose **Z.AI Coding Plan** and enter the API key from the Z.ai console. You can
+also use **Settings → Connections → Z.ai GLM via OpenCode → Connect**. To verify
+the exact model IDs available to your account, run:
+
+```bash
+opencode models zai-coding-plan --refresh
+opencode run --format json --model zai-coding-plan/glm-5.2 "Explain this repository"
+```
+
+For a regular pay-as-you-go Z.ai API account, choose **Z.AI** during login and
+set `ZAI_OPENCODE_PROVIDER=zai` in `.env`.
+
+### 3. Meta Muse Spark Setup (`muse login`)
 - **Automatic Installation:** The server checks for and installs the `muse` CLI automatically if missing.
 - **Authentication:**
   - **Option 1 (via Web Dashboard):** Open `http://localhost:8080` -> **Settings → CLI Status** and click **Connect** next to **Meta Muse Code**.
@@ -47,7 +69,7 @@ run_server.bat  # (or python main.py)
     muse login
     ```
 
-### 3. Configure Whisper API Key (for Video Transcription)
+### 4. Configure Whisper API Key (for Video Transcription)
 Sign up for free API keys at the [Groq Console](https://console.groq.com/keys) and configure using either method:
 - **Option 1 (via `.env` file):**
   ```env
@@ -55,7 +77,7 @@ Sign up for free API keys at the [Groq Console](https://console.groq.com/keys) a
   ```
 - **Option 2 (via Web UI):** Open `http://localhost:8080` -> **Settings → General** -> enter keys in **Whisper API Keys** and click **Save Changes**.
 
-### 4. Pair Mobile Application
+### 5. Pair Mobile Application
 1. Open `http://localhost:8080` on your computer.
 2. Click **Generate PIN**.
 3. Open the KookAI app on your mobile device and enter the 6-digit PIN or scan the QR Code to connect.
@@ -85,6 +107,7 @@ Sign up for free API keys at the [Groq Console](https://console.groq.com/keys) a
 | **Kimi Code** | `kimi` | Kimi K3 | Stream-JSON, Resumable Session |
 | **xAI Grok** | `grok` | Grok 4.6, Grok 4.5, Grok Build 0.1 | Reasoning Effort (Low-High) |
 | **Meta Muse** | `muse` | Muse Spark 1.2 | Effort (Low-High), Stream-JSON |
+| **Z.ai GLM** | `opencode` | GLM 5.2, GLM 5 Turbo, GLM 4.7, GLM 4.5 Air | JSON events, Resumable Session |
 
 ---
 
@@ -112,4 +135,3 @@ adb install -r .\app\build\outputs\apk\release\app-release.apk
 - **License:** MIT License
 - **Developer Contact:** rangsarn@gmail.com
 - **Donations:** `0xcCAe4BDA3F9A92dd14D4193680535128f7DEE842` (EVM Address)
-

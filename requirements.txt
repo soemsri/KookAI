@@ -12,3 +12,4 @@ psutil>=5.9.0
 # kookai-cli: kimi
 # kookai-cli: grok
 # kookai-cli: muse
+# kookai-cli: zai

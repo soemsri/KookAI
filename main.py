@@ -113,6 +113,16 @@ from deepseek_backend import (
     parse_deepseek_stream_json,
     resolve_deepseek_executable,
 )
+from zai_backend import (
+    ZAI_CONVERSATION_PREFIX,
+    build_zai_command,
+    classify_zai_progress_line,
+    configure_zai_catalog,
+    make_zai_conversation_id,
+    parse_zai_stream_json,
+    resolve_zai_executable,
+    zai_session_id,
+)
 from cli_manager import (
     auto_install_missing,
     get_cli_statuses,
@@ -199,6 +209,7 @@ def load_runtime_model_catalog() -> dict:
     configure_grok_catalog(catalog["models"])
     configure_muse_catalog(catalog["models"])
     configure_deepseek_catalog(catalog["models"])
+    configure_zai_catalog(catalog["models"])
     return catalog
 
 def migrate_legacy_data_dir(old_path: str, new_path: str):
@@ -762,7 +773,7 @@ async def update_settings(payload: SettingsUpdate):
 @app.post("/api/cli/{cli_id}/install")
 async def install_cli_requirement(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
     status = await asyncio.to_thread(install_cli, cli_id)
     resolve_codex_executable.cache_clear()
@@ -771,6 +782,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
     resolve_grok_executable.cache_clear()
     resolve_muse_executable.cache_clear()
     resolve_deepseek_executable.cache_clear()
+    resolve_zai_executable.cache_clear()
     return JSONResponse(
         status_code=200 if status["installed"] else 500,
         content={"cli": status},
@@ -780,7 +792,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
 @app.post("/api/cli/{cli_id}/connect")
 async def connect_cli_account(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
 
     statuses = {
@@ -840,6 +852,7 @@ async def update_models(request: Request):
         configure_grok_catalog(catalog["models"])
         configure_muse_catalog(catalog["models"])
         configure_deepseek_catalog(catalog["models"])
+        configure_zai_catalog(catalog["models"])
     except (ModelCatalogError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(
@@ -1576,6 +1589,82 @@ def get_deepseek_conversations() -> List[dict]:
 def get_deepseek_conversation(conversation_id: str) -> Optional[dict]:
     with deepseek_conversations_lock:
         record = _load_deepseek_conversation_records().get(conversation_id)
+    return record if isinstance(record, dict) else None
+
+
+ZAI_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "zai_conversations.json")
+zai_conversations_lock = threading.Lock()
+
+
+def _load_zai_conversation_records() -> dict:
+    if not os.path.exists(ZAI_CONVERSATIONS_FILE):
+        return {}
+    try:
+        with open(ZAI_CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logging.error("Failed to load Z.ai conversation history: %s", exc)
+        return {}
+
+
+def _save_zai_conversation_records(records: dict) -> None:
+    os.makedirs(os.path.dirname(ZAI_CONVERSATIONS_FILE), exist_ok=True)
+    temp_path = f"{ZAI_CONVERSATIONS_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, ZAI_CONVERSATIONS_FILE)
+
+
+def persist_zai_exchange(
+    conversation_id: str,
+    project: str,
+    model: str,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    if not conversation_id.startswith(ZAI_CONVERSATION_PREFIX):
+        return
+    now = datetime.datetime.now().timestamp()
+    with zai_conversations_lock:
+        records = _load_zai_conversation_records()
+        record = records.get(conversation_id, {})
+        messages = record.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        messages.extend([
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": assistant_message},
+        ])
+        clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", user_message).strip()
+        if not clean_title:
+            clean_title = "Z.ai GLM conversation"
+        if len(clean_title) > 40:
+            clean_title = clean_title[:40] + "..."
+        records[conversation_id] = {
+            "id": conversation_id,
+            "session_id": zai_session_id(conversation_id),
+            "title": record.get("title") or clean_title,
+            "project": project,
+            "provider": "zai",
+            "model": model,
+            "timestamp": now,
+            "messages": messages,
+        }
+        _save_zai_conversation_records(records)
+
+
+def get_zai_conversations() -> List[dict]:
+    with zai_conversations_lock:
+        records = _load_zai_conversation_records()
+    conversations = [value for value in records.values() if isinstance(value, dict)]
+    conversations.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
+    return conversations
+
+
+def get_zai_conversation(conversation_id: str) -> Optional[dict]:
+    with zai_conversations_lock:
+        record = _load_zai_conversation_records().get(conversation_id)
     return record if isinstance(record, dict) else None
 
 
@@ -3201,13 +3290,101 @@ def run_deepseek_cli(
         )
 
 
-PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "xai", "muse", "deepseek"]
+def run_zai_cli(
+    message: str,
+    model_ui_name: str,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    progress_callback=None,
+):
+    project_id = clean_project_name(workspace or "agy")
+    cwd_path = resolve_project_directory(project_id)
+    mapping_key = f"zai:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+    message_with_context = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\nUser message:\n{message}"
+    )
+
+    def execute(run_conversation_id: Optional[str]):
+        streamed = {"session_id": None, "parts": [], "errors": []}
+
+        def capture(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_zai_stream_json(line)
+            if parsed_line["session_id"]:
+                streamed["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                streamed["parts"].append(parsed_line["final_message"])
+            streamed["errors"].extend(parsed_line["errors"])
+
+        cmd = build_zai_command(
+            resolve_zai_executable(), message_with_context, model_ui_name,
+            target, run_conversation_id,
+        )
+        logging.info(
+            "Executing Z.ai GLM through OpenCode in %s with model=%s resume=%s",
+            cwd_path, model_ui_name, bool(zai_session_id(run_conversation_id)),
+        )
+        result = run_agent_command(
+            cmd, cwd_path, timeout=AGY_CLI_TIMEOUT,
+            progress_callback=progress_callback,
+            progress_line_classifier=classify_zai_progress_line,
+            raw_line_callback=capture,
+        )
+        parsed = parse_zai_stream_json(result.stdout or "")
+        return result, {
+            "session_id": streamed["session_id"] or parsed["session_id"],
+            "final_message": "".join(streamed["parts"]) or parsed["final_message"],
+            "errors": streamed["errors"] or parsed["errors"],
+        }
+
+    try:
+        result, parsed = execute(actual_cid)
+        combined_error = "\n".join(filter(None, [
+            (result.stderr or "").strip(), "\n".join(parsed["errors"]).strip(),
+        ]))
+        recoverable_resume_error = zai_session_id(actual_cid) and (
+            result.returncode != 0 or not parsed["final_message"]
+        )
+        if recoverable_resume_error:
+            if progress_callback:
+                progress_callback("progress", "Z.ai session was unavailable; starting a fresh session.")
+            result, parsed = execute(None)
+            combined_error = "\n".join(filter(None, [
+                (result.stderr or "").strip(), "\n".join(parsed["errors"]).strip(),
+            ]))
+        session_id = parsed["session_id"]
+        resolved_cid = make_zai_conversation_id(session_id) if session_id else actual_cid
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
+            return parsed["final_message"].strip(), resolved_cid
+        error_message = combined_error or "OpenCode did not return a Z.ai GLM response."
+        return (
+            f"⚠️ **Z.ai GLM CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```", resolved_cid,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("zai", exc), actual_cid
+    except Exception as exc:
+        return (
+            "❌ **Execution Error**: Failed to run Z.ai GLM through `opencode`. "
+            "Install OpenCode and run `opencode auth login`, then select Z.AI Coding Plan. "
+            f"Details: `{str(exc)}`", actual_cid,
+        )
+
+
+PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "zai", "xai", "muse", "deepseek"]
 
 DEFAULT_PROVIDER_MODELS = {
     "agy": "Gemini 3.7 Flash (High)",
     "claude": "Claude Sonnet 4.6 (Thinking)",
     "codex": "5.6 Sol",
     "kimi": "Kimi K3",
+    "zai": "GLM 5.2",
     "xai": "Grok 4.5",
     "muse": "Muse Spark 1.2",
     "deepseek": "DeepSeek Pro 0813",
@@ -3231,6 +3408,8 @@ def is_provider_available(prov: str) -> bool:
             return bool(resolve_muse_executable())
         elif prov == "deepseek":
             return bool(resolve_deepseek_executable())
+        elif prov == "zai":
+            return bool(resolve_zai_executable())
     except Exception:
         return False
     return False
@@ -3310,6 +3489,15 @@ def _invoke_provider_backend(
             workspace,
             progress_callback,
         )
+    elif prov == "zai":
+        return run_zai_cli(
+            message,
+            prov_model,
+            conversation_id,
+            target,
+            workspace,
+            progress_callback,
+        )
     else:
         return run_agy_cli(
             message,
@@ -3354,7 +3542,7 @@ def run_selected_cli(
     selected_provider = (provider or "").strip().lower()
     if not selected_provider:
         selected_provider = resolve_provider(None, model_ui_name)
-    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai", "muse", "deepseek"}:
+    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai", "muse", "deepseek", "zai"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
 
     attempted_providers = set()
@@ -3530,7 +3718,8 @@ async def get_conversations(request: Request, project: Optional[str] = None):
     grok_convos = get_grok_conversations()
     muse_convos = get_muse_conversations()
     deepseek_convos = get_deepseek_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos + deepseek_convos
+    zai_convos = get_zai_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos + deepseek_convos + zai_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -3556,7 +3745,8 @@ async def get_chat_history(request: Request):
     grok_convos = get_grok_conversations()
     muse_convos = get_muse_conversations()
     deepseek_convos = get_deepseek_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos + deepseek_convos
+    zai_convos = get_zai_conversations()
+    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos + deepseek_convos + zai_convos
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -3582,6 +3772,7 @@ async def get_conversation_details(cid: str, request: Request):
     grok_record = get_grok_conversation(cid)
     muse_record = get_muse_conversation(cid)
     deepseek_record = get_deepseek_conversation(cid)
+    zai_record = get_zai_conversation(cid)
 
     # First check memory cache
     if cid in in_memory_chats:
@@ -3617,6 +3808,11 @@ async def get_conversation_details(cid: str, request: Request):
             project = deepseek_record.get("project")
             provider = "deepseek"
             model = deepseek_record.get("model")
+        elif zai_record:
+            project = zai_record.get("project")
+            provider = "zai"
+            model = zai_record.get("model")
+            thinking = True
     elif codex_record:
         messages = codex_record.get("messages", [])
         project = codex_record.get("project")
@@ -3659,6 +3855,13 @@ async def get_conversation_details(cid: str, request: Request):
         project = deepseek_record.get("project")
         provider = "deepseek"
         model = deepseek_record.get("model")
+        in_memory_chats[cid] = messages
+    elif zai_record:
+        messages = zai_record.get("messages", [])
+        project = zai_record.get("project")
+        provider = "zai"
+        model = zai_record.get("model")
+        thinking = True
         in_memory_chats[cid] = messages
     else:
         # Check seed conversations
@@ -3814,6 +4017,11 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     elif provider == "deepseek":
         actual_cid = convo_id_mapping.get(
             f"deepseek:{project_id}:{conversation_id}",
+            conversation_id,
+        )
+    elif provider == "zai":
+        actual_cid = convo_id_mapping.get(
+            f"zai:{project_id}:{conversation_id}",
             conversation_id,
         )
     else:
@@ -4182,7 +4390,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         provider,
         effort if provider in {"codex", "claude", "xai", "muse"} and capabilities["effort"] else None,
         speed if provider == "codex" else None,
-        thinking if provider in {"claude", "kimi", "xai", "muse"} else None,
+        thinking if provider in {"claude", "kimi", "xai", "muse", "zai"} else None,
     )
 
     if provider == "codex":
@@ -4233,6 +4441,14 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         )
     elif provider == "deepseek":
         persist_deepseek_exchange(
+            resolved_cid,
+            project_id,
+            model,
+            user_visible_message,
+            reply,
+        )
+    elif provider == "zai":
+        persist_zai_exchange(
             resolved_cid,
             project_id,
             model,

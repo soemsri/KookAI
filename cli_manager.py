@@ -119,6 +119,16 @@ CLI_DEFINITIONS: dict[str, CliDefinition] = {
         connect_help="Runs deepcode login and opens the DeepSeek device authorization flow.",
         env_path="DEEPSEEK_CLI_PATH",
     ),
+    "zai": CliDefinition(
+        cli_id="zai",
+        name="Z.ai GLM via OpenCode",
+        executable="opencode",
+        install_kind="npm",
+        install_source="opencode-ai",
+        connect_args=("auth", "login"),
+        connect_help="Select Z.AI Coding Plan, then enter your Z.ai API key.",
+        env_path="ZAI_CLI_PATH",
+    ),
 }
 
 _install_lock = threading.Lock()
@@ -999,4 +1009,3 @@ def get_provider_health_metrics() -> dict[str, Any]:
 
 def reset_provider_health_metrics() -> None:
     HEALTH_TRACKER.reset()
-
