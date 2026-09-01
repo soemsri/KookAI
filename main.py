@@ -37,6 +37,7 @@ import urllib.request
 import datetime
 import time
 import errno
+import signal
 from collections import deque
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
@@ -232,6 +233,9 @@ AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "600"))
 # active jobs running without an arbitrary wall-clock cutoff.
 AGY_CLI_MAX_RUNTIME = int(os.environ.get("AGY_CLI_MAX_RUNTIME", "0"))
 AGY_CLI_MAX_CAPTURE_CHARS = int(os.environ.get("AGY_CLI_MAX_CAPTURE_CHARS", "200000"))
+# agy print mode otherwise has its own five-minute wall-clock timeout. Agent
+# turns that supervise background jobs commonly need longer even while healthy.
+AGY_PRINT_TIMEOUT = os.environ.get("AGY_PRINT_TIMEOUT", "30m")
 AGY_RELOAD = os.environ.get("AGY_RELOAD", "0").lower() in ("1", "true", "yes", "on")
 CLI_STATUS_TIMEOUT_SECONDS = float(
     os.environ.get("KOOKAI_CLI_STATUS_TIMEOUT", "15")
@@ -2116,6 +2120,16 @@ def kill_processes_locking_db(conversation_id: str):
                             pid = int(pid_str)
                             if pid != os.getpid():
                                 logging.info(f"Killing process {pid} locking database {db_path}")
+                                try:
+                                    import psutil
+                                    parent = psutil.Process(pid)
+                                    for child in parent.children(recursive=True):
+                                        try:
+                                            child.kill()
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
                                 os.kill(pid, 9)
                         except Exception as e:
                             logging.error(f"Failed to kill locking process {pid_str}: {e}")
@@ -2161,6 +2175,16 @@ def kill_processes_locking_db(conversation_id: str):
                 pid = int(pid_str)
                 if pid != os.getpid():
                     logging.info(f"Killing matching agy process {pid} for conversation {conversation_id}")
+                    try:
+                        import psutil
+                        parent = psutil.Process(pid)
+                        for child in parent.children(recursive=True):
+                            try:
+                                child.kill()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                     os.kill(pid, 9)
             except (TypeError, ValueError):
                 logging.warning(f"Ignoring invalid agy process ID: {pid_str}")
@@ -2170,6 +2194,56 @@ def kill_processes_locking_db(conversation_id: str):
         logging.warning(f"Process scan is unavailable on this platform: {e}")
     except Exception as e:
         logging.error(f"Error scanning for agy processes: {e}")
+
+
+def kill_process_tree(proc: subprocess.Popen, process_group_id=None):
+    """Safely and completely terminate a subprocess and all of its child/background processes."""
+    pid = proc.pid
+    try:
+        import psutil
+        try:
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            for child in children:
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            parent.kill()
+        except Exception:
+            pass
+    except ImportError:
+        pass
+
+    if os.name != "nt":
+        try:
+            pgid = process_group_id if process_group_id is not None else os.getpgid(pid)
+            os.killpg(pgid, signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    else:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                timeout=5,
+                **hidden_subprocess_kwargs(),
+            )
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        logging.warning("Timed-out CLI process did not exit after being killed: pid=%s", pid)
+
+
 # Helper: Run agy with conversation ID
 def classify_cli_progress_line(source: str, line: str):
     # Strip ANSI escape sequences (like colors and cursor movements)
@@ -2206,6 +2280,10 @@ def run_agent_command(
     stdin_text=None,
     env=None,
 ):
+    popen_kwargs = hidden_subprocess_kwargs()
+    if os.name != "nt":
+        popen_kwargs["start_new_session"] = True
+
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
@@ -2217,39 +2295,46 @@ def run_agent_command(
         bufsize=1,
         cwd=cwd_path,
         env=env,
-        **hidden_subprocess_kwargs(),
+        **popen_kwargs,
     )
+    process_group_id = proc.pid if os.name != "nt" else None
     output_queue = queue.Queue()
     stdout_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
     stderr_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
+    capture_lock = threading.Lock()
+    stop_capture = threading.Event()
     start_time = time.monotonic()
     last_activity = {"time": start_time}
 
     def append_capture(capture, line):
-        original_len = len(line)
-        if original_len > AGY_CLI_MAX_CAPTURE_CHARS:
-            line = line[-AGY_CLI_MAX_CAPTURE_CHARS:]
-            capture["truncated"] = True
-        capture["chunks"].append(line)
-        capture["chars"] += len(line)
-        capture["total"] += original_len
-        while capture["chars"] > AGY_CLI_MAX_CAPTURE_CHARS and capture["chunks"]:
-            removed = capture["chunks"].popleft()
-            capture["chars"] -= len(removed)
-            capture["truncated"] = True
+        with capture_lock:
+            original_len = len(line)
+            if original_len > AGY_CLI_MAX_CAPTURE_CHARS:
+                line = line[-AGY_CLI_MAX_CAPTURE_CHARS:]
+                capture["truncated"] = True
+            capture["chunks"].append(line)
+            capture["chars"] += len(line)
+            capture["total"] += original_len
+            while capture["chars"] > AGY_CLI_MAX_CAPTURE_CHARS and capture["chunks"]:
+                removed = capture["chunks"].popleft()
+                capture["chars"] -= len(removed)
+                capture["truncated"] = True
 
     def capture_text(capture):
-        text = "".join(capture["chunks"])
-        if capture["truncated"]:
-            return (
-                f"[... output truncated to last {AGY_CLI_MAX_CAPTURE_CHARS} chars "
-                f"from {capture['total']} chars ...]\n{text}"
-            )
-        return text
+        with capture_lock:
+            text = "".join(capture["chunks"])
+            if capture["truncated"]:
+                return (
+                    f"[... output truncated to last {AGY_CLI_MAX_CAPTURE_CHARS} chars "
+                    f"from {capture['total']} chars ...]\n{text}"
+                )
+            return text
 
     def reader(pipe, source, capture):
         try:
             for line in iter(pipe.readline, ""):
+                if stop_capture.is_set():
+                    break
                 last_activity["time"] = time.monotonic()
                 append_capture(capture, line)
                 if raw_line_callback:
@@ -2258,8 +2343,13 @@ def run_agent_command(
                     except Exception as e:
                         logging.debug(f"Raw CLI line callback failed: {e}")
                 output_queue.put((source, line.rstrip("\n")))
+        except Exception:
+            pass
         finally:
-            pipe.close()
+            try:
+                pipe.close()
+            except Exception:
+                pass
 
     stdout_thread = threading.Thread(target=reader, args=(proc.stdout, "stdout", stdout_capture), daemon=True)
     stderr_thread = threading.Thread(target=reader, args=(proc.stderr, "stderr", stderr_capture), daemon=True)
@@ -2280,17 +2370,31 @@ def run_agent_command(
 
         threading.Thread(target=write_stdin, daemon=True).start()
 
-    while proc.poll() is None or not output_queue.empty():
-        try:
-            source, line = output_queue.get(timeout=0.2)
-            event = progress_line_classifier(source, line)
-            if event and progress_callback:
-                progress_callback(event["type"], event["message"])
-        except queue.Empty:
-            pass
+    output_drain_deadline = None
+    try:
+        while True:
+            try:
+                source, line = output_queue.get(timeout=0.05)
+                event = progress_line_classifier(source, line)
+                if event and progress_callback:
+                    progress_callback(event["type"], event["message"])
+            except queue.Empty:
+                pass
 
-        if proc.poll() is None:
             now = time.monotonic()
+            if proc.poll() is not None:
+                # A detached/background child may inherit the CLI's output pipes.
+                # Give the direct process's buffered output a brief chance to drain,
+                # then return without waiting for descendants to close those pipes.
+                if output_drain_deadline is None:
+                    output_drain_deadline = now + 0.1
+                readers_finished = not stdout_thread.is_alive() and not stderr_thread.is_alive()
+                if readers_finished and output_queue.empty():
+                    break
+                if now >= output_drain_deadline:
+                    break
+                continue
+
             timeout_reason = None
             timeout_limit = None
             if timeout > 0 and now - last_activity["time"] > timeout:
@@ -2300,34 +2404,39 @@ def run_agent_command(
                 timeout_reason = "max_runtime"
                 timeout_limit = max_runtime
 
-        if proc.poll() is None and timeout_reason:
-            proc.kill()
-            try:
-                proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                logging.warning("Timed-out CLI process did not exit after being killed: %s", cmd)
-            stdout_thread.join(timeout=1)
-            stderr_thread.join(timeout=1)
-            raise AgentCommandTimeout(
-                cmd,
-                timeout_limit,
-                timeout_reason,
-                output=capture_text(stdout_capture),
-                stderr=capture_text(stderr_capture)
-            )
+            if proc.poll() is None and timeout_reason:
+                kill_process_tree(proc, process_group_id)
+                timeout_join_deadline = time.monotonic() + 0.2
+                stdout_thread.join(timeout=max(0, timeout_join_deadline - time.monotonic()))
+                stderr_thread.join(timeout=max(0, timeout_join_deadline - time.monotonic()))
+                raise AgentCommandTimeout(
+                    cmd,
+                    timeout_limit,
+                    timeout_reason,
+                    output=capture_text(stdout_capture),
+                    stderr=capture_text(stderr_capture)
+                )
+    finally:
+        stop_capture.set()
 
-    stdout_thread.join(timeout=1)
-    stderr_thread.join(timeout=1)
+    # Do not synchronously close an inherited pipe from this thread: on POSIX a
+    # reader blocked in readline may remain blocked until a background child exits.
+    join_deadline = time.monotonic() + 0.1
+    stdout_thread.join(timeout=max(0, join_deadline - time.monotonic()))
+    stderr_thread.join(timeout=max(0, join_deadline - time.monotonic()))
 
     while not output_queue.empty():
-        source, line = output_queue.get()
-        event = progress_line_classifier(source, line)
-        if event and progress_callback:
-            progress_callback(event["type"], event["message"])
+        try:
+            source, line = output_queue.get_nowait()
+            event = progress_line_classifier(source, line)
+            if event and progress_callback:
+                progress_callback(event["type"], event["message"])
+        except queue.Empty:
+            break
 
     return subprocess.CompletedProcess(
         cmd,
-        proc.returncode,
+        proc.returncode if proc.returncode is not None else 0,
         stdout=capture_text(stdout_capture),
         stderr=capture_text(stderr_capture)
     )
@@ -2368,15 +2477,15 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
             or "locked" in output
             or "agent execution terminated due to error" in output
             or "terminated due to error" in output
-            or "timeout waiting for response" in output
-            or "timeout waiting" in output
-            or "timed out" in output
-            or "context deadline exceeded" in output
-            or "deadline exceeded" in output
-            or "connection reset" in output
-            or "broken pipe" in output
             or "failed to create conversation" in output
             or "failed to get conversation" in output
+            or "timeout waiting for response" in output
+            or "timeout" in output
+            or "timed out" in output
+            or "deadline exceeded" in output
+            or "context deadline exceeded" in output
+            or "connection reset" in output
+            or "broken pipe" in output
             or "server shutting down" in output
             or "stream goroutine exited" in output
         )
@@ -2404,6 +2513,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
     cmd = [
         agy_path,
         "--dangerously-skip-permissions",
+        "--print-timeout", AGY_PRINT_TIMEOUT,
         "--model", mapped_model,
         "--project", project_id,
         "--add-dir", cwd_path
@@ -3913,12 +4023,10 @@ async def get_conversation_details(cid: str, request: Request):
 
     processed_messages = []
     for m in messages:
-        content = m["content"]
-        if "file://" in content:
-            if token:
-                content = content.replace("file:///", f"/api/media?token={token}&path=/")
-            else:
-                content = content.replace("file:///", "/api/media?path=/")
+        # Normalize both file:// URIs and raw host filesystem paths when
+        # replaying history. This keeps older AiPASS replies renderable after
+        # a client reconnects or the conversation is reopened.
+        content = rewrite_local_media_links(m["content"])
         processed_messages.append({
             "role": m["role"],
             "content": content
@@ -4456,7 +4564,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             reply,
         )
 
-    processed_reply = reply.replace("file:///", "/api/media?path=/")
+    processed_reply = rewrite_local_media_links(reply)
     return {
         "status": "success",
         "reply": processed_reply,
@@ -5102,16 +5210,93 @@ async def get_usage_limits(request: Request):
 
     return JSONResponse(content=result_data)
 
-@app.get("/api/media")
-async def get_media(path: str, request: Request):
-    verify_authorization(request)
+def is_allowed_media_path(path: str) -> Optional[str]:
     decoded_path = urllib.parse.unquote(path)
     if decoded_path.startswith("file://"):
         decoded_path = decoded_path[7:]
-    # Check if path exists and is absolute/relative resolved
-    if not os.path.exists(decoded_path):
+    resolved_path = os.path.realpath(os.path.abspath(decoded_path))
+    allowed_roots = [
+        APP_DIR,
+        ANTIGRAVITY_DATA_DIR,
+        ANTIGRAVITY_CLI_DIR,
+        *PROJECTS_ROOTS,
+    ]
+    # AiPassport artifacts are normally under the configured Desktop/project
+    # roots. Keep media serving local and reject traversal/symlink escapes.
+    if os.environ.get("AIPASS_ARTIFACT_DIR"):
+        allowed_roots.append(os.environ["AIPASS_ARTIFACT_DIR"])
+    try:
+        is_allowed = any(
+            os.path.commonpath([resolved_path, os.path.realpath(os.path.abspath(root))])
+            == os.path.realpath(os.path.abspath(root))
+            for root in allowed_roots
+        )
+    except ValueError:
+        is_allowed = False
+    if not is_allowed or not os.path.isfile(resolved_path):
+        return None
+    return resolved_path
+
+
+_MARKDOWN_LINK_DESTINATION_RE = re.compile(
+    r"(?P<prefix>!?\[[^\]]*\]\()(?P<destination><[^>\r\n]*>|[^)\s]+)(?P<suffix>\))"
+)
+
+
+def _local_media_url(destination: str) -> Optional[str]:
+    """Convert a host-side filesystem destination to the media API URL.
+
+    Model responses frequently include either ``file:///root/...`` or a raw
+    absolute path. Android cannot read the host filesystem directly, so these
+    destinations need to be served through ``/api/media``. Unknown or
+    disallowed paths are left untouched by the caller.
+    """
+    value = (destination or "").strip()
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+
+    if value.startswith("file://"):
+        value = value[7:]
+    if not value.startswith("/") or value.startswith("//"):
+        return None
+
+    resolved = is_allowed_media_path(value)
+    if not resolved:
+        return None
+    return f"/api/media?path={urllib.parse.quote(resolved, safe='')}"
+
+
+def rewrite_local_media_links(reply: str) -> str:
+    """Rewrite local image/video Markdown destinations for web and mobile."""
+    if not isinstance(reply, str) or not reply:
+        return reply
+
+    def replace_markdown(match: re.Match[str]) -> str:
+        destination = match.group("destination")
+        rewritten = _local_media_url(destination)
+        if not rewritten:
+            return match.group(0)
+        return f"{match.group('prefix')}{rewritten}{match.group('suffix')}"
+
+    rewritten = _MARKDOWN_LINK_DESTINATION_RE.sub(replace_markdown, reply)
+
+    # Also handle a bare file URI emitted outside Markdown. Restrict the
+    # replacement to a path-shaped token and preserve surrounding punctuation.
+    bare_file_uri_re = re.compile(r"file:///[^\s)\]>]+")
+
+    def replace_bare_file_uri(match: re.Match[str]) -> str:
+        return _local_media_url(match.group(0)) or match.group(0)
+
+    return bare_file_uri_re.sub(replace_bare_file_uri, rewritten)
+
+
+@app.get("/api/media")
+async def get_media(path: str, request: Request):
+    verify_authorization(request)
+    resolved_path = is_allowed_media_path(path)
+    if not resolved_path:
         raise HTTPException(status_code=404, detail="Media file not found")
-    return FileResponse(decoded_path)
+    return FileResponse(resolved_path)
 
 # Serve static files
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

@@ -702,6 +702,15 @@ body {
   margin-bottom: 0;
 }
 
+.message-video {
+  display: block;
+  width: min(100%, 720px);
+  max-height: 480px;
+  margin: 8px 0;
+  border-radius: 10px;
+  background: #000;
+}
+
 .message-bubble pre {
   background: rgba(0, 0, 0, 0.04);
   border-radius: 8px;

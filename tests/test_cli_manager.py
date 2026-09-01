@@ -66,6 +66,24 @@ class AgentCommandTimeoutTests(unittest.TestCase):
             )
         self.assertEqual(context.exception.reason, "max_runtime")
 
+    def test_background_child_process_does_not_hang_parent(self):
+        script = (
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)'])\n"
+            "print('parent finished', flush=True)\n"
+        )
+        started_at = time.monotonic()
+        result = main.run_agent_command(
+            [sys.executable, "-u", "-c", script],
+            os.getcwd(),
+            timeout=1,
+            max_runtime=0,
+        )
+        elapsed = time.monotonic() - started_at
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("parent finished", result.stdout)
+        self.assertLess(elapsed, 0.75)
+
 
 class CliManagerTests(unittest.TestCase):
     def setUp(self):
@@ -361,6 +379,9 @@ class CliApiTests(unittest.TestCase):
         self.assertEqual(cid, "conv-new")
         self.assertTrue(mock_kill.called)
         self.assertGreaterEqual(len(calls), 2)
+        self.assertIn("--print-timeout", calls[0])
+        timeout_index = calls[0].index("--print-timeout")
+        self.assertEqual(calls[0][timeout_index + 1], main.AGY_PRINT_TIMEOUT)
         # Verify fallback command removed --continue and --conversation
         self.assertNotIn("--continue", calls[-1])
         self.assertNotIn("--conversation", calls[-1])
@@ -368,5 +389,3 @@ class CliApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

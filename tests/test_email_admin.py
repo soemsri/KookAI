@@ -1,6 +1,13 @@
 import unittest
+import urllib.parse
 
-from main import get_tunnel_block_page, is_tunnel_allowed_path, is_tunnel_host
+from main import (
+    get_tunnel_block_page,
+    is_allowed_media_path,
+    is_tunnel_allowed_path,
+    is_tunnel_host,
+    rewrite_local_media_links,
+)
 
 
 class TunnelAccessPolicyTests(unittest.TestCase):
@@ -49,6 +56,22 @@ class TunnelAccessPolicyTests(unittest.TestCase):
         self.assertNotIn('localhost', body.lower())
         self.assertNotIn('mobile app', body.lower())
         self.assertNotIn('cloudflare', body.lower())
+
+    def test_media_path_is_limited_to_local_allowed_roots(self):
+        self.assertIsNotNone(is_allowed_media_path("static/favicon.png"))
+        self.assertIsNone(is_allowed_media_path("/etc/passwd"))
+
+    def test_local_markdown_media_links_use_authenticated_media_endpoint(self):
+        absolute_path = is_allowed_media_path("static/favicon.png")
+        self.assertIsNotNone(absolute_path)
+
+        rewritten = rewrite_local_media_links(
+            f"![Generated image]({absolute_path})\n[Open image](<{absolute_path}>)"
+        )
+
+        expected_path = urllib.parse.quote(absolute_path, safe="")
+        self.assertEqual(rewritten.count(f"/api/media?path={expected_path}"), 2)
+        self.assertNotIn(absolute_path, rewritten)
 
 
 

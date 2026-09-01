@@ -1300,6 +1300,63 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // --- Rendering Helpers ---
+  function resolveHostMediaSource(src) {
+    let value = (src || "").trim();
+    if (value.startsWith("<") && value.endsWith(">")) {
+      value = value.slice(1, -1).trim();
+    }
+
+    const isServerFileUri = value.startsWith("file:///") &&
+      /^\/(?:root|home|opt|var|tmp|mnt|srv|workspace|Users)\//i.test(
+        value.slice("file://".length),
+      );
+    const isAbsoluteServerPath = /^\/(?:root|home|opt|var|tmp|mnt|srv|workspace|Users)\//i.test(value);
+    if (isServerFileUri || isAbsoluteServerPath) {
+      let serverPath = isServerFileUri ? value.slice("file://".length) : value;
+      try {
+        serverPath = decodeURIComponent(serverPath);
+      } catch (e) {
+        // Preserve the path when a model returns malformed escaping.
+      }
+      return `/api/media?path=${encodeURIComponent(serverPath)}`;
+    }
+    return value;
+  }
+
+  function isVideoMediaSource(src) {
+    if (!src) return false;
+    const normalized = resolveHostMediaSource(src);
+    let candidate = normalized;
+    try {
+      const parsed = new URL(normalized, window.location.href);
+      const pathParam = parsed.searchParams.get("path");
+      if (pathParam) candidate = pathParam;
+    } catch (e) {
+      // Keep the original source when it is not a valid URL yet.
+    }
+    return /\.(mp4|webm|mov|m4v|3gp|avi|mkv)(?:[?#]|$)/i.test(candidate);
+  }
+
+  function upgradeInlineVideoImages(container) {
+    container.querySelectorAll("img[src]").forEach((image) => {
+      const originalSrc = image.getAttribute("src") || "";
+      const src = resolveHostMediaSource(originalSrc);
+      if (!isVideoMediaSource(src)) {
+        if (src !== originalSrc) image.setAttribute("src", src);
+        return;
+      }
+
+      const video = document.createElement("video");
+      video.className = "message-video";
+      video.controls = true;
+      video.preload = "metadata";
+      video.playsInline = true;
+      video.src = src;
+      video.setAttribute("aria-label", "Generated video");
+      image.replaceWith(video);
+    });
+  }
+
   function appendMessage(role, content, isDisabled = false) {
     const row = document.createElement("div");
     row.className = `message-row ${role}`;
@@ -1331,6 +1388,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderQuestionCard(bubble, questionPayload, isDisabled);
     } else {
       bubble.innerHTML = window.marked ? window.marked.parse(content) : content;
+      upgradeInlineVideoImages(bubble);
     }
 
     if (role !== "user") {

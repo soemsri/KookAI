@@ -24,6 +24,7 @@
   - ⚡ **Multi-Key Rotation & Failover:** Supports multiple API keys with round-robin load balancing and automatic key rotation upon hitting rate limits.
 - 🌐 **Cloudflare Quick Tunnel & Pairing Code:** Secure remote connection setup allowing mobile access from anywhere without port forwarding.
 - ⚙️ **Web Dashboard & Settings UI:** Manage server status, check CLI availability, and configure API keys via an intuitive web console at `http://localhost:8080`.
+- 🖼️ **Generated Media Rendering:** Markdown image/video links returned by local tools (including AiPassport artifacts) are rendered in the web and mobile clients through the authenticated `/api/media` endpoint; mobile videos play inline with native controls.
 
 ---
 
@@ -127,6 +128,10 @@ cd mobile\android
 .\gradlew.bat assembleRelease
 adb install -r .\app\build\outputs\apk\release\app-release.apk
 ```
+
+After changing the mobile renderer (for example, generated AiPASS media
+links), reload the Expo development client or rebuild/reinstall the Android
+APK so the updated JavaScript bundle is installed on the phone.
 
 ---
 

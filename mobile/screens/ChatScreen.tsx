@@ -15,6 +15,7 @@ import {
 } from '../utils/modelCatalog';
 import Svg, { Circle } from 'react-native-svg';
 import * as DocumentPicker from 'expo-document-picker';
+import { VideoView, useVideoPlayer } from 'expo-video';
 // Mock Audio namespaces and classes to avoid importing deprecated expo-av
 namespace Audio {
   export type Sound = any;
@@ -505,7 +506,7 @@ const getMediaType = (url: string) => {
   if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'heic'].includes(ext || '')) {
     return 'image';
   }
-  if (['mp4', 'mov', 'm4v', '3gp', 'avi', 'mkv'].includes(ext || '')) {
+  if (['mp4', 'mov', 'm4v', '3gp', 'avi', 'mkv', 'webm'].includes(ext || '')) {
     return 'video';
   }
   if (['mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac'].includes(ext || '')) {
@@ -514,20 +515,65 @@ const getMediaType = (url: string) => {
   return 'document';
 };
 
+/**
+ * Resolve a Markdown media destination returned by a host-side tool.
+ *
+ * AiPASS (and a few other local tools) can return an absolute path such as
+ * `/root/Desktop/AiPassport/.aipass-state/artifacts/image.png`. That path is
+ * on the paired computer, not on the Android device, so it must be routed
+ * through the authenticated host media endpoint. Mobile-local `file://` and
+ * `content://` URIs are intentionally left untouched.
+ */
+const resolveMediaUrl = (destination: string, baseUrl: string) => {
+  let value = (destination || '').trim();
+
+  // Markdown permits angle brackets around destinations containing spaces.
+  if (value.startsWith('<') && value.endsWith('>')) {
+    value = value.slice(1, -1).trim();
+  }
+
+  const isServerFileUri = value.startsWith('file:///') &&
+    /^\/(?:root|home|opt|var|tmp|mnt|srv|workspace|Users)\//i.test(
+      value.slice('file://'.length),
+    );
+  const isAbsoluteServerPath = /^\/(?:root|home|opt|var|tmp|mnt|srv|workspace|Users)\//i.test(value);
+
+  if (isServerFileUri || isAbsoluteServerPath) {
+    let serverPath = isServerFileUri
+      ? value.slice('file://'.length)
+      : value;
+    try {
+      serverPath = decodeURIComponent(serverPath);
+    } catch {
+      // Keep the original path when a model returns an invalid escape.
+    }
+    if (!baseUrl) return value;
+    return `${baseUrl}/api/media?path=${encodeURIComponent(serverPath)}`;
+  }
+
+  if (value.startsWith('/api/')) {
+    return baseUrl ? `${baseUrl}${value}` : value;
+  }
+
+  return value;
+};
+
 const VideoPlayerView = ({ url }: { url: string }) => {
-  const filename = url.split('/').pop()?.split('?')[0] || 'video';
-  const cleanName = filename.replace('media__', '');
+  // The source URL already contains the authenticated `/api/media` token
+  // when the video comes from the paired host. `useVideoPlayer` manages the
+  // native player's lifecycle as each chat bubble mounts/unmounts.
+  const player = useVideoPlayer(url);
+
   return (
-    <TouchableOpacity 
-      style={styles.videoContainer} 
-      onPress={() => Linking.openURL(url)}
-      activeOpacity={0.8}
-    >
-      <View style={styles.videoPlaceholder}>
-        <Text style={styles.playIcon}>▶</Text>
-        <Text style={styles.videoText} numberOfLines={1}>{cleanName}</Text>
-      </View>
-    </TouchableOpacity>
+    <View style={styles.videoContainer}>
+      <VideoView
+        player={player}
+        style={styles.videoPlayer}
+        nativeControls
+        contentFit="contain"
+        fullscreenOptions={{ enable: true }}
+      />
+    </View>
   );
 };
 
@@ -2903,7 +2949,12 @@ allowQueue: false,
   const renderMessageContent = (content: string, role: 'user' | 'assistant') => {
     const imageRegex = /!\[.*?\]\((.*?)\)/g;
     const matches = [...content.matchAll(imageRegex)];
-    const cleanText = content.replace(imageRegex, '').trim();
+    // Remove the image tags from the text body. Also hide a companion
+    // Markdown link to the same host-side image (for example
+    // `[เปิดไฟล์ภาพ](</root/...png>)`) so an unresolved filesystem path is
+    // never shown as if it were a normal mobile link.
+    const localMediaLinkRegex = /\[[^\]]+\]\((?:<(?:file:\/\/|\/)[^>]+>|(?:file:\/\/|\/)[^)\s]+)\)/g;
+    const cleanText = content.replace(imageRegex, '').replace(localMediaLinkRegex, '').trim();
 
     const renderTextContent = (text: string) => {
       const segments = parseMessageSegments(text);
@@ -2947,8 +2998,16 @@ allowQueue: false,
       <View style={{ gap: 8 }}>
         {matches.map((match, idx) => {
           const relativeUrl = match[1];
-          const isLocal = relativeUrl.startsWith('file://') || relativeUrl.startsWith('content://') || relativeUrl.startsWith('ph://');
-          let absoluteUrl = (relativeUrl.startsWith('http') || isLocal) ? relativeUrl : `${hostBaseUrl}${relativeUrl}`;
+          const normalizedUrl = relativeUrl.trim().startsWith('<') && relativeUrl.trim().endsWith('>')
+            ? relativeUrl.trim().slice(1, -1).trim()
+            : relativeUrl.trim();
+          const isLocal = normalizedUrl.startsWith('content://') || normalizedUrl.startsWith('ph://');
+          let absoluteUrl = resolveMediaUrl(normalizedUrl, hostBaseUrl);
+          if (normalizedUrl.startsWith('http://') || normalizedUrl.startsWith('https://') || isLocal) {
+            absoluteUrl = normalizedUrl;
+          } else if (!absoluteUrl.startsWith('http://') && !absoluteUrl.startsWith('https://') && !absoluteUrl.startsWith('file://')) {
+            absoluteUrl = `${hostBaseUrl}${absoluteUrl.startsWith('/') ? '' : '/'}${absoluteUrl}`;
+          }
 
           if (absoluteUrl.includes('/api/media') && authToken && !absoluteUrl.includes('token=')) {
             const separator = absoluteUrl.includes('?') ? '&' : '?';
@@ -4367,12 +4426,16 @@ const styles = StyleSheet.create({
   },
   videoContainer: {
     width: '100%',
-    height: 120,
+    height: 180,
     borderRadius: 8,
     overflow: 'hidden',
     marginTop: 4,
     marginBottom: 4,
     backgroundColor: '#000000',
+  },
+  videoPlayer: {
+    width: '100%',
+    height: '100%',
   },
   videoPlaceholder: {
     flex: 1,

@@ -58,7 +58,8 @@
             "com.google.android.as"
           ]
         }
-      ]
+      ],
+      "expo-video"
     ]
   }
 }
