@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 import urllib.parse
 
@@ -72,6 +74,19 @@ class TunnelAccessPolicyTests(unittest.TestCase):
         expected_path = urllib.parse.quote(absolute_path, safe="")
         self.assertEqual(rewritten.count(f"/api/media?path={expected_path}"), 2)
         self.assertNotIn(absolute_path, rewritten)
+
+    def test_local_video_file_uri_uses_authenticated_media_endpoint(self):
+        with tempfile.NamedTemporaryFile(dir=os.getcwd(), suffix=".mp4") as video:
+            absolute_path = os.path.realpath(video.name)
+            rewritten = rewrite_local_media_links(
+                f"![Generated video](file://{absolute_path})"
+            )
+
+        expected_path = urllib.parse.quote(absolute_path, safe="")
+        self.assertEqual(
+            rewritten,
+            f"![Generated video](/api/media?path={expected_path})",
+        )
 
 
 

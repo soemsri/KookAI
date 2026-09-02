@@ -15,6 +15,7 @@ import {
 } from '../utils/modelCatalog';
 import Svg, { Circle } from 'react-native-svg';
 import * as DocumentPicker from 'expo-document-picker';
+import { useEvent } from 'expo';
 import { VideoView, useVideoPlayer } from 'expo-video';
 // Mock Audio namespaces and classes to avoid importing deprecated expo-av
 namespace Audio {
@@ -558,11 +559,27 @@ const resolveMediaUrl = (destination: string, baseUrl: string) => {
   return value;
 };
 
-const VideoPlayerView = ({ url }: { url: string }) => {
-  // The source URL already contains the authenticated `/api/media` token
-  // when the video comes from the paired host. `useVideoPlayer` manages the
-  // native player's lifecycle as each chat bubble mounts/unmounts.
-  const player = useVideoPlayer(url);
+const VideoPlayerView = ({ url, authToken }: { url: string; authToken?: string }) => {
+  const source = React.useMemo(() => ({
+    uri: url,
+    contentType: 'progressive' as const,
+    useCaching: true,
+    headers: authToken && url.includes('/api/media')
+      ? { Authorization: `Bearer ${authToken}` }
+      : undefined,
+  }), [authToken, url]);
+  const player = useVideoPlayer(source, (videoPlayer) => {
+    videoPlayer.loop = false;
+  });
+  const statusEvent = useEvent(player, 'statusChange', {
+    status: player.status,
+    error: undefined,
+  });
+  const status = statusEvent?.status ?? player.status;
+
+  const retry = () => {
+    void player.replaceAsync(source);
+  };
 
   return (
     <View style={styles.videoContainer}>
@@ -572,7 +589,22 @@ const VideoPlayerView = ({ url }: { url: string }) => {
         nativeControls
         contentFit="contain"
         fullscreenOptions={{ enable: true }}
+        playsInline
+        surfaceType={Platform.OS === 'android' ? 'textureView' : undefined}
       />
+      {(status === 'idle' || status === 'loading') && (
+        <View style={styles.videoStatusOverlay} pointerEvents="none">
+          <ActivityIndicator size="large" color="#ffffff" />
+        </View>
+      )}
+      {status === 'error' && (
+        <View style={styles.videoStatusOverlay}>
+          <Text style={styles.videoErrorText}>โหลดวิดีโอไม่สำเร็จ</Text>
+          <TouchableOpacity style={styles.videoRetryButton} onPress={retry}>
+            <Text style={styles.videoRetryButtonText}>ลองใหม่</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 };
@@ -3032,7 +3064,7 @@ allowQueue: false,
             );
           } else if (mediaType === 'video') {
             return (
-              <VideoPlayerView key={idx} url={absoluteUrl} />
+              <VideoPlayerView key={idx} url={absoluteUrl} authToken={authToken || undefined} />
             );
           } else if (mediaType === 'audio') {
             return (
@@ -4436,6 +4468,29 @@ const styles = StyleSheet.create({
   videoPlayer: {
     width: '100%',
     height: '100%',
+  },
+  videoStatusOverlay: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+  },
+  videoErrorText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  videoRetryButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#2563eb',
+  },
+  videoRetryButtonText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   videoPlaceholder: {
     flex: 1,
