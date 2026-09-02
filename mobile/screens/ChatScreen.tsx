@@ -549,7 +549,25 @@ const resolveMediaUrl = (destination: string, baseUrl: string) => {
       // Keep the original path when a model returns an invalid escape.
     }
     if (!baseUrl) return value;
-    return `${baseUrl}/api/media?path=${encodeURIComponent(serverPath)}`;
+    const filename = serverPath.split('/').pop() || 'video.mp4';
+    return `${baseUrl}/api/media/${encodeURIComponent(filename)}?path=${encodeURIComponent(serverPath)}`;
+  }
+
+  // Upgrade older saved media links to the extension-preserving endpoint.
+  // expo-video on Android may otherwise reduce an extensionless endpoint to
+  // `/video.mp4`, dropping the authenticated API path and returning a 404.
+  if (value.startsWith('/api/media?')) {
+    const pathMatch = value.match(/[?&]path=([^&]+)/);
+    if (pathMatch?.[1]) {
+      try {
+        const filename = decodeURIComponent(pathMatch[1]).split('/').pop();
+        if (filename) {
+          value = value.replace('/api/media?', `/api/media/${encodeURIComponent(filename)}?`);
+        }
+      } catch {
+        // Keep the original endpoint if the saved path contains bad escaping.
+      }
+    }
   }
 
   if (value.startsWith('/api/')) {
@@ -563,7 +581,7 @@ const VideoPlayerView = ({ url, authToken }: { url: string; authToken?: string }
   const source = React.useMemo(() => ({
     uri: url,
     contentType: 'progressive' as const,
-    useCaching: true,
+    useCaching: false,
     headers: authToken && url.includes('/api/media')
       ? { Authorization: `Bearer ${authToken}` }
       : undefined,
@@ -575,10 +593,24 @@ const VideoPlayerView = ({ url, authToken }: { url: string; authToken?: string }
     status: player.status,
     error: undefined,
   });
+  const playingEvent = useEvent(player, 'playingChange', {
+    isPlaying: player.playing,
+  });
   const status = statusEvent?.status ?? player.status;
+  const isPlaying = playingEvent?.isPlaying ?? player.playing;
+  const playerError = statusEvent?.error?.message;
 
-  const retry = () => {
-    void player.replaceAsync(source);
+  const retry = async () => {
+    await player.replaceAsync(source);
+    player.play();
+  };
+
+  const togglePlayback = () => {
+    if (isPlaying) {
+      player.pause();
+    } else {
+      player.play();
+    }
   };
 
   return (
@@ -599,11 +631,18 @@ const VideoPlayerView = ({ url, authToken }: { url: string; authToken?: string }
       )}
       {status === 'error' && (
         <View style={styles.videoStatusOverlay}>
-          <Text style={styles.videoErrorText}>โหลดวิดีโอไม่สำเร็จ</Text>
-          <TouchableOpacity style={styles.videoRetryButton} onPress={retry}>
+          <Text style={styles.videoErrorText} numberOfLines={3}>
+            {playerError || 'โหลดวิดีโอไม่สำเร็จ'}
+          </Text>
+          <TouchableOpacity style={styles.videoRetryButton} onPress={() => void retry()}>
             <Text style={styles.videoRetryButtonText}>ลองใหม่</Text>
           </TouchableOpacity>
         </View>
+      )}
+      {status === 'readyToPlay' && (
+        <TouchableOpacity style={styles.videoDirectPlayButton} onPress={togglePlayback}>
+          <Text style={styles.videoRetryButtonText}>{isPlaying ? 'หยุดชั่วคราว' : 'เล่นวิดีโอ'}</Text>
+        </TouchableOpacity>
       )}
     </View>
   );
@@ -2979,14 +3018,26 @@ allowQueue: false,
   const isPromptDisabled = isInitializingChat;
 
   const renderMessageContent = (content: string, role: 'user' | 'assistant') => {
-    const imageRegex = /!\[.*?\]\((.*?)\)/g;
-    const matches = [...content.matchAll(imageRegex)];
-    // Remove the image tags from the text body. Also hide a companion
+    // Generated media can arrive as either image-style Markdown
+    // (`![Generated video](...)`) or a regular link (`[Open video](...)`).
+    // Treat regular links as media only when their destination has a known
+    // media extension, so ordinary web links remain in the message body.
+    const markdownLinkRegex = /(!?)\[[^\]]*\]\((<[^>\r\n]+>|[^)\s]+)\)/g;
+    const matches = [...content.matchAll(markdownLinkRegex)].filter((match) => {
+      const destination = match[2].trim().replace(/^<|>$/g, '');
+      return match[1] === '!' || getMediaType(destination) !== 'document';
+    });
+    const mediaMarkdown = new Set(matches.map((match) => match[0]));
+
+    // Remove rendered media tags from the text body. Also hide a companion
     // Markdown link to the same host-side image (for example
     // `[เปิดไฟล์ภาพ](</root/...png>)`) so an unresolved filesystem path is
     // never shown as if it were a normal mobile link.
     const localMediaLinkRegex = /\[[^\]]+\]\((?:<(?:file:\/\/|\/)[^>]+>|(?:file:\/\/|\/)[^)\s]+)\)/g;
-    const cleanText = content.replace(imageRegex, '').replace(localMediaLinkRegex, '').trim();
+    const cleanText = content
+      .replace(markdownLinkRegex, (match) => mediaMarkdown.has(match) ? '' : match)
+      .replace(localMediaLinkRegex, '')
+      .trim();
 
     const renderTextContent = (text: string) => {
       const segments = parseMessageSegments(text);
@@ -3029,7 +3080,7 @@ allowQueue: false,
     return (
       <View style={{ gap: 8 }}>
         {matches.map((match, idx) => {
-          const relativeUrl = match[1];
+          const relativeUrl = match[2];
           const normalizedUrl = relativeUrl.trim().startsWith('<') && relativeUrl.trim().endsWith('>')
             ? relativeUrl.trim().slice(1, -1).trim()
             : relativeUrl.trim();
@@ -4491,6 +4542,15 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  videoDirectPlayButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: 'rgba(37, 99, 235, 0.92)',
   },
   videoPlaceholder: {
     flex: 1,

@@ -277,6 +277,7 @@ TUNNEL_ALLOWED_EXACT_PATHS = {
 TUNNEL_ALLOWED_PREFIXES = (
     "/api/conversation/",
     "/api/chat-tasks/",
+    "/api/media/",
 )
 
 
@@ -5257,13 +5258,27 @@ def _local_media_url(destination: str) -> Optional[str]:
 
     if value.startswith("file://"):
         value = value[7:]
+
+    # Upgrade media links saved before the extension-preserving endpoint was
+    # introduced. Keeping the filename in the URL path lets Android players
+    # identify MP4 files without guessing from a query parameter.
+    if value.startswith("/api/media?"):
+        parsed = urllib.parse.urlsplit(value)
+        media_path = urllib.parse.parse_qs(parsed.query).get("path", [None])[0]
+        resolved = is_allowed_media_path(media_path) if media_path else None
+        if not resolved:
+            return None
+        filename = urllib.parse.quote(os.path.basename(resolved), safe="")
+        return f"/api/media/{filename}?{parsed.query}"
+
     if not value.startswith("/") or value.startswith("//"):
         return None
 
     resolved = is_allowed_media_path(value)
     if not resolved:
         return None
-    return f"/api/media?path={urllib.parse.quote(resolved, safe='')}"
+    filename = urllib.parse.quote(os.path.basename(resolved), safe="")
+    return f"/api/media/{filename}?path={urllib.parse.quote(resolved, safe='')}"
 
 
 def rewrite_local_media_links(reply: str) -> str:
@@ -5297,6 +5312,17 @@ async def get_media(path: str, request: Request):
     if not resolved_path:
         raise HTTPException(status_code=404, detail="Media file not found")
     return FileResponse(resolved_path)
+
+
+@app.get("/api/media/{filename}")
+async def get_named_media(filename: str, path: str, request: Request):
+    """Serve media from a URL whose path retains the file extension.
+
+    Android media players can misclassify extensionless endpoints even when
+    the real filename appears in a query parameter. The filename is cosmetic;
+    the validated ``path`` remains the only source used to locate the file.
+    """
+    return await get_media(path, request)
 
 # Serve static files
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

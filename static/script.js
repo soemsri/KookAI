@@ -1338,11 +1338,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function upgradeInlineVideoImages(container) {
-    container.querySelectorAll("img[src]").forEach((image) => {
-      const originalSrc = image.getAttribute("src") || "";
+    container.querySelectorAll("img[src], a[href]").forEach((element) => {
+      const sourceAttribute = element.tagName === "A" ? "href" : "src";
+      const originalSrc = element.getAttribute(sourceAttribute) || "";
       const src = resolveHostMediaSource(originalSrc);
       if (!isVideoMediaSource(src)) {
-        if (src !== originalSrc) image.setAttribute("src", src);
+        if (src !== originalSrc) element.setAttribute(sourceAttribute, src);
         return;
       }
 
@@ -1353,7 +1354,7 @@ document.addEventListener("DOMContentLoaded", () => {
       video.playsInline = true;
       video.src = src;
       video.setAttribute("aria-label", "Generated video");
-      image.replaceWith(video);
+      element.replaceWith(video);
     });
   }
 

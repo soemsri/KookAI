@@ -30,6 +30,7 @@ class TunnelAccessPolicyTests(unittest.TestCase):
             "/api/upload-media",
             "/api/usage-limits",
             "/api/media",
+            "/api/media/generated-video.mp4",
             "/api/conversation/abc123",
             "/api/chat-tasks/task123",
         ]
@@ -72,7 +73,8 @@ class TunnelAccessPolicyTests(unittest.TestCase):
         )
 
         expected_path = urllib.parse.quote(absolute_path, safe="")
-        self.assertEqual(rewritten.count(f"/api/media?path={expected_path}"), 2)
+        expected_prefix = f"/api/media/favicon.png?path={expected_path}"
+        self.assertEqual(rewritten.count(expected_prefix), 2)
         self.assertNotIn(absolute_path, rewritten)
 
     def test_local_video_file_uri_uses_authenticated_media_endpoint(self):
@@ -85,7 +87,20 @@ class TunnelAccessPolicyTests(unittest.TestCase):
         expected_path = urllib.parse.quote(absolute_path, safe="")
         self.assertEqual(
             rewritten,
-            f"![Generated video](/api/media?path={expected_path})",
+            f"![Generated video](/api/media/{os.path.basename(absolute_path)}?path={expected_path})",
+        )
+
+    def test_saved_extensionless_media_link_is_upgraded(self):
+        with tempfile.NamedTemporaryFile(dir=os.getcwd(), suffix=".mp4") as video:
+            absolute_path = os.path.realpath(video.name)
+            encoded_path = urllib.parse.quote(absolute_path, safe="")
+            rewritten = rewrite_local_media_links(
+                f"![Generated video](/api/media?path={encoded_path})"
+            )
+
+        self.assertEqual(
+            rewritten,
+            f"![Generated video](/api/media/{os.path.basename(absolute_path)}?path={encoded_path})",
         )
 
 
