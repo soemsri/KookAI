@@ -237,6 +237,18 @@ class ModelCatalogApiTests(unittest.TestCase):
             main.map_model_name("Gemini 3.7 Flash (High)"),
             "Gemini 3.7 Flash (High)",
         )
+        self.assertEqual(
+            main.map_model_name("Gemini 3.8 Flash (High)"),
+            "Gemini 3.8 Flash (High)",
+        )
+        self.assertEqual(
+            main.map_model_name("Gemini 3.8 Flash (Medium)"),
+            "Gemini 3.8 Flash (Medium)",
+        )
+        self.assertEqual(
+            main.map_model_name("Gemini 3.8 Flash (Low)"),
+            "Gemini 3.8 Flash (Low)",
+        )
 
     def test_runtime_catalog_registers_dynamic_codex_model(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)

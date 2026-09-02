@@ -146,6 +146,9 @@ const colors = {
 };
 
 const FALLBACK_MODELS: ModelOption[] = [
+  { value: "Gemini 3.8 Flash (High)", desc: "Fastest response, ideal for coding tasks", provider: "agy" },
+  { value: "Gemini 3.8 Flash (Medium)", desc: "Balanced speed and performance", provider: "agy" },
+  { value: "Gemini 3.8 Flash (Low)", desc: "Fast, low resource usage", provider: "agy" },
   { value: "Gemini 3.7 Flash (High)", desc: "Fastest response, ideal for coding tasks", provider: "agy" },
   { value: "Gemini 3.7 Flash (Medium)", desc: "Balanced speed and performance", provider: "agy" },
   { value: "Gemini 3.7 Flash (Low)", desc: "Fast, low resource usage", provider: "agy" },

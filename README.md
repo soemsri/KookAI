@@ -11,7 +11,7 @@
 ## ✨ Key Features
 
 - 🤖 **Multi-Provider AI CLI:** Integrated support for leading AI models and CLIs:
-  - **Antigravity (`agy`):** Gemini 3.7 Flash/Pro, Gemini 3.6 Flash, Claude, GPT-OSS, DeepSeek Pro 0813
+  - **Antigravity (`agy`):** Gemini 3.8 Flash, Gemini 3.7 Flash/Pro, Gemini 3.6 Flash, Claude, GPT-OSS, DeepSeek Pro 0813
   - **Codex (`codex`):** OpenAI 5.6 Sol / Terra / Luna
   - **Claude Code (`claude`):** Anthropic Claude 3.7 / 3.5
   - **Kimi Code (`kimi`):** Moonshot Kimi K3
@@ -102,7 +102,7 @@ Sign up for free API keys at the [Groq Console](https://console.groq.com/keys) a
 
 | Provider | CLI Command | Supported Core Models | Special Controls |
 | :--- | :--- | :--- | :--- |
-| **Antigravity** | `agy` | Gemini 3.7 Flash/Pro, Claude | Sandbox / Real |
+| **Antigravity** | `agy` | Gemini 3.8/3.7 Flash/Pro, Claude | Sandbox / Real |
 | **Codex** | `codex` | 5.6 Sol, 5.6 Terra, 5.4 Mini | Effort (Low-Ultra), Speed (Fast/Std) |
 | **Claude Code** | `claude` | Claude 3.7 Sonnet, Opus | Effort (Low-Max), Extended Thinking |
 | **Kimi Code** | `kimi` | Kimi K3 | Stream-JSON, Resumable Session |

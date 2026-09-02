@@ -4,6 +4,39 @@
   "default_model": "Gemini 3.7 Flash (High)",
   "models": [
     {
+      "id": "Gemini 3.8 Flash (High)",
+      "label": "Gemini 3.8 Flash (High)",
+      "description": "Fastest response, ideal for coding tasks",
+      "provider": "agy",
+      "cli_model": "Gemini 3.8 Flash (High)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.8 Flash (Medium)",
+      "label": "Gemini 3.8 Flash (Medium)",
+      "description": "Balanced speed and performance",
+      "provider": "agy",
+      "cli_model": "Gemini 3.8 Flash (Medium)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "Gemini 3.8 Flash (Low)",
+      "label": "Gemini 3.8 Flash (Low)",
+      "description": "Fast, low resource usage",
+      "provider": "agy",
+      "cli_model": "Gemini 3.8 Flash (Low)",
+      "badge": "Flash",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+    },
+    {
       "id": "Gemini 3.7 Flash (High)",
       "label": "Gemini 3.7 Flash (High)",
       "description": "Fastest response, ideal for coding tasks",
