@@ -907,7 +907,14 @@ convo_id_mapping = {}
 # In-memory session message cache (stores active tab sessions)
 in_memory_chats = {}
 
-# Persistent metadata/history for conversations started through Codex CLI.
+# Persistent metadata/history for conversations started through each CLI.
+#
+# The canonical store is also used for agy conversations. Recent agy CLI
+# versions do not always create a transcript/database artifact that KookAI can
+# rediscover after the server restarts, so relying on those artifacts alone can
+# make a completed conversation disappear from the sidebar.
+CANONICAL_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "conversations.json")
+canonical_conversations_lock = threading.Lock()
 CODEX_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "codex_conversations.json")
 codex_conversations_lock = threading.Lock()
 CLAUDE_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "claude_conversations.json")
@@ -918,6 +925,110 @@ GROK_CONVERSATIONS_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "grok_conversations
 grok_conversations_lock = threading.Lock()
 CONVERSATION_METADATA_FILE = os.path.join(ANTIGRAVITY_DATA_DIR, "conversation_metadata.json")
 conversation_metadata_lock = threading.Lock()
+
+
+def _load_canonical_conversation_records() -> dict:
+    if not os.path.exists(CANONICAL_CONVERSATIONS_FILE):
+        return {}
+    try:
+        with open(CANONICAL_CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logging.error(f"Failed to load canonical conversation history: {e}")
+        return {}
+
+
+def _save_canonical_conversation_records(records: dict):
+    os.makedirs(os.path.dirname(CANONICAL_CONVERSATIONS_FILE), exist_ok=True)
+    temp_path = f"{CANONICAL_CONVERSATIONS_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, CANONICAL_CONVERSATIONS_FILE)
+
+
+def persist_canonical_conversation(
+    conversation_id: str,
+    project: str,
+    model: str,
+    provider: str,
+    messages: List[dict],
+    effort: Optional[str] = None,
+    speed: Optional[str] = None,
+    thinking: Optional[bool] = None,
+):
+    """Persist a complete provider-agnostic transcript atomically."""
+    if not conversation_id:
+        return
+
+    normalized_messages = [
+        {"role": message.get("role"), "content": message.get("content", "")}
+        for message in messages
+        if isinstance(message, dict) and message.get("role") in {"user", "assistant"}
+    ]
+    if not normalized_messages:
+        return
+
+    now = datetime.datetime.now().timestamp()
+    first_user_message = next(
+        (
+            message["content"]
+            for message in normalized_messages
+            if message["role"] == "user" and message["content"]
+        ),
+        "",
+    )
+    clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", first_user_message).strip()
+    if not clean_title:
+        clean_title = "Conversation"
+    if len(clean_title) > 40:
+        clean_title = clean_title[:40] + "..."
+
+    with canonical_conversations_lock:
+        records = _load_canonical_conversation_records()
+        existing = records.get(conversation_id, {})
+        records[conversation_id] = {
+            "id": conversation_id,
+            "title": existing.get("title") or clean_title,
+            "project": project or existing.get("project", "agy"),
+            "provider": provider or existing.get("provider", "agy"),
+            "model": model or existing.get("model"),
+            "effort": effort if effort is not None else existing.get("effort"),
+            "speed": speed if speed is not None else existing.get("speed"),
+            "thinking": thinking if thinking is not None else existing.get("thinking"),
+            "timestamp": now,
+            "messages": normalized_messages,
+        }
+        _save_canonical_conversation_records(records)
+
+
+def get_canonical_conversations() -> List[dict]:
+    with canonical_conversations_lock:
+        records = _load_canonical_conversation_records()
+    conversations = [value for value in records.values() if isinstance(value, dict)]
+    conversations.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
+    return conversations
+
+
+def get_canonical_conversation(conversation_id: str) -> Optional[dict]:
+    with canonical_conversations_lock:
+        record = _load_canonical_conversation_records().get(conversation_id)
+    return record if isinstance(record, dict) else None
+
+
+def merge_conversation_sources(*sources: List[dict]) -> List[dict]:
+    """Merge conversation lists while preserving first-source precedence."""
+    merged = []
+    seen_ids = set()
+    for source in sources:
+        for conversation in source:
+            conversation_id = conversation.get("id")
+            if not conversation_id or conversation_id in seen_ids:
+                continue
+            seen_ids.add(conversation_id)
+            merged.append(conversation)
+    return merged
+
 
 def _load_conversation_metadata() -> dict:
     if not os.path.exists(CONVERSATION_METADATA_FILE):
@@ -3820,6 +3931,7 @@ async def create_project(request: Request, project_request: CreateProjectRequest
 @app.get("/api/conversations")
 async def get_conversations(request: Request, project: Optional[str] = None):
     verify_authorization(request)
+    canonical_convos = get_canonical_conversations()
     real_convos = get_real_conversations()
     for convo in real_convos:
         convo.setdefault("provider", "agy")
@@ -3830,7 +3942,17 @@ async def get_conversations(request: Request, project: Optional[str] = None):
     muse_convos = get_muse_conversations()
     deepseek_convos = get_deepseek_conversations()
     zai_convos = get_zai_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos + deepseek_convos + zai_convos
+    merged = merge_conversation_sources(
+        canonical_convos,
+        real_convos,
+        codex_convos,
+        claude_convos,
+        kimi_convos,
+        grok_convos,
+        muse_convos,
+        deepseek_convos,
+        zai_convos,
+    )
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -3847,6 +3969,7 @@ async def get_conversations(request: Request, project: Optional[str] = None):
 @app.get("/api/chat-history")
 async def get_chat_history(request: Request):
     verify_authorization(request)
+    canonical_convos = get_canonical_conversations()
     real_convos = get_real_conversations()
     for convo in real_convos:
         convo.setdefault("provider", "agy")
@@ -3857,7 +3980,17 @@ async def get_chat_history(request: Request):
     muse_convos = get_muse_conversations()
     deepseek_convos = get_deepseek_conversations()
     zai_convos = get_zai_conversations()
-    merged = list(real_convos) + codex_convos + claude_convos + kimi_convos + grok_convos + muse_convos + deepseek_convos + zai_convos
+    merged = merge_conversation_sources(
+        canonical_convos,
+        real_convos,
+        codex_convos,
+        claude_convos,
+        kimi_convos,
+        grok_convos,
+        muse_convos,
+        deepseek_convos,
+        zai_convos,
+    )
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
         if c["id"] not in seen_ids:
@@ -3877,6 +4010,7 @@ async def get_conversation_details(cid: str, request: Request):
     effort = None
     speed = None
     thinking = None
+    canonical_record = get_canonical_conversation(cid)
     codex_record = get_codex_conversation(cid)
     claude_record = get_claude_conversation(cid)
     kimi_record = get_kimi_conversation(cid)
@@ -3888,7 +4022,14 @@ async def get_conversation_details(cid: str, request: Request):
     # First check memory cache
     if cid in in_memory_chats:
         messages = in_memory_chats[cid]
-        if codex_record:
+        if canonical_record:
+            project = canonical_record.get("project")
+            provider = canonical_record.get("provider", "agy")
+            model = canonical_record.get("model")
+            effort = canonical_record.get("effort")
+            speed = canonical_record.get("speed")
+            thinking = canonical_record.get("thinking")
+        elif codex_record:
             project = codex_record.get("project")
             provider = "codex"
             model = codex_record.get("model")
@@ -3924,6 +4065,15 @@ async def get_conversation_details(cid: str, request: Request):
             provider = "zai"
             model = zai_record.get("model")
             thinking = True
+    elif canonical_record:
+        messages = canonical_record.get("messages", [])
+        project = canonical_record.get("project")
+        provider = canonical_record.get("provider", "agy")
+        model = canonical_record.get("model")
+        effort = canonical_record.get("effort")
+        speed = canonical_record.get("speed")
+        thinking = canonical_record.get("thinking")
+        in_memory_chats[cid] = messages
     elif codex_record:
         messages = codex_record.get("messages", [])
         project = codex_record.get("project")
@@ -4501,6 +4651,18 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         speed if provider == "codex" else None,
         thinking if provider in {"claude", "kimi", "xai", "muse", "zai"} else None,
     )
+
+    # agy's native transcript is not guaranteed to be written by every CLI
+    # version. Keep the UI's complete transcript in KookAI's canonical store so
+    # the latest conversation survives both app and server restarts.
+    if provider == "agy":
+        persist_canonical_conversation(
+            resolved_cid,
+            project_id,
+            model,
+            provider,
+            in_memory_chats[resolved_cid],
+        )
 
     if provider == "codex":
         persist_codex_exchange(

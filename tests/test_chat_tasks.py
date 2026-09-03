@@ -1,6 +1,10 @@
 import unittest
 import asyncio
+import json
+import os
+import tempfile
 from unittest.mock import MagicMock, patch
+import main
 from main import chat_tasks, chat_tasks_lock, list_chat_tasks_endpoint, get_chat_task_endpoint
 
 class TestChatTasks(unittest.TestCase):
@@ -83,8 +87,24 @@ class TestChatTasks(unittest.TestCase):
             workspace="agy",
             target="Sandbox"
         )
-        with patch("main.run_selected_cli", return_value={"reply": "ok", "conversation_id": "test_convo"}):
-            res = build_chat_response(req, progress_callback=mock_callback)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(
+                    main,
+                    "CANONICAL_CONVERSATIONS_FILE",
+                    os.path.join(temp_dir, "conversations.json"),
+                ),
+                patch.object(
+                    main,
+                    "CONVERSATION_METADATA_FILE",
+                    os.path.join(temp_dir, "conversation_metadata.json"),
+                ),
+                patch(
+                    "main.run_selected_cli",
+                    return_value={"reply": "ok", "conversation_id": "test_convo"},
+                ),
+            ):
+                res = build_chat_response(req, progress_callback=mock_callback)
 
         self.assertTrue(any("🎥 Processing video" in msg for et, msg in events))
 
@@ -107,15 +127,96 @@ class TestChatTasks(unittest.TestCase):
         )
 
         try:
-            with patch("main.run_selected_cli", return_value=("ok", "video-prompt-test")) as run_cli:
-                build_chat_response(request)
+            with tempfile.TemporaryDirectory() as temp_dir:
+                with (
+                    patch.object(
+                        main,
+                        "CANONICAL_CONVERSATIONS_FILE",
+                        os.path.join(temp_dir, "conversations.json"),
+                    ),
+                    patch.object(
+                        main,
+                        "CONVERSATION_METADATA_FILE",
+                        os.path.join(temp_dir, "conversation_metadata.json"),
+                    ),
+                    patch(
+                        "main.run_selected_cli",
+                        return_value=("ok", "video-prompt-test"),
+                    ) as run_cli,
+                ):
+                    build_chat_response(request)
 
-            execution_prompt = run_cli.call_args.args[0]
-            self.assertNotIn("file://", execution_prompt)
-            self.assertIn("Test transcript", execution_prompt)
-            self.assertIn("file://", in_memory_chats["video-prompt-test"][0]["content"])
+                execution_prompt = run_cli.call_args.args[0]
+                self.assertNotIn("file://", execution_prompt)
+                self.assertIn("Test transcript", execution_prompt)
+                self.assertIn("file://", in_memory_chats["video-prompt-test"][0]["content"])
         finally:
             in_memory_chats.pop("video-prompt-test", None)
+
+    def test_agy_conversation_survives_in_memory_cache_reset(self):
+        conversation_id = "temp_KookAI_persisted"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            canonical_path = os.path.join(temp_dir, "conversations.json")
+            metadata_path = os.path.join(temp_dir, "conversation_metadata.json")
+            with (
+                patch.object(main, "CANONICAL_CONVERSATIONS_FILE", canonical_path),
+                patch.object(main, "CONVERSATION_METADATA_FILE", metadata_path),
+                patch(
+                    "main.run_selected_cli",
+                    return_value=("persisted reply", conversation_id),
+                ),
+            ):
+                request = main.ChatRequest(
+                    message="latest prompt",
+                    model="Gemini 3.6 Flash (High)",
+                    conversation_id=conversation_id,
+                    provider="agy",
+                    workspace="KookAI",
+                    target="Sandbox",
+                )
+                try:
+                    main.build_chat_response(request)
+                    main.in_memory_chats.pop(conversation_id, None)
+                    record = main.get_canonical_conversation(conversation_id)
+
+                    mock_request = MagicMock()
+                    mock_request.headers = {}
+                    mock_request.query_params = {}
+                    with patch("main.verify_authorization", return_value=True):
+                        detail_response = asyncio.run(
+                            main.get_conversation_details(conversation_id, mock_request)
+                        )
+                        history_response = asyncio.run(
+                            main.get_chat_history(mock_request)
+                        )
+                    detail = json.loads(detail_response.body.decode("utf-8"))
+                    history = json.loads(history_response.body.decode("utf-8"))
+                finally:
+                    main.in_memory_chats.pop(conversation_id, None)
+
+            self.assertIsNotNone(record)
+            self.assertEqual(record["project"], "KookAI")
+            self.assertEqual(record["provider"], "agy")
+            self.assertEqual(
+                record["messages"],
+                [
+                    {"role": "user", "content": "latest prompt"},
+                    {"role": "assistant", "content": "persisted reply"},
+                ],
+            )
+            self.assertEqual(detail["project"], "KookAI")
+            self.assertEqual(detail["provider"], "agy")
+            self.assertEqual(detail["messages"], record["messages"])
+            self.assertTrue(
+                any(
+                    conversation["id"] == conversation_id
+                    for conversation in history["conversations"]
+                )
+            )
+
+            with open(canonical_path, "r", encoding="utf-8") as persisted_file:
+                persisted = json.load(persisted_file)
+            self.assertIn(conversation_id, persisted)
 
 
 if __name__ == "__main__":

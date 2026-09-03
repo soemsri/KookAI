@@ -15,7 +15,7 @@ import {
 } from '../utils/modelCatalog';
 import Svg, { Circle } from 'react-native-svg';
 import * as DocumentPicker from 'expo-document-picker';
-import { useEvent } from 'expo';
+import { useEvent, useEventListener } from 'expo';
 import { VideoView, useVideoPlayer } from 'expo-video';
 // Mock Audio namespaces and classes to avoid importing deprecated expo-av
 namespace Audio {
@@ -602,6 +602,22 @@ const VideoPlayerView = ({ url, authToken }: { url: string; authToken?: string }
   const status = statusEvent?.status ?? player.status;
   const isPlaying = playingEvent?.isPlaying ?? player.playing;
   const playerError = statusEvent?.error?.message;
+  const [hasReady, setHasReady] = useState(false);
+
+  useEffect(() => {
+    if (status === 'readyToPlay') {
+      setHasReady(true);
+    }
+  }, [status]);
+
+  useEventListener(player, 'playToEnd', () => {
+    try {
+      player.currentTime = 0;
+      player.pause();
+    } catch {
+      // Fallback for unexpected player state
+    }
+  });
 
   const retry = async () => {
     await player.replaceAsync(source);
@@ -612,9 +628,17 @@ const VideoPlayerView = ({ url, authToken }: { url: string; authToken?: string }
     if (isPlaying) {
       player.pause();
     } else {
+      if (player.status === 'idle') {
+        try {
+          player.currentTime = 0;
+        } catch {}
+      }
       player.play();
     }
   };
+
+  // Only show the loading spinner during initial load before reaching readyToPlay
+  const isLoading = status === 'loading' || (status === 'idle' && !hasReady);
 
   return (
     <View style={styles.videoContainer}>
@@ -627,7 +651,7 @@ const VideoPlayerView = ({ url, authToken }: { url: string; authToken?: string }
         playsInline
         surfaceType={Platform.OS === 'android' ? 'textureView' : undefined}
       />
-      {(status === 'idle' || status === 'loading') && (
+      {isLoading && (
         <View style={styles.videoStatusOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color="#ffffff" />
         </View>
@@ -642,7 +666,18 @@ const VideoPlayerView = ({ url, authToken }: { url: string; authToken?: string }
           </TouchableOpacity>
         </View>
       )}
-      {status === 'readyToPlay' && (
+      {!isPlaying && !isLoading && status !== 'error' && (
+        <TouchableOpacity
+          style={styles.videoCenterPlayOverlay}
+          activeOpacity={0.8}
+          onPress={togglePlayback}
+        >
+          <View style={styles.videoCenterPlayButton}>
+            <Text style={styles.videoCenterPlayIcon}>▶</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+      {hasReady && status !== 'error' && (
         <TouchableOpacity style={styles.videoDirectPlayButton} onPress={togglePlayback}>
           <Text style={styles.videoRetryButtonText}>{isPlaying ? 'หยุดชั่วคราว' : 'เล่นวิดีโอ'}</Text>
         </TouchableOpacity>
@@ -3026,20 +3061,71 @@ allowQueue: false,
     // Treat regular links as media only when their destination has a known
     // media extension, so ordinary web links remain in the message body.
     const markdownLinkRegex = /(!?)\[[^\]]*\]\((<[^>\r\n]+>|[^)\s]+)\)/g;
-    const matches = [...content.matchAll(markdownLinkRegex)].filter((match) => {
+    const allMatches = [...content.matchAll(markdownLinkRegex)].filter((match) => {
       const destination = match[2].trim().replace(/^<|>$/g, '');
       return match[1] === '!' || getMediaType(destination) !== 'document';
     });
-    const mediaMarkdown = new Set(matches.map((match) => match[0]));
+
+    const getCanonicalKey = (dest: string) => {
+      let d = dest.trim().replace(/^<|>$/g, '');
+      if (d.startsWith('file:///')) d = d.slice('file://'.length);
+      else if (d.startsWith('file://')) d = d.slice('file://'.length);
+      if (d.includes('/api/media')) {
+        const pathMatch = d.match(/[?&]path=([^&]+)/);
+        if (pathMatch?.[1]) {
+          try {
+            return decodeURIComponent(pathMatch[1]);
+          } catch {
+            return pathMatch[1];
+          }
+        }
+      }
+      try {
+        return decodeURIComponent(d);
+      } catch {
+        return d;
+      }
+    };
+
+    const embedKeys = new Set(
+      allMatches
+        .filter((m) => m[1] === '!')
+        .map((m) => getCanonicalKey(m[2]))
+    );
+
+    const seenCanonicalKeys = new Set<string>();
+    const matches: RegExpExecArray[] = [];
+
+    for (const match of allMatches) {
+      const isEmbed = match[1] === '!';
+      const canonicalKey = getCanonicalKey(match[2]);
+
+      // If this is a regular link without '!', but an explicit embed already exists for this media,
+      // treat it as a companion link rather than a duplicate media player.
+      if (!isEmbed && embedKeys.has(canonicalKey)) {
+        continue;
+      }
+
+      // If we've already included a player for this canonical media in the same message, skip duplicates
+      if (seenCanonicalKeys.has(canonicalKey)) {
+        continue;
+      }
+
+      seenCanonicalKeys.add(canonicalKey);
+      matches.push(match);
+    }
+
+    const mediaMarkdown = new Set(allMatches.map((match) => match[0]));
 
     // Remove rendered media tags from the text body. Also hide a companion
-    // Markdown link to the same host-side image (for example
-    // `[เปิดไฟล์ภาพ](</root/...png>)`) so an unresolved filesystem path is
-    // never shown as if it were a normal mobile link.
+    // Markdown link to the same host-side image/video so an unresolved
+    // filesystem path or redundant link is never shown in the chat text.
     const localMediaLinkRegex = /\[[^\]]+\]\((?:<(?:file:\/\/|\/)[^>]+>|(?:file:\/\/|\/)[^)\s]+)\)/g;
     const cleanText = content
       .replace(markdownLinkRegex, (match) => mediaMarkdown.has(match) ? '' : match)
       .replace(localMediaLinkRegex, '')
+      .replace(/^\s*[-*]\s*\*\*[^*]+\*\*:\s*$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
       .trim();
 
     const renderTextContent = (text: string) => {
@@ -4554,6 +4640,32 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: 8,
     backgroundColor: 'rgba(37, 99, 235, 0.92)',
+  },
+  videoCenterPlayOverlay: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.28)',
+  },
+  videoCenterPlayButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 6,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+  },
+  videoCenterPlayIcon: {
+    color: '#ffffff',
+    fontSize: 26,
+    marginLeft: 4,
   },
   videoPlaceholder: {
     flex: 1,

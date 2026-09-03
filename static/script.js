@@ -1337,7 +1337,33 @@ document.addEventListener("DOMContentLoaded", () => {
     return /\.(mp4|webm|mov|m4v|3gp|avi|mkv)(?:[?#]|$)/i.test(candidate);
   }
 
+  function getCanonicalMediaKey(src) {
+    if (!src) return "";
+    let value = resolveHostMediaSource(src).trim();
+    if (value.startsWith("<") && value.endsWith(">")) value = value.slice(1, -1).trim();
+    if (value.startsWith("file:///")) value = value.slice("file://".length);
+    else if (value.startsWith("file://")) value = value.slice("file://".length);
+    try {
+      const parsed = new URL(value, window.location.href);
+      const pathParam = parsed.searchParams.get("path");
+      if (pathParam) return decodeURIComponent(pathParam);
+      return decodeURIComponent(parsed.pathname);
+    } catch (e) {
+      return decodeURIComponent(value);
+    }
+  }
+
   function upgradeInlineVideoImages(container) {
+    const seenVideos = new Set();
+    const companionImgVideoKeys = new Set();
+
+    container.querySelectorAll("img[src]").forEach((img) => {
+      const src = resolveHostMediaSource(img.getAttribute("src") || "");
+      if (isVideoMediaSource(src)) {
+        companionImgVideoKeys.add(getCanonicalMediaKey(src));
+      }
+    });
+
     container.querySelectorAll("img[src], a[href]").forEach((element) => {
       const sourceAttribute = element.tagName === "A" ? "href" : "src";
       const originalSrc = element.getAttribute(sourceAttribute) || "";
@@ -1347,6 +1373,25 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      const key = getCanonicalMediaKey(src);
+
+      // If this is an <a> tag and a companion <img> exists for the same video, keep <a> as a text link
+      if (element.tagName === "A" && companionImgVideoKeys.has(key)) {
+        element.setAttribute("href", src);
+        return;
+      }
+
+      // If we have already created a video player for this canonical video in this container, do not duplicate
+      if (seenVideos.has(key)) {
+        if (element.tagName === "A") {
+          element.setAttribute("href", src);
+        } else {
+          element.remove();
+        }
+        return;
+      }
+
+      seenVideos.add(key);
       const video = document.createElement("video");
       video.className = "message-video";
       video.controls = true;
@@ -1354,6 +1399,12 @@ document.addEventListener("DOMContentLoaded", () => {
       video.playsInline = true;
       video.src = src;
       video.setAttribute("aria-label", "Generated video");
+      video.addEventListener("ended", () => {
+        try {
+          video.currentTime = 0;
+          video.pause();
+        } catch (e) {}
+      });
       element.replaceWith(video);
     });
   }
