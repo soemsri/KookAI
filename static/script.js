@@ -1014,6 +1014,56 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- Send Messages ---
   const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+  let currentRunningTaskId = null;
+  let isPromptRunning = false;
+
+  function setPromptRunningState(running, taskId = null) {
+    isPromptRunning = running;
+    currentRunningTaskId = running ? taskId : null;
+    const iconSend = document.getElementById("iconSend");
+    const iconStop = document.getElementById("iconStop");
+    if (running) {
+      sendBtn.classList.add("stop-btn");
+      sendBtn.setAttribute("title", "Stop prompt (Cancel)");
+      if (iconSend) iconSend.classList.add("hidden");
+      if (iconStop) iconStop.classList.remove("hidden");
+    } else {
+      sendBtn.classList.remove("stop-btn");
+      sendBtn.setAttribute("title", "Send message");
+      if (iconSend) iconSend.classList.remove("hidden");
+      if (iconStop) iconStop.classList.add("hidden");
+    }
+  }
+
+  async function cancelActivePrompt() {
+    const taskId = currentRunningTaskId;
+    if (!taskId) {
+      if (activeConversationId) {
+        try {
+          await fetch("/api/chat-tasks/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ conversation_id: activeConversationId })
+          });
+        } catch (err) {
+          console.error("Error cancelling task by conversation:", err);
+        }
+      }
+      return;
+    }
+    try {
+      const res = await fetch(`/api/chat-tasks/${taskId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (!res.ok) {
+        console.warn("Failed to cancel chat task:", res.status);
+      }
+    } catch (err) {
+      console.error("Error cancelling chat task:", err);
+    }
+  }
+
   function applyChatResponse(data, originalMessage) {
     if (data.status === "success") {
       appendMessage("assistant", data.reply);
@@ -1028,6 +1078,9 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       // Refresh list on sidebar tree
+      loadProjectsAndConversations();
+    } else if (data.status === "cancelled") {
+      appendMessage("assistant", data.reply || "⏹️ **Prompt cancelled by user**");
       loadProjectsAndConversations();
     } else {
       appendMessage("assistant", data.reply || "⚠️ Error processing your prompt. Please try again.");
@@ -1072,6 +1125,8 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error(startData.detail || "Failed to start chat task");
       }
 
+      setPromptRunningState(true, startData.task_id);
+
       while (true) {
         await wait(1500);
         const pollResponse = await fetch(`/api/chat-tasks/${startData.task_id}?after=${lastSeq}`);
@@ -1088,9 +1143,9 @@ document.addEventListener("DOMContentLoaded", () => {
           updateTypingProgress(typingIndicator, progressEvents);
         }
 
-        if (taskData.status === "success" || taskData.status === "error") {
+        if (taskData.status === "success" || taskData.status === "error" || taskData.status === "cancelled") {
           typingIndicator.remove();
-          applyChatResponse(taskData.result || { status: "error" }, message);
+          applyChatResponse(taskData.result || { status: taskData.status, reply: "⏹️ **Prompt cancelled by user**" }, message);
           break;
         }
       }
@@ -1098,10 +1153,16 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error("Chat task error:", err);
       typingIndicator.remove();
       appendMessage("assistant", "⚠️ Network or server error. Please try again.");
+    } finally {
+      setPromptRunningState(false, null);
     }
   }
 
   function sendMessage() {
+    if (isPromptRunning) {
+      cancelActivePrompt();
+      return;
+    }
     const message = promptTextarea.value.trim();
     if (!message) return;
 
@@ -1113,7 +1174,13 @@ document.addEventListener("DOMContentLoaded", () => {
     sendDirectMessage(message);
   }
 
-  sendBtn.addEventListener("click", sendMessage);
+  sendBtn.addEventListener("click", () => {
+    if (isPromptRunning) {
+      cancelActivePrompt();
+      return;
+    }
+    sendMessage();
+  });
 
   // --- Web Speech API microphone handler ---
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1288,8 +1355,18 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        if (isPromptRunning) return;
         sendMessage();
+      } else if (e.key === "Escape" && isPromptRunning) {
+        e.preventDefault();
+        cancelActivePrompt();
       }
+    }
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isPromptRunning) {
+      cancelActivePrompt();
     }
   });
 
@@ -1556,12 +1633,26 @@ document.addEventListener("DOMContentLoaded", () => {
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
     bubble.innerHTML = `
-      <div class="typing-dots">
-        <span></span>
-        <span></span>
-        <span></span>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+        <div class="typing-dots">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <button type="button" class="typing-cancel-btn" title="Stop prompt (Cancel)">
+          <span>■</span> Stop
+        </button>
       </div>
     `;
+
+    const cancelBtn = bubble.querySelector(".typing-cancel-btn");
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelActivePrompt();
+      });
+    }
 
     row.appendChild(avatar);
     row.appendChild(bubble);
@@ -1582,7 +1673,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }).join("\n");
 
     const content = `**Running task...**\n\n${lines}`;
-    bubble.innerHTML = window.marked ? window.marked.parse(content) : content;
+    const parsedHtml = window.marked ? window.marked.parse(content) : content;
+    bubble.innerHTML = `
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 12px;">
+        <span style="font-weight: 600; font-size: 13px; color: var(--text-primary);">Running task...</span>
+        <button type="button" class="typing-cancel-btn" title="Stop prompt (Cancel)">
+          <span>■</span> Stop
+        </button>
+      </div>
+      <div>${parsedHtml}</div>
+    `;
+
+    const cancelBtn = bubble.querySelector(".typing-cancel-btn");
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelActivePrompt();
+      });
+    }
+
     chatScroll.scrollTop = chatScroll.scrollHeight;
   }
 

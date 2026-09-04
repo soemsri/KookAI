@@ -2529,7 +2529,7 @@ allowQueue: false,
           setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
         }
 
-        if (taskResponse.status === 'success' || taskResponse.status === 'error') {
+        if (taskResponse.status === 'success' || taskResponse.status === 'error' || taskResponse.status === 'cancelled') {
           response = taskResponse.result;
           break;
         }
@@ -2737,7 +2737,7 @@ allowQueue: false,
           setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
         }
 
-        if (taskResponse.status === 'success' || taskResponse.status === 'error') {
+        if (taskResponse.status === 'success' || taskResponse.status === 'error' || taskResponse.status === 'cancelled') {
           response = taskResponse.result;
           break;
         }
@@ -2772,7 +2772,36 @@ allowQueue: false,
     }
   };
 
+  const handleCancelPrompt = async () => {
+    const taskId = activeTaskIdRef.current;
+    if (!taskId) {
+      const convoId = activeConvoIdRef.current || activeConvoId;
+      if (convoId) {
+        try {
+          await callHostApi('/api/chat-tasks/cancel', {
+            method: 'POST',
+            body: JSON.stringify({ conversation_id: convoId })
+          });
+        } catch (err) {
+          console.warn("Error cancelling chat task by conversation:", err);
+        }
+      }
+      return;
+    }
+    try {
+      await callHostApi(`/api/chat-tasks/${taskId}/cancel`, {
+        method: 'POST'
+      });
+    } catch (err: any) {
+      console.warn("Failed to cancel active task:", err);
+    }
+  };
+
   const handleSend = async () => {
+    if (loading) {
+      handleCancelPrompt();
+      return;
+    }
     sendChatMessage(inputText, messagesRef.current, true);
   };
 
@@ -3446,16 +3475,32 @@ allowQueue: false,
                     borderColor: theme.borderColor,
                     flexDirection: 'row',
                     alignItems: 'center',
-                    gap: 8,
+                    justifyContent: 'space-between',
                     alignSelf: 'flex-start',
-                    marginVertical: 4
+                    marginVertical: 4,
+                    minWidth: 160
                   }
                 ]}
               >
-                <ActivityIndicator size="small" color={theme.accent} />
-                <Text style={[styles.assistantText, { color: theme.textSecondary, fontSize: selectedFontSize }]}>
-                  Thinking...
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <ActivityIndicator size="small" color={theme.accent} />
+                  <Text style={[styles.assistantText, { color: theme.textSecondary, fontSize: selectedFontSize }]}>
+                    Thinking...
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={handleCancelPrompt}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={{
+                    backgroundColor: 'rgba(234, 67, 53, 0.15)',
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: 10,
+                    marginLeft: 12
+                  }}
+                >
+                  <Text style={{ color: theme.statusRed || '#ea4335', fontSize: 11, fontWeight: '700' }}>⏹ Stop</Text>
+                </TouchableOpacity>
               </View>
             ) : (
               <View 
@@ -3472,11 +3517,25 @@ allowQueue: false,
                 ]}
               >
                 <View style={{ gap: 8 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <ActivityIndicator size="small" color={theme.accent} />
-                    <Text style={[styles.runningTaskTitle, { color: theme.textPrimary, fontSize: selectedFontSize, fontWeight: '700' }]}>
-                      Running task...
-                    </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <ActivityIndicator size="small" color={theme.accent} />
+                      <Text style={[styles.runningTaskTitle, { color: theme.textPrimary, fontSize: selectedFontSize, fontWeight: '700' }]}>
+                        Running task...
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={handleCancelPrompt}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={{
+                        backgroundColor: 'rgba(234, 67, 53, 0.15)',
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 10,
+                      }}
+                    >
+                      <Text style={{ color: theme.statusRed || '#ea4335', fontSize: 11, fontWeight: '700' }}>⏹ Stop</Text>
+                    </TouchableOpacity>
                   </View>
                   <View style={{ gap: 6, marginTop: 4 }}>
                     {taskProgressEvents.slice(-8).map((event, idx) => {
@@ -3673,11 +3732,19 @@ allowQueue: false,
                       )}
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.sendBtnRound, isPromptDisabled && styles.sendBtnDisabled, { backgroundColor: theme.accent }]}
+                      style={[
+                        styles.sendBtnRound,
+                        loading
+                          ? { backgroundColor: '#ea4335' }
+                          : (isPromptDisabled && styles.sendBtnDisabled),
+                        !loading && { backgroundColor: theme.accent }
+                      ]}
                       onPress={handleSend}
-                      disabled={isPromptDisabled}
+                      disabled={isPromptDisabled && !loading}
                     >
-                      <Text style={styles.sendIcon}>➤</Text>
+                      <Text style={[styles.sendIcon, loading && { fontSize: 13, color: '#ffffff' }]}>
+                        {loading ? '■' : '➤'}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </View>

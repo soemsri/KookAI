@@ -27,12 +27,14 @@ class TunnelAccessPolicyTests(unittest.TestCase):
             "/api/chat-history",
             "/api/chat",
             "/api/chat-tasks",
+            "/api/chat-tasks/cancel",
             "/api/upload-media",
             "/api/usage-limits",
             "/api/media",
             "/api/media/generated-video.mp4",
             "/api/conversation/abc123",
             "/api/chat-tasks/task123",
+            "/api/chat-tasks/task123/cancel",
         ]
         for path in allowed_paths:
             with self.subTest(path=path):

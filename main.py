@@ -23,6 +23,7 @@ _load_env_file()
 from video_processor import is_video_source, process_video_source, is_url, extract_video_target, WATCH_HELP_RESPONSE
 
 import asyncio
+import contextvars
 import uvicorn
 import subprocess
 import logging
@@ -269,6 +270,7 @@ TUNNEL_ALLOWED_EXACT_PATHS = {
     "/api/chat-history",
     "/api/chat",
     "/api/chat-tasks",
+    "/api/chat-tasks/cancel",
     "/api/upload-media",
     "/api/usage-limits",
     "/api/media",
@@ -1076,9 +1078,25 @@ def persist_conversation_metadata(
         _save_conversation_metadata(records)
 
 
+class AgentCommandCancelled(Exception):
+    """Raised when an agent command execution is cancelled by the user."""
+    pass
+
+
+class CancelTaskRequest(BaseModel):
+    task_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
 # Background chat task state for polling progress while agy is still running.
 chat_tasks = {}
 chat_tasks_lock = threading.Lock()
+chat_task_cancel_events: dict[str, threading.Event] = {}
+chat_task_active_procs: dict[str, tuple[subprocess.Popen, Optional[int]]] = {}
+chat_task_active_procs_lock = threading.Lock()
+current_task_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "current_task_id_var", default=None
+)
 
 # Multi-step interview logic for /grill-me
 interview_states = {} # conversation_id -> current_question_index
@@ -2399,7 +2417,16 @@ def run_agent_command(
     raw_line_callback=None,
     stdin_text=None,
     env=None,
+    cancel_event=None,
+    task_id=None,
 ):
+    tid = task_id or current_task_id_var.get()
+    if cancel_event is None and tid:
+        cancel_event = chat_task_cancel_events.get(tid)
+
+    if cancel_event and cancel_event.is_set():
+        raise AgentCommandCancelled("Prompt execution was cancelled by user")
+
     popen_kwargs = hidden_subprocess_kwargs()
     if os.name != "nt":
         popen_kwargs["start_new_session"] = True
@@ -2418,6 +2445,10 @@ def run_agent_command(
         **popen_kwargs,
     )
     process_group_id = proc.pid if os.name != "nt" else None
+    if tid:
+        with chat_task_active_procs_lock:
+            chat_task_active_procs[tid] = (proc, process_group_id)
+
     output_queue = queue.Queue()
     stdout_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
     stderr_capture = {"chunks": deque(), "chars": 0, "total": 0, "truncated": False}
@@ -2493,6 +2524,11 @@ def run_agent_command(
     output_drain_deadline = None
     try:
         while True:
+            if cancel_event and cancel_event.is_set():
+                if proc.poll() is None:
+                    kill_process_tree(proc, process_group_id)
+                raise AgentCommandCancelled("Prompt execution was cancelled by user")
+
             try:
                 source, line = output_queue.get(timeout=0.05)
                 event = progress_line_classifier(source, line)
@@ -2503,6 +2539,8 @@ def run_agent_command(
 
             now = time.monotonic()
             if proc.poll() is not None:
+                if cancel_event and cancel_event.is_set():
+                    raise AgentCommandCancelled("Prompt execution was cancelled by user")
                 # A detached/background child may inherit the CLI's output pipes.
                 # Give the direct process's buffered output a brief chance to drain,
                 # then return without waiting for descendants to close those pipes.
@@ -2537,6 +2575,10 @@ def run_agent_command(
                     stderr=capture_text(stderr_capture)
                 )
     finally:
+        if tid:
+            with chat_task_active_procs_lock:
+                if chat_task_active_procs.get(tid) == (proc, process_group_id):
+                    chat_task_active_procs.pop(tid, None)
         stop_capture.set()
 
     # Do not synchronously close an inherited pipe from this thread: on POSIX a
@@ -2553,6 +2595,9 @@ def run_agent_command(
                 progress_callback(event["type"], event["message"])
         except queue.Empty:
             break
+
+    if cancel_event and cancel_event.is_set():
+        raise AgentCommandCancelled("Prompt execution was cancelled by user")
 
     return subprocess.CompletedProcess(
         cmd,
@@ -3768,7 +3813,17 @@ def run_selected_cli(
     thinking: bool = True,
     image_paths: Optional[List[str]] = None,
     progress_callback=None,
+    cancel_event=None,
+    task_id=None,
 ):
+    if cancel_event is None and task_id:
+        cancel_event = chat_task_cancel_events.get(task_id)
+    if cancel_event is None and current_task_id_var.get():
+        cancel_event = chat_task_cancel_events.get(current_task_id_var.get())
+
+    if cancel_event and cancel_event.is_set():
+        raise AgentCommandCancelled("Prompt execution was cancelled by user")
+
     selected_provider = (provider or "").strip().lower()
     if not selected_provider:
         selected_provider = resolve_provider(None, model_ui_name)
@@ -3800,10 +3855,17 @@ def run_selected_cli(
         else:
             primary_failed = True
             primary_error_msg = reply
+    except AgentCommandCancelled:
+        raise
     except Exception as exc:
+        if cancel_event and cancel_event.is_set():
+            raise AgentCommandCancelled("Prompt execution was cancelled by user")
         primary_failed = True
         primary_error_msg = f"❌ **Execution Error**: {str(exc)}"
         attempted_providers.add(selected_provider)
+
+    if cancel_event and cancel_event.is_set():
+        raise AgentCommandCancelled("Prompt execution was cancelled by user")
 
     if primary_failed:
         logging.warning(
@@ -3814,6 +3876,8 @@ def run_selected_cli(
         ]
 
         for fallback_prov in failover_candidates:
+            if cancel_event and cancel_event.is_set():
+                raise AgentCommandCancelled("Prompt execution was cancelled by user")
             if not is_provider_available(fallback_prov):
                 logging.info(
                     f"Fallback provider '{fallback_prov}' is not installed/available. Skipping."
@@ -3853,11 +3917,18 @@ def run_selected_cli(
                     return notice + fb_reply, fb_cid
                 else:
                     logging.warning(f"Fallback provider '{fallback_prov}' also failed.")
+            except AgentCommandCancelled:
+                raise
             except Exception as fb_exc:
+                if cancel_event and cancel_event.is_set():
+                    raise AgentCommandCancelled("Prompt execution was cancelled by user")
                 logging.warning(
                     f"Fallback provider '{fallback_prov}' exception: {fb_exc}"
                 )
                 attempted_providers.add(fallback_prov)
+
+    if cancel_event and cancel_event.is_set():
+        raise AgentCommandCancelled("Prompt execution was cancelled by user")
 
     # If all failovers fail or none available, return the primary error message
     return primary_error_msg, conversation_id
@@ -4211,7 +4282,15 @@ async def get_conversation_details(cid: str, request: Request):
         "thinking": thinking,
     })
 
-def build_chat_response(request: ChatRequest, progress_callback=None):
+def build_chat_response(request: ChatRequest, progress_callback=None, cancel_event=None, task_id=None):
+    if cancel_event is None and task_id:
+        cancel_event = chat_task_cancel_events.get(task_id)
+    if cancel_event is None and current_task_id_var.get():
+        cancel_event = chat_task_cancel_events.get(current_task_id_var.get())
+
+    if cancel_event and cancel_event.is_set():
+        raise AgentCommandCancelled("Prompt execution was cancelled by user")
+
     cwd_path = os.getcwd()
     message = request.message
     model_entry = resolve_chat_model(request)
@@ -4309,6 +4388,8 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         return WATCH_HELP_RESPONSE, actual_cid
 
     if video_source_found:
+        if cancel_event and cancel_event.is_set():
+            raise AgentCommandCancelled("Prompt execution was cancelled by user")
         try:
             if progress_callback:
                 progress_callback("progress", "🎥 Processing video: extracting frames & transcript...")
@@ -4353,6 +4434,8 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
         user_visible_message = message
 
     def execute_selected(prompt: str):
+        if cancel_event and cancel_event.is_set():
+            raise AgentCommandCancelled("Prompt execution was cancelled by user")
         codex_images = image_media[:10]
         cwd_path = resolve_workspace_dir_safely(workspace)
         
@@ -4373,6 +4456,8 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
             thinking,
             codex_images,
             progress_callback,
+            cancel_event=cancel_event,
+            task_id=task_id,
         )
 
     msg_lower = message.strip().lower()
@@ -4801,11 +4886,13 @@ def append_chat_task_event(task_id: str, event_type: str, message: str):
         task = chat_tasks.get(task_id)
         if not task:
             return
-        events = task["events"]
+        events = task.get("events")
+        if events is None:
+            events = task["events"] = []
         if events and events[-1]["type"] == event_type and events[-1]["message"] == clean:
             return
-        seq = task["next_seq"]
-        task["next_seq"] += 1
+        seq = task.get("next_seq", len(events))
+        task["next_seq"] = seq + 1
         events.append({
             "seq": seq,
             "type": event_type,
@@ -4821,21 +4908,125 @@ def finish_chat_task(task_id: str, status: str, result: dict):
         task = chat_tasks.get(task_id)
         if not task:
             return
+        if task.get("status") == "cancelled" and status != "cancelled":
+            return
         task["status"] = status
         task["result"] = result
         task["completed_at"] = datetime.datetime.now().timestamp()
 
 
+def cancel_chat_task(task_id: str) -> dict:
+    with chat_tasks_lock:
+        task = chat_tasks.get(task_id)
+        if not task:
+            return {"success": False, "error": "not_found", "detail": "Task not found"}
+
+        status = task.get("status")
+        if status in ("success", "error", "cancelled"):
+            return {
+                "success": True,
+                "status": status,
+                "task_id": task_id,
+                "message": f"Task already finished with status '{status}'"
+            }
+
+        task["status"] = "cancelled"
+        task["completed_at"] = datetime.datetime.now().timestamp()
+        if not task.get("result"):
+            task["result"] = {
+                "status": "cancelled",
+                "reply": "⏹️ **Prompt cancelled by user**",
+                "conversation_id": task.get("conversation_id")
+            }
+
+    # Signal cancellation event
+    cancel_event = chat_task_cancel_events.get(task_id)
+    if cancel_event:
+        cancel_event.set()
+
+    # Terminate active process if running
+    with chat_task_active_procs_lock:
+        proc_tuple = chat_task_active_procs.get(task_id)
+        if proc_tuple:
+            proc, pgid = proc_tuple
+            try:
+                kill_process_tree(proc, pgid)
+            except Exception as e:
+                logging.warning(f"Error terminating process for task {task_id}: {e}")
+
+    # Record cancellation event
+    append_chat_task_event(task_id, "info", "⏹️ Prompt execution cancelled by user.")
+
+    # Clear DB locks if conversation was active
+    convo_id = task.get("conversation_id")
+    if convo_id:
+        try:
+            kill_processes_locking_db(convo_id)
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "status": "cancelled",
+        "task_id": task_id
+    }
+
+
 def run_chat_task(task_id: str, request_data: dict):
+    token = current_task_id_var.set(task_id)
+    cancel_event = threading.Event()
+    chat_task_cancel_events[task_id] = cancel_event
     try:
+        if cancel_event.is_set():
+            finish_chat_task(task_id, "cancelled", {
+                "status": "cancelled",
+                "reply": "⏹️ **Prompt cancelled by user**",
+                "conversation_id": request_data.get("conversation_id")
+            })
+            return
+
         chat_request = ChatRequest(**request_data)
         append_chat_task_event(task_id, "progress", "Thinking...")
         result = build_chat_response(
             chat_request,
-            progress_callback=lambda event_type, message: append_chat_task_event(task_id, event_type, message)
+            progress_callback=lambda event_type, message: append_chat_task_event(task_id, event_type, message),
+            cancel_event=cancel_event,
+            task_id=task_id,
         )
         finish_chat_task(task_id, "success", result)
+    except AgentCommandCancelled as e:
+        logging.info(f"Chat task {task_id} was cancelled: {e}")
+        append_chat_task_event(task_id, "info", "⏹️ Prompt cancelled.")
+        convo_id = request_data.get("conversation_id")
+        user_msg = request_data.get("message", "")
+        if convo_id:
+            actual_cid = convo_id_mapping.get(convo_id, convo_id)
+            if actual_cid not in in_memory_chats:
+                in_memory_chats[actual_cid] = []
+            in_memory_chats[actual_cid].append({"role": "user", "content": user_msg})
+            in_memory_chats[actual_cid].append({"role": "assistant", "content": "⏹️ **Prompt cancelled by user**"})
+            project_id = clean_project_name(request_data.get("workspace") or "agy")
+            persist_canonical_conversation(
+                actual_cid,
+                project_id,
+                request_data.get("model", ""),
+                request_data.get("provider", "agy"),
+                in_memory_chats[actual_cid]
+            )
+        finish_chat_task(task_id, "cancelled", {
+            "status": "cancelled",
+            "reply": "⏹️ **Prompt cancelled by user**",
+            "conversation_id": convo_id
+        })
     except Exception as e:
+        if cancel_event.is_set():
+            logging.info(f"Chat task {task_id} caught exception after cancel: {e}")
+            finish_chat_task(task_id, "cancelled", {
+                "status": "cancelled",
+                "reply": "⏹️ **Prompt cancelled by user**",
+                "conversation_id": request_data.get("conversation_id")
+            })
+            return
         logging.error(f"Chat task {task_id} failed: {e}")
         append_chat_task_event(task_id, "error", f"Task failed: {e}")
         finish_chat_task(task_id, "error", {
@@ -4843,6 +5034,11 @@ def run_chat_task(task_id: str, request_data: dict):
             "reply": f"❌ **Execution Error**: {str(e)}",
             "conversation_id": request_data.get("conversation_id")
         })
+    finally:
+        chat_task_cancel_events.pop(task_id, None)
+        with chat_task_active_procs_lock:
+            chat_task_active_procs.pop(task_id, None)
+        current_task_id_var.reset(token)
 
 
 @app.post("/api/chat")
@@ -4929,6 +5125,46 @@ async def get_chat_task_endpoint(task_id: str, request: Request, after: int = -1
             "events": events,
             "result": task["result"]
         })
+
+
+@app.post("/api/chat-tasks/{task_id}/cancel")
+async def cancel_chat_task_endpoint(task_id: str, request: Request):
+    verify_authorization(request)
+    result = cancel_chat_task(task_id)
+    if not result.get("success") and result.get("error") == "not_found":
+        raise HTTPException(status_code=404, detail="Task not found")
+    return JSONResponse(content=result)
+
+
+@app.post("/api/chat-tasks/cancel")
+async def cancel_chat_task_by_body_endpoint(request: Request, body: Optional[CancelTaskRequest] = None):
+    verify_authorization(request)
+    tid = body.task_id if body else None
+    cid = body.conversation_id if body else None
+
+    if tid:
+        result = cancel_chat_task(tid)
+        if not result.get("success") and result.get("error") == "not_found":
+            raise HTTPException(status_code=404, detail="Task not found")
+        return JSONResponse(content=result)
+
+    if cid:
+        with chat_tasks_lock:
+            running_tids = [
+                t_id for t_id, t in chat_tasks.items()
+                if t.get("status") == "running" and t.get("conversation_id") == cid
+            ]
+        if not running_tids:
+            return JSONResponse(content={"status": "not_running", "message": "No active running task for conversation"})
+
+        cancelled_tasks = [cancel_chat_task(t_id) for t_id in running_tids]
+        return JSONResponse(content={"status": "cancelled", "cancelled_tasks": cancelled_tasks})
+
+    with chat_tasks_lock:
+        running_tids = [t_id for t_id, t in chat_tasks.items() if t.get("status") == "running"]
+    cancelled_tasks = [cancel_chat_task(t_id) for t_id in running_tids]
+    return JSONResponse(content={"status": "cancelled", "cancelled_tasks": cancelled_tasks})
+
 
 @app.post("/api/upload-media")
 async def upload_media_endpoint(conversation_id: str, filename: str, request: Request):
