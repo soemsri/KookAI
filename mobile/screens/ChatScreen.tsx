@@ -366,6 +366,7 @@ const PREFERENCE_KEYS = {
 
 const slashCommands: PromptSuggestion[] = [
   { name: "/watch", desc: "Watch & analyze video (URL or local path)", type: "Command" },
+  { name: "/fable5", desc: "Fable-5 high-reliability 8-step framework", type: "Command" },
   { name: "/goal", desc: "Initiate goal mode checklist", type: "Command" },
   { name: "/browser", desc: "Launch browser automation tool", type: "Command" },
   { name: "/grill-me", desc: "Launch requirements audit survey", type: "Command" },

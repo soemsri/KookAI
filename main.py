@@ -4548,6 +4548,47 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
                     f.write(f"\n## Design Alignment & Workspace Preferences ({datetime.date.today().isoformat()})\n\n{reply}\n")
             except Exception as e:
                 logging.error(f"Failed to save markdown alignment log: {e}")
+    elif msg_lower.startswith("/fable5") or msg_lower.startswith("/fable-5"):
+        prefix_len = 8 if msg_lower.startswith("/fable-5") else 7
+        fable_text = message[prefix_len:].strip()
+        if not fable_text:
+            reply = (
+                "🛡️ **Fable-5 Framework & Operational Specification**\n\n"
+                "Please specify a task or objective after `/fable5`.\n\n"
+                "**Example:**\n"
+                "`/fable5 fix authentication token race condition in session manager`\n\n"
+                "**Core Capabilities:**\n"
+                "1. **Complex Debugging**: สืบหา Root Cause โดยสร้าง One-Command Reproduce (OCR) ก่อนแตะโค้ด\n"
+                "2. **System Architecture & Design**: แยก Component ตาม Verification Boundaries และทำ Spike Load-Bearing Unknowns\n"
+                "3. **Precision Refactoring**: ป้องกันผลกระทบวงกว้างด้วยระบบ Sibling Sweep\n"
+                "4. **Deep Research**: ใช้หลักการ Refutation Check แยกแยะข้อเท็จจริงออกจากความเห็น\n"
+                "5. **Multi-Agent Orchestration**: รับบทบาท Lead Architect (Sol) คุมทีม Worker (Terra, Luna, Codex)\n\n"
+                "**The 8-Step Loop:**\n"
+                "`Read Fully First` ➔ `4-Box Framing` ➔ `Unknown First` ➔ `Fan-Out / Serial` ➔ `Reality Check` ➔ `Self-Refutation` ➔ `Plan-Change Test` ➔ `Anti-Stall Guard`"
+            )
+            resolved_cid = conversation_id
+        else:
+            wrapped_message = (
+                "[SYSTEM: FABLE-5 8-STEP FRAMEWORK ACTIVATED]\n"
+                "You are operating strictly under the Fable-5 High-Reliability Engineering Framework.\n"
+                "Core Creed: 'ย่องานตามขอบเขตที่ตรวจสอบได้, พิสูจน์กับโลกความจริง (ไม่ใช่เชื่อความคิดตัวเอง), และเลือกก้าวถัดไปด้วยสิ่งที่จะเปลี่ยนแผนงาน'\n\n"
+                "MANDATORY INVARIANTS & INSTRUCTIONS:\n"
+                "1. Always output the 4-Box Framing upfront:\n"
+                "   ### 🎯 Fable-5 Framing (4-Box)\n"
+                "   - Goal: [single measurable sentence]\n"
+                "   - Context: [environment & constraints]\n"
+                "   - Scope: [IN: what will be touched] | [OUT: what will not be touched]\n"
+                "   - Done Check: [empirical verification / command]\n"
+                "2. Read Fully First: Inspect real code and configuration files before making assumptions.\n"
+                "3. Unknown First: Attack highest-risk or load-bearing unknowns first.\n"
+                "4. One-Command Reproduce (OCR): For bug fixes, establish a single reproduction command before editing code.\n"
+                "5. Sibling Sweep: For refactoring, audit all callers and dependencies.\n"
+                "6. Reality Check (No Diff-Belief): Verify only via real terminal execution, never assume correctness from diffs alone.\n"
+                "7. Self-Refutation: Ask 'What could prove this wrong?' and verify edge cases.\n"
+                "8. Anti-Stall Guard: Never end with empty commentary; execute the required tools immediately.\n\n"
+                f"User Task:\n{fable_text}"
+            )
+            reply, resolved_cid = execute_selected(wrapped_message)
     elif msg_lower.startswith("/goal"):
         goal_text = message[5:].strip()
         if not goal_text:
@@ -4614,6 +4655,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None):
     elif msg_lower.startswith("/help"):
         reply = (
             "💡 **Available Commands & Help Guide**\n\n"
+            "- `/fable5 <task>`: Run task under Fable-5 high-reliability 8-step framework.\n"
             "- `/goal <task>`: Start an extra-thorough, goal-oriented workflow on the workspace.\n"
             "- `/browser <task>`: Command browser subagent for web tasks.\n"
             "- `/grill-me`: Start an interactive design/requirement alignment session and save preferences.\n"
@@ -5420,6 +5462,8 @@ def _local_media_url(destination: str) -> Optional[str]:
 
     if value.startswith("file://"):
         value = value[7:]
+        if os.name == "nt" and len(value) >= 3 and value.startswith("/") and value[2] == ":":
+            value = value[1:]
 
     # Upgrade media links saved before the extension-preserving endpoint was
     # introduced. Keeping the filename in the URL path lets Android players
@@ -5433,7 +5477,7 @@ def _local_media_url(destination: str) -> Optional[str]:
         filename = urllib.parse.quote(os.path.basename(resolved), safe="")
         return f"/api/media/{filename}?{parsed.query}"
 
-    if not value.startswith("/") or value.startswith("//"):
+    if not (os.path.isabs(value) or value.startswith("/")) or value.startswith("//"):
         return None
 
     resolved = is_allowed_media_path(value)
