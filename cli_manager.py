@@ -239,7 +239,7 @@ def _known_cli_candidates(definition: CliDefinition) -> list[str]:
     if definition.cli_id == "deepseek":
         candidates.extend(
             os.path.join(home, ".deepseek", "bin", executable_name)
-            for executable_name in _candidate_executable_names("deepcode") + _candidate_executable_names("deepseek")
+            for executable_name in list(_candidate_executable_names("deepcode")) + list(_candidate_executable_names("deepseek"))
         )
     return candidates
 

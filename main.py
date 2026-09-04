@@ -1132,6 +1132,7 @@ def get_workspace_alignment_context(cwd_path: str) -> str:
     pref_file = os.path.join(cwd_path, "alignment_preferences.json")
     pref_md_file = os.path.join(cwd_path, "alignment_preferences.md")
     agents_file = os.path.join(cwd_path, ".agents", "AGENTS.md")
+    root_agents_file = os.path.join(cwd_path, "AGENTS.md")
     
     summary_text = ""
     if os.path.exists(pref_file):
@@ -1162,6 +1163,13 @@ def get_workspace_alignment_context(cwd_path: str) -> str:
     if not summary_text and os.path.exists(agents_file):
         try:
             with open(agents_file, "r", encoding="utf-8") as f:
+                summary_text = f.read().strip()
+        except Exception:
+            pass
+
+    if not summary_text and os.path.exists(root_agents_file):
+        try:
+            with open(root_agents_file, "r", encoding="utf-8") as f:
                 summary_text = f.read().strip()
         except Exception:
             pass
