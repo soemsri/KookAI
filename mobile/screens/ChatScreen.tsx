@@ -2799,10 +2799,6 @@ allowQueue: false,
   };
 
   const handleSend = async () => {
-    if (loading) {
-      handleCancelPrompt();
-      return;
-    }
     sendChatMessage(inputText, messagesRef.current, true);
   };
 
@@ -3735,17 +3731,15 @@ allowQueue: false,
                     <TouchableOpacity
                       style={[
                         styles.sendBtnRound,
-                        loading
-                          ? { backgroundColor: '#ea4335' }
-                          : (isPromptDisabled && styles.sendBtnDisabled),
-                        !loading && { backgroundColor: theme.accent }
+                        { backgroundColor: theme.accent },
+                        isPromptDisabled && styles.sendBtnDisabled
                       ]}
                       onPress={handleSend}
-                      disabled={isPromptDisabled && !loading}
+                      disabled={isPromptDisabled}
+                      accessibilityRole="button"
+                      accessibilityLabel="Send message"
                     >
-                      <Text style={[styles.sendIcon, loading && { fontSize: 13, color: '#ffffff' }]}>
-                        {loading ? '■' : '➤'}
-                      </Text>
+                      <Text style={styles.sendIcon}>➤</Text>
                     </TouchableOpacity>
                   </View>
                 </View>

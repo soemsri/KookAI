@@ -889,19 +889,10 @@ body {
   transform: scale(0.95);
 }
 
-.send-btn.stop-btn {
-  background-color: var(--status-red, #ea4335) !important;
-  color: #ffffff !important;
-}
-
-.send-btn.stop-btn:hover {
-  background-color: #d93025 !important;
-}
-
-.send-btn svg.icon-stop {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
 }
 
 .typing-cancel-btn {

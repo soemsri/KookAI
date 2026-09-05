@@ -1022,19 +1022,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function setPromptRunningState(running, taskId = null) {
     isPromptRunning = running;
     currentRunningTaskId = running ? taskId : null;
-    const iconSend = document.getElementById("iconSend");
-    const iconStop = document.getElementById("iconStop");
-    if (running) {
-      sendBtn.classList.add("stop-btn");
-      sendBtn.setAttribute("title", "Stop prompt (Cancel)");
-      if (iconSend) iconSend.classList.add("hidden");
-      if (iconStop) iconStop.classList.remove("hidden");
-    } else {
-      sendBtn.classList.remove("stop-btn");
-      sendBtn.setAttribute("title", "Send message");
-      if (iconSend) iconSend.classList.remove("hidden");
-      if (iconStop) iconStop.classList.add("hidden");
-    }
+    sendBtn.disabled = running;
   }
 
   async function cancelActivePrompt() {
@@ -1161,10 +1149,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function sendMessage() {
-    if (isPromptRunning) {
-      cancelActivePrompt();
-      return;
-    }
+    if (isPromptRunning) return;
     const message = promptTextarea.value.trim();
     if (!message) return;
 
@@ -1176,13 +1161,7 @@ document.addEventListener("DOMContentLoaded", () => {
     sendDirectMessage(message);
   }
 
-  sendBtn.addEventListener("click", () => {
-    if (isPromptRunning) {
-      cancelActivePrompt();
-      return;
-    }
-    sendMessage();
-  });
+  sendBtn.addEventListener("click", sendMessage);
 
   // --- Web Speech API microphone handler ---
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
