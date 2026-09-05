@@ -27,6 +27,8 @@ from zai_backend import is_zai_model
 
 
 CODEX_MODEL_MAP = {
+    "6 Astra": "gpt-6-astra",
+    "GPT-6 Astra": "gpt-6-astra",
     "5.6 Sol": "gpt-5.6-sol",
     "5.6 Terra": "gpt-5.6-terra",
     "5.6 Luna": "gpt-5.6-luna",
@@ -51,8 +53,10 @@ CODEX_SPEED_MAP = {
     "fast": "priority",
 }
 
-# Fast mode currently supports the GPT-5.6 family, GPT-5.5, and GPT-5.4.
+# Fast mode currently supports the GPT-6 family, GPT-5.6 family, GPT-5.5, and GPT-5.4.
 CODEX_FAST_MODELS = {
+    "6 Astra",
+    "GPT-6 Astra",
     "5.6 Sol",
     "5.6 Terra",
     "5.6 Luna",
@@ -61,13 +65,16 @@ CODEX_FAST_MODELS = {
 }
 
 CODEX_MODEL_EFFORTS = {
-    "5.6 Sol": {"light", "medium", "high", "extra high", "ultra"},
-    "5.6 Terra": {"light", "medium", "high", "extra high", "ultra"},
-    "5.6 Luna": {"light", "medium", "high", "extra high"},
-    "5.5": {"light", "medium", "high", "extra high"},
-    "5.4": {"light", "medium", "high", "extra high"},
-    "5.4 Mini": {"light", "medium", "high", "extra high"},
+    "6 Astra": {"low", "medium", "high", "xhigh", "ultra"},
+    "GPT-6 Astra": {"low", "medium", "high", "xhigh", "ultra"},
+    "5.6 Sol": {"low", "medium", "high", "xhigh", "ultra"},
+    "5.6 Terra": {"low", "medium", "high", "xhigh", "ultra"},
+    "5.6 Luna": {"low", "medium", "high", "xhigh"},
+    "5.5": {"low", "medium", "high", "xhigh"},
+    "5.4": {"low", "medium", "high", "xhigh"},
+    "5.4 Mini": {"low", "medium", "high", "xhigh"},
 }
+
 
 CODEX_CONVERSATION_PREFIX = "codex_"
 
@@ -215,7 +222,11 @@ def normalize_codex_effort(
             model_name,
         )
         supported = CODEX_MODEL_EFFORTS.get(display_model)
-        if not supported or cli_value not in supported:
+        supported_cli = {
+            CODEX_EFFORT_MAP.get(str(item).lower(), str(item).lower())
+            for item in (supported or set())
+        }
+        if not supported or cli_value not in supported_cli:
             raise ValueError(
                 f"Effort {canonical_display} is not supported by Codex model {display_model}"
             )

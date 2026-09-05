@@ -249,6 +249,24 @@ class ModelCatalogApiTests(unittest.TestCase):
             main.map_model_name("Gemini 3.8 Flash (Low)"),
             "Gemini 3.8 Flash (Low)",
         )
+        self.assertEqual(
+            main.map_model_name("6 Astra"),
+            "gpt-6-astra",
+        )
+
+    def test_codex_6_astra_is_available(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+        model = resolve_catalog_model(catalog, "6 Astra")
+        self.assertIsNotNone(model)
+        self.assertEqual(model["provider"], "codex")
+        self.assertEqual(model["usage_bucket"], "gpt")
+        self.assertEqual(model["cli_model"], "gpt-6-astra")
+        self.assertIn("Ultra", model["capabilities"]["effort"])
+        self.assertIn("Fast", model["capabilities"]["speed"])
+
+        cli_lookup = resolve_catalog_model(catalog, "gpt-6-astra")
+        self.assertIsNotNone(cli_lookup)
+        self.assertEqual(cli_lookup["id"], "6 Astra")
 
     def test_runtime_catalog_registers_dynamic_codex_model(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)

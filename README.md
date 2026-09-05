@@ -12,7 +12,7 @@
 
 - 🤖 **Multi-Provider AI CLI:** Integrated support for leading AI models and CLIs:
   - **Antigravity (`agy`):** Gemini 3.8 Flash, Gemini 3.7 Flash/Pro, Gemini 3.6 Flash, Claude, GPT-OSS, DeepSeek Pro 0813
-  - **Codex (`codex`):** OpenAI 5.6 Sol / Terra / Luna
+  - **Codex (`codex`):** OpenAI 6 Astra / 5.6 Sol / Terra / Luna
   - **Claude Code (`claude`):** Anthropic Claude 3.7 / 3.5
   - **Kimi Code (`kimi`):** Moonshot Kimi K3
   - **xAI Grok (`grok`):** Grok 4.6 / 4.5 / 4.20 / Grok Build
@@ -103,7 +103,7 @@ Sign up for free API keys at the [Groq Console](https://console.groq.com/keys) a
 | Provider | CLI Command | Supported Core Models | Special Controls |
 | :--- | :--- | :--- | :--- |
 | **Antigravity** | `agy` | Gemini 3.8/3.7 Flash/Pro, Claude | Sandbox / Real |
-| **Codex** | `codex` | 5.6 Sol, 5.6 Terra, 5.4 Mini | Effort (Low-Ultra), Speed (Fast/Std) |
+| **Codex** | `codex` | 6 Astra, 5.6 Sol, 5.6 Terra, 5.4 Mini | Effort (Low-Ultra), Speed (Fast/Std) |
 | **Claude Code** | `claude` | Claude 3.7 Sonnet, Opus | Effort (Low-Max), Extended Thinking |
 | **Kimi Code** | `kimi` | Kimi K3 | Stream-JSON, Resumable Session |
 | **xAI Grok** | `grok` | Grok 4.6, Grok 4.5, Grok Build 0.1 | Reasoning Effort (Low-High) |

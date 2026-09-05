@@ -190,6 +190,7 @@ const FALLBACK_MODELS: ModelOption[] = [
   { value: "Opus 4.6", desc: "Legacy Opus model", provider: "claude", supportsClaudeEffort: true },
   { value: "Opus 3", desc: "Legacy Opus model", provider: "claude" },
   { value: "Sonnet 4.6", desc: "Previous generation Sonnet", provider: "claude", supportsClaudeEffort: true },
+  { value: "6 Astra", desc: "Our most capable model for complex, demanding work", provider: "codex", supportsUltra: true, supportsFast: true },
   { value: "5.6 Sol", desc: "Codex for complex, open-ended work", provider: "codex", supportsUltra: true, supportsFast: true },
   { value: "5.6 Terra", desc: "Codex everyday all-rounder", provider: "codex", supportsUltra: true, supportsFast: true },
   { value: "5.6 Luna", desc: "Codex for clear, repeatable work", provider: "codex", supportsFast: true },

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-08-22.1",
+  "catalog_version": "2026-09-05.1",
   "default_model": "Gemini 3.7 Flash (High)",
   "models": [
     {
@@ -475,6 +475,17 @@
       "usage_bucket": "claude",
       "enabled": true,
       "capabilities": {"effort": ["Low", "Medium", "High", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+    },
+    {
+      "id": "6 Astra",
+      "label": "6 Astra",
+      "description": "Our most capable model for complex, demanding work",
+      "provider": "codex",
+      "cli_model": "gpt-6-astra",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
     },
     {
       "id": "5.6 Sol",

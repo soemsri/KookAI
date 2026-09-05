@@ -97,6 +97,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let recognition = null;
 
   let CODEX_MODELS = {
+    "6 Astra": { ultra: true, fast: true },
+    "GPT-6 Astra": { ultra: true, fast: true },
     "5.6 Sol": { ultra: true, fast: true },
     "5.6 Terra": { ultra: true, fast: true },
     "5.6 Luna": { ultra: false, fast: true },

@@ -10,7 +10,10 @@ import main
 
 class CodexBackendTests(unittest.TestCase):
     def test_model_and_provider_mapping(self):
+        self.assertEqual(codex_backend.codex_model_slug("6 Astra"), "gpt-6-astra")
+        self.assertEqual(codex_backend.codex_model_slug("GPT-6 Astra"), "gpt-6-astra")
         self.assertEqual(codex_backend.codex_model_slug("5.6 Sol"), "gpt-5.6-sol")
+        self.assertEqual(codex_backend.resolve_provider(None, "6 Astra"), "codex")
         self.assertEqual(codex_backend.resolve_provider(None, "5.4"), "codex")
         self.assertEqual(
             codex_backend.resolve_provider(None, "Gemini 3.5 Flash (High)"),
@@ -22,6 +25,26 @@ class CodexBackendTests(unittest.TestCase):
             codex_backend.resolve_provider("codex", "Claude Sonnet 4.6 (Thinking)")
 
     def test_capability_validation(self):
+        self.assertEqual(
+            codex_backend.normalize_codex_effort("Light", "6 Astra"),
+            ("Light", "low"),
+        )
+        self.assertEqual(
+            codex_backend.normalize_codex_effort("Ultra", "6 Astra"),
+            ("Ultra", "ultra"),
+        )
+        self.assertEqual(
+            codex_backend.normalize_codex_speed("Fast", "6 Astra"),
+            ("Fast", "priority"),
+        )
+        self.assertEqual(
+            codex_backend.normalize_codex_effort("Light", "5.6 Sol"),
+            ("Light", "low"),
+        )
+        self.assertEqual(
+            codex_backend.normalize_codex_effort("Extra High", "5.6 Sol"),
+            ("Extra High", "xhigh"),
+        )
         self.assertEqual(
             codex_backend.normalize_codex_effort("Ultra", "5.6 Sol"),
             ("Ultra", "ultra"),
