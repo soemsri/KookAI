@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-09-05.1",
-  "default_model": "Gemini 3.7 Flash (High)",
+  "catalog_version": "2026-09-08.1",
+  "default_model": "Gemini 3.8 Flash (High)",
   "models": [
     {
       "id": "Gemini 3.8 Flash (High)",

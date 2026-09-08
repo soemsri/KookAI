@@ -132,7 +132,7 @@ async function runSessionModelPersistenceTests() {
   console.log("Testing Web Client localStorage preferences logic...");
   const webLocalStorage: Record<string, string> = {};
   let webWorkspace = "agy";
-  let webModel = "Gemini 3.7 Flash (High)";
+  let webModel = "Gemini 3.8 Flash (High)";
 
   function webSaveAppPreferences() {
     webLocalStorage["kookai_workspace"] = webWorkspace;
@@ -154,7 +154,7 @@ async function runSessionModelPersistenceTests() {
 
   // Reset module variables to simulate page reload
   webWorkspace = "agy";
-  webModel = "Gemini 3.7 Flash (High)";
+  webModel = "Gemini 3.8 Flash (High)";
   webLoadAppPreferences();
 
   if (webWorkspace !== "KookAI") {

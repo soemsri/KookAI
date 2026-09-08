@@ -2235,7 +2235,7 @@ def map_model_name(model_ui_name: str) -> str:
     catalog = load_runtime_model_catalog()
     model = resolve_catalog_model(catalog, model_ui_name)
     if not model:
-        return model_ui_name or "Gemini 3.7 Flash (High)"
+        return model_ui_name or "Gemini 3.8 Flash (High)"
     cli_m = model.get("cli_model", "")
     return cli_m or model_ui_name
 
@@ -3724,7 +3724,7 @@ def run_zai_cli(
 PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "zai", "xai", "muse", "deepseek"]
 
 DEFAULT_PROVIDER_MODELS = {
-    "agy": "Gemini 3.7 Flash (High)",
+    "agy": "Gemini 3.8 Flash (High)",
     "claude": "Claude Sonnet 4.6 (Thinking)",
     "codex": "5.6 Sol",
     "kimi": "Kimi K3",
@@ -3954,7 +3954,7 @@ def run_selected_cli(
                 continue
 
             fallback_model = DEFAULT_PROVIDER_MODELS.get(
-                fallback_prov, "Gemini 3.6 Flash (High)"
+                fallback_prov, "Gemini 3.8 Flash (High)"
             )
 
             if progress_callback:

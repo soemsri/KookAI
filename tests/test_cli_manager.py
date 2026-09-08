@@ -346,6 +346,59 @@ class CliApiTests(unittest.TestCase):
         self.assertIn("Hello from Claude fallback", reply)
         self.assertEqual(cid, "claude-cid-1")
 
+    def test_run_selected_cli_failover_to_agy_uses_gemini_3_8_flash_high(self):
+        progress_events = []
+        invocations = []
+
+        def mock_progress(evt_type, msg):
+            progress_events.append((evt_type, msg))
+
+        def mock_invoke(
+            prov,
+            prov_model,
+            message,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            speed,
+            thinking,
+            image_paths,
+            progress_callback,
+        ):
+            invocations.append((prov, prov_model))
+            if prov == "claude":
+                return (
+                    "⚠️ **claude CLI Error (Exit Code 1)**\n\n```\nError: provider rate limited\n```",
+                    conversation_id,
+                )
+            elif prov == "agy":
+                return "Hello from agy fallback", "agy-cid-1"
+            return "❌ **Execution Error**: Unsupported", conversation_id
+
+        with (
+            mock.patch.object(main, "_invoke_provider_backend", side_effect=mock_invoke),
+            mock.patch.object(
+                main, "is_provider_available", side_effect=lambda p: p in {"claude", "agy"}
+            ),
+        ):
+            reply, cid = main.run_selected_cli(
+                message="Test failover to agy",
+                model_ui_name="Claude Sonnet 4.6 (Thinking)",
+                conversation_id="conv-789",
+                target="Sandbox",
+                workspace="agy",
+                provider="claude",
+                progress_callback=mock_progress,
+            )
+
+        self.assertIn("Automatic Failover", reply)
+        self.assertIn("failed over to **agy** (Gemini 3.8 Flash (High))", reply)
+        self.assertIn("Hello from agy fallback", reply)
+        self.assertEqual(cid, "agy-cid-1")
+        self.assertEqual(len(invocations), 2)
+        self.assertEqual(invocations[1], ("agy", "Gemini 3.8 Flash (High)"))
+
     def test_run_agy_cli_recovers_from_timeout_response(self):
         calls = []
 
