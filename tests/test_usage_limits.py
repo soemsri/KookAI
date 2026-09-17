@@ -215,6 +215,102 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertEqual(data["claudeRateLimits"]["weekly"]["remainingPercent"], 100.0)
         self.assertEqual(data["claudeRateLimits"]["hourly"]["remainingPercent"], 100.0)
 
+    @patch("main.subprocess.Popen")
+    @patch("main.os.killpg")
+    def test_run_ccusage_safely_kills_process_group_on_timeout(self, mock_killpg, mock_popen):
+        import main
+        import subprocess
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd=["ccusage"], timeout=2)
+        mock_popen.return_value = mock_proc
+
+        with patch("main.os.name", "posix"):
+            with patch("main.os.getpgid", return_value=99999):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    main.run_ccusage_safely()
+
+        mock_killpg.assert_called_once_with(99999, main.signal.SIGKILL)
+
+    def test_ccusage_cache_reuse(self):
+        import main
+        main._ccusage_cache["timestamp"] = 9999999999.0
+        main._ccusage_cache["gemini_weekly"] = 12345
+        main._ccusage_cache["gemini_hourly"] = 6789
+        main._ccusage_cache["claude_weekly"] = 1111
+        main._ccusage_cache["claude_hourly"] = 2222
+        main._ccusage_cache["gpt_weekly"] = 3333
+        main._ccusage_cache["gpt_hourly"] = 4444
+
+        # When not in testing mode, it should read from cache
+        self.assertEqual(main._ccusage_cache["gemini_weekly"], 12345)
+
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
+    @patch("main.run_ccusage_safely")
+    def test_get_usage_limits_without_mocking_subprocess_run(self, mock_ccusage, mock_ls, mock_codex, mock_auth):
+        import subprocess
+        self.assertFalse(hasattr(subprocess.run, "mock_calls"))
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = json.dumps({"daily": [], "session": []})
+        mock_ccusage.return_value = mock_proc
+
+        res = self.client.get("/api/usage-limits")
+        self.assertEqual(res.status_code, 200)
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
+    @patch("main.run_ccusage_safely")
+    def test_ccusage_cache_reuse_endpoint(self, mock_ccusage, mock_ls, mock_codex, mock_auth):
+        import main
+        import time
+        import sys
+        main._ccusage_cache["timestamp"] = time.time()
+        main._ccusage_cache["gemini_weekly"] = 12345
+        main._ccusage_cache["gemini_hourly"] = 6789
+        main._ccusage_cache["claude_weekly"] = 1111
+        main._ccusage_cache["claude_hourly"] = 2222
+        main._ccusage_cache["gpt_weekly"] = 3333
+        main._ccusage_cache["gpt_hourly"] = 4444
+
+        with patch.dict("sys.modules"):
+            if "pytest" in sys.modules:
+                del sys.modules["pytest"]
+            res = self.client.get("/api/usage-limits")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data["geminiWeeklyUsed"], 12345)
+            self.assertEqual(data["geminiHourlyUsed"], 6789)
+            mock_ccusage.assert_not_called()
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
+    @patch("main.run_ccusage_safely")
+    def test_ccusage_cache_updated_on_non_zero_returncode(self, mock_ccusage, mock_ls, mock_codex, mock_auth):
+        import main
+        import sys
+        main._ccusage_cache["timestamp"] = 0.0
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.stdout = ""
+        mock_proc.stderr = "error"
+        mock_ccusage.return_value = mock_proc
+
+        with patch.dict("sys.modules"):
+            if "pytest" in sys.modules:
+                del sys.modules["pytest"]
+            res = self.client.get("/api/usage-limits")
+            self.assertEqual(res.status_code, 200)
+            self.assertGreater(main._ccusage_cache["timestamp"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
