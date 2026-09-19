@@ -281,7 +281,7 @@ const getCodexSpeeds = (modelName: string) => (
     : codexSpeedList.filter((item) => item.value !== "Fast")
 );
 
-const getUsageBucketForModel = (modelName: string): {
+const getUsageBucketForModel = (modelName: string, planName?: string): {
   key: UsageBucketKey;
   title: string;
   note?: string;
@@ -325,7 +325,8 @@ const getUsageBucketForModel = (modelName: string): {
 
   const lowered = getModelLabel(modelName).toLowerCase();
   if (catalogBucket === 'gemini' || lowered.includes('gemini')) {
-    return { key: 'gemini', title: 'Gemini Models (Google AI Ultra)' };
+    const plan = planName || 'Google AI Pro';
+    return { key: 'gemini', title: `Gemini Models (${plan})` };
   }
   if (catalogBucket === 'gpt' || lowered.includes('gpt') || lowered.includes('kimi')) {
     return { key: 'gpt', title: 'GPT Models (KookAI)' };
@@ -377,6 +378,7 @@ const slashCommands: PromptSuggestion[] = [
 
 const USAGE_LIMIT_TIMEOUT_MS = 8000;
 const DEFAULT_USAGE_LIMIT_DATA = {
+  antigravityPlan: "Google AI Pro",
   geminiWeeklyPercent: 0,
   geminiHourlyPercent: 0,
   claudeWeeklyPercent: 0,
@@ -4532,7 +4534,7 @@ allowQueue: false,
               <ScrollView style={styles.popupScroll}>
                 <View style={styles.usageSection}>
                   <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>
-                    {getUsageBucketForModel(selectedModel).title}
+                    {getUsageBucketForModel(selectedModel, usageLimitData?.antigravityPlan || usageLimitData?.geminiRateLimits?.planName).title}
                   </Text>
                   {getUsageBucketForModel(selectedModel).note ? (
                     <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textMuted }]}>

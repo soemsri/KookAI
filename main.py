@@ -5499,6 +5499,7 @@ async def get_usage_limits(request: Request):
         "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop.",
         "geminiUsageNote": "Gemini models use your Google AI / Antigravity workspace quota. Token usage reflects active workspace sessions and recent prompt activity.",
         "xaiUsageNote": "Grok usage and billing are managed by your xAI account. Grok Build does not currently expose an account-wide quota percentage here.",
+        "antigravityPlan": "Google AI Pro",
     }
 
     # Fetch provider rate limits and Language Server status concurrently
@@ -5535,7 +5536,14 @@ async def get_usage_limits(request: Request):
         quota_summary = antigravity_status.get("quotaSummary") if isinstance(antigravity_status.get("quotaSummary"), dict) else None
 
         user_tier = user_status.get("userTier", {}) if isinstance(user_status, dict) else {}
-        plan_name = user_tier.get("name") or "Google AI Ultra"
+        tier_name = user_tier.get("name")
+        if not tier_name and user_tier.get("id"):
+            tier_id = str(user_tier.get("id")).lower()
+            if "pro" in tier_id:
+                tier_name = "Google AI Pro"
+            elif "ultra" in tier_id:
+                tier_name = "Google AI Ultra"
+        plan_name = tier_name or result_data.get("antigravityPlan") or "Google AI Pro"
         result_data["antigravityPlan"] = plan_name
 
         gemini_weekly_bucket = None

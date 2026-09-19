@@ -2540,10 +2540,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const catalogBucket = getCatalogModel(currentModel)?.usage_bucket;
     const lowerModel = getModelLabel(currentModel).toLowerCase();
     if (catalogBucket === "gemini" || lowerModel.includes("gemini")) {
+      const plan = usageData?.antigravityPlan || usageData?.geminiRateLimits?.planName || "Google AI Pro";
       return {
         key: "gemini",
         title: "Gemini Models",
-        badge: "Your Plan: Google AI Ultra",
+        badge: `Your Plan: ${plan}`,
         note: ""
       };
     }
@@ -2699,6 +2700,10 @@ document.addEventListener("DOMContentLoaded", () => {
     secondarySection?.classList.toggle("hidden", showGemini);
 
     if (showGemini) {
+      const geminiBadge = document.getElementById("geminiUsageBadge") || geminiSection?.querySelector(".usage-plan-badge");
+      if (geminiBadge) {
+        geminiBadge.textContent = activeBucket.badge;
+      }
       updateSection("geminiWeekly", "weekly");
       updateSection("geminiHourly", "5-hour");
       return;

@@ -309,6 +309,67 @@ class TestUsageLimitsAPI(unittest.TestCase):
             self.assertEqual(res.status_code, 200)
             self.assertGreater(main._ccusage_cache["timestamp"], 0.0)
 
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota")
+    @patch("subprocess.run")
+    def test_get_usage_limits_with_google_ai_pro_tier(self, mock_subprocess, mock_ls, mock_codex, mock_auth):
+        mock_ls.return_value = {
+            "userStatus": {
+                "userTier": {
+                    "id": "g1-pro-tier",
+                    "name": "Google AI Pro",
+                    "description": "Google AI Pro"
+                }
+            }
+        }
+        proc_mock = MagicMock()
+        proc_mock.returncode = 0
+        proc_mock.stdout = json.dumps({"daily": [], "session": []})
+        mock_subprocess.return_value = proc_mock
+
+        res = self.client.get("/api/usage-limits")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("antigravityPlan"), "Google AI Pro")
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota")
+    @patch("subprocess.run")
+    def test_get_usage_limits_with_tier_id_inference(self, mock_subprocess, mock_ls, mock_codex, mock_auth):
+        mock_ls.return_value = {
+            "userStatus": {
+                "userTier": {
+                    "id": "g1-pro-tier"
+                }
+            }
+        }
+        proc_mock = MagicMock()
+        proc_mock.returncode = 0
+        proc_mock.stdout = json.dumps({"daily": [], "session": []})
+        mock_subprocess.return_value = proc_mock
+
+        res = self.client.get("/api/usage-limits")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("antigravityPlan"), "Google AI Pro")
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
+    @patch("subprocess.run")
+    def test_get_usage_limits_default_antigravity_plan(self, mock_subprocess, mock_ls, mock_codex, mock_auth):
+        proc_mock = MagicMock()
+        proc_mock.returncode = 0
+        proc_mock.stdout = json.dumps({"daily": [], "session": []})
+        mock_subprocess.return_value = proc_mock
+
+        res = self.client.get("/api/usage-limits")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("antigravityPlan"), "Google AI Pro")
+
 
 if __name__ == "__main__":
     unittest.main()
