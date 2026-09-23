@@ -8,6 +8,13 @@ import asyncio
 
 import main
 import model_discovery
+import codex_backend
+import claude_backend
+import grok_backend
+import kimi_backend
+import muse_backend
+import deepseek_backend
+import zai_backend
 from model_catalog import (
     load_model_catalog,
     save_model_catalog,
@@ -56,10 +63,84 @@ class ModelDiscoveryTests(unittest.TestCase):
         self.assertIn("Ultra", parsed["capabilities"]["effort"])
         self.assertIn("Fast", parsed["capabilities"]["speed"])
 
-    def test_sync_model_catalog_adds_missing_codex_models(self):
+    def test_parse_agy_models_output(self):
+        raw_output = (
+            "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n"
+            "gemini-3.1-pro-high\tGemini 3.1 Pro (High)\n"
+            "claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n"
+            "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\n"
+        )
+        parsed = model_discovery.parse_agy_models_output(raw_output)
+        self.assertEqual(len(parsed), 4)
+
+        flash = next(m for m in parsed if m["cli_model"] == "gemini-3.8-flash-high")
+        self.assertEqual(flash["provider"], "agy")
+        self.assertEqual(flash["usage_bucket"], "gemini")
+        self.assertEqual(flash["badge"], "Flash")
+        self.assertEqual(flash["capabilities"]["effort"], [])
+        self.assertFalse(flash["capabilities"]["thinking"])
+
+        pro = next(m for m in parsed if m["cli_model"] == "gemini-3.1-pro-high")
+        self.assertEqual(pro["badge"], "Pro")
+
+        claude = next(m for m in parsed if m["cli_model"] == "claude-sonnet-4-6")
+        self.assertEqual(claude["usage_bucket"], "claude")
+
+        oss = next(m for m in parsed if m["cli_model"] == "gpt-oss-120b-medium")
+        self.assertEqual(oss["usage_bucket"], "gpt")
+
+    def test_parse_grok_models_output(self):
+        raw_output = (
+            "Default model: grok-4.5\n\n"
+            "Available models:\n"
+            "  * grok-4.5 (default)\n"
+            "  * grok-4.6\n"
+            "  * grok-4.20\n"
+        )
+        parsed = model_discovery.parse_grok_models_output(raw_output)
+        self.assertEqual(len(parsed), 3)
+
+        slugs = {m["cli_model"] for m in parsed}
+        self.assertIn("grok-4.5", slugs)
+        self.assertIn("grok-4.6", slugs)
+        self.assertIn("grok-4.20", slugs)
+
+        for m in parsed:
+            self.assertEqual(m["provider"], "xai")
+            self.assertEqual(m["usage_bucket"], "xai")
+            self.assertEqual(m["badge"], "Grok")
+            self.assertTrue(m["capabilities"]["thinking"])
+            self.assertEqual(m["capabilities"]["speed"], [])
+
+    def test_provider_discovery_capabilities_conformance(self):
+        """Verify each provider's discovered models comply with validate_model_catalog rules."""
+        providers_handlers = [
+            ("codex", model_discovery.discover_codex_models(cache_path="/nonexistent")),
+            ("agy", model_discovery.KNOWN_AGY_MODELS),
+            ("claude", model_discovery.discover_claude_models()),
+            ("xai", model_discovery.KNOWN_GROK_MODELS),
+            ("kimi", model_discovery.discover_kimi_models()),
+            ("muse", model_discovery.discover_muse_models()),
+            ("deepseek", model_discovery.discover_deepseek_models()),
+            ("zai", model_discovery.discover_zai_models()),
+        ]
+
+        for provider_name, models in providers_handlers:
+            self.assertGreater(len(models), 0, f"Provider {provider_name} has no models")
+            dummy_catalog = {
+                "schema_version": 1,
+                "catalog_version": f"test-{provider_name}",
+                "default_model": models[0]["id"],
+                "models": models,
+            }
+            # Must pass catalog validation without raising ModelCatalogError
+            validated = validate_model_catalog(dummy_catalog)
+            self.assertEqual(len(validated["models"]), len(models))
+
+    def test_sync_model_catalog_adds_missing_multi_provider_models(self):
         with tempfile.TemporaryDirectory() as temp_directory:
             catalog_path = os.path.join(temp_directory, "models.json")
-            # Minimal catalog without 6 Sol or 6 Luna
+            # Minimal catalog with only one model
             base_catalog = {
                 "schema_version": 1,
                 "catalog_version": "2026.01.01",
@@ -91,14 +172,32 @@ class ModelDiscoveryTests(unittest.TestCase):
             self.assertTrue(was_updated)
             self.assertIn(".auto.", updated_catalog["catalog_version"])
 
-            sol = resolve_catalog_model(updated_catalog, "6 Sol")
-            self.assertIsNotNone(sol)
-            self.assertEqual(sol["cli_model"], "gpt-6-sol")
-            self.assertEqual(sol["provider"], "codex")
+            # Verify models from multiple providers were discovered and added
+            providers_in_catalog = {m["provider"] for m in updated_catalog["models"]}
+            self.assertIn("codex", providers_in_catalog)
+            self.assertIn("claude", providers_in_catalog)
+            self.assertIn("xai", providers_in_catalog)
+            self.assertIn("kimi", providers_in_catalog)
+            self.assertIn("muse", providers_in_catalog)
+            self.assertIn("deepseek", providers_in_catalog)
+            self.assertIn("zai", providers_in_catalog)
 
-            luna = resolve_catalog_model(updated_catalog, "6 Luna")
-            self.assertIsNotNone(luna)
-            self.assertEqual(luna["cli_model"], "gpt-6-luna")
+            # Check individual models
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "6 Sol"))
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Fable 5"))
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Grok 4.6"))
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Kimi K3"))
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "DeepSeek Pro 0813"))
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "GLM 5.2"))
+
+            # Verify all provider backends were configured dynamically
+            self.assertTrue(codex_backend.is_codex_model("6 Sol"))
+            self.assertTrue(claude_backend.is_claude_model("Fable 5"))
+            self.assertTrue(grok_backend.is_grok_model("Grok 4.6"))
+            self.assertTrue(kimi_backend.is_kimi_model("Kimi K3"))
+            self.assertTrue(muse_backend.is_muse_model("Muse Spark 1.2"))
+            self.assertTrue(deepseek_backend.is_deepseek_model("DeepSeek Pro 0813"))
+            self.assertTrue(zai_backend.is_zai_model("GLM 5.2"))
 
             # Subsequent sync with no new models should report was_updated=False
             same_catalog, second_update = model_discovery.sync_model_catalog(

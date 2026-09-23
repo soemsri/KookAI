@@ -208,6 +208,21 @@ MODEL_CATALOG_PATH = os.environ.get(
 )
 
 
+def resolve_writable_model_catalog_path() -> str:
+    if os.path.isfile(MODEL_CATALOG_PATH):
+        return MODEL_CATALOG_PATH
+    if os.path.isfile(BUILTIN_MODEL_CATALOG_PATH):
+        try:
+            target_dir = os.path.dirname(os.path.abspath(MODEL_CATALOG_PATH))
+            if target_dir:
+                os.makedirs(target_dir, exist_ok=True)
+            shutil.copyfile(BUILTIN_MODEL_CATALOG_PATH, MODEL_CATALOG_PATH)
+            return MODEL_CATALOG_PATH
+        except Exception as exc:
+            logging.debug("Could not copy builtin model catalog to %s: %s", MODEL_CATALOG_PATH, exc)
+    return MODEL_CATALOG_PATH
+
+
 def load_runtime_model_catalog() -> dict:
     catalog_path = (
         MODEL_CATALOG_PATH
@@ -569,11 +584,7 @@ async def periodic_model_catalog_sync_loop(interval_seconds: int = 1800):
     while True:
         try:
             await asyncio.sleep(interval_seconds)
-            catalog_target = (
-                MODEL_CATALOG_PATH
-                if os.path.isfile(MODEL_CATALOG_PATH)
-                else BUILTIN_MODEL_CATALOG_PATH
-            )
+            catalog_target = resolve_writable_model_catalog_path()
             catalog, updated = await asyncio.to_thread(
                 sync_model_catalog,
                 catalog_target,
@@ -594,11 +605,7 @@ async def periodic_model_catalog_sync_loop(interval_seconds: int = 1800):
 @app.on_event("startup")
 async def startup_event():
     # Auto-sync model catalog with newly discovered models from providers on boot
-    catalog_target = (
-        MODEL_CATALOG_PATH
-        if os.path.isfile(MODEL_CATALOG_PATH)
-        else BUILTIN_MODEL_CATALOG_PATH
-    )
+    catalog_target = resolve_writable_model_catalog_path()
     try:
         await asyncio.to_thread(
             sync_model_catalog,
@@ -898,11 +905,7 @@ async def get_models(request: Request, include_disabled: bool = False):
     now = time.time()
     if now - _last_models_sync_check_time > 300:
         _last_models_sync_check_time = now
-        catalog_target = (
-            MODEL_CATALOG_PATH
-            if os.path.isfile(MODEL_CATALOG_PATH)
-            else BUILTIN_MODEL_CATALOG_PATH
-        )
+        catalog_target = resolve_writable_model_catalog_path()
         asyncio.create_task(
             asyncio.to_thread(
                 sync_model_catalog,
@@ -926,11 +929,7 @@ async def get_models(request: Request, include_disabled: bool = False):
 @app.post("/api/models/sync")
 async def sync_models_endpoint(request: Request):
     verify_authorization(request)
-    catalog_target = (
-        MODEL_CATALOG_PATH
-        if os.path.isfile(MODEL_CATALOG_PATH)
-        else BUILTIN_MODEL_CATALOG_PATH
-    )
+    catalog_target = resolve_writable_model_catalog_path()
     try:
         catalog, updated = await asyncio.to_thread(
             sync_model_catalog,
