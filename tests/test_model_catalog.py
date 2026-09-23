@@ -284,6 +284,22 @@ class ModelCatalogApiTests(unittest.TestCase):
         self.assertIsNotNone(cli_lookup)
         self.assertEqual(cli_lookup["id"], "6 Astra")
 
+    def test_codex_6_sol_and_6_luna_are_available(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+        sol = resolve_catalog_model(catalog, "6 Sol")
+        self.assertIsNotNone(sol)
+        self.assertEqual(sol["provider"], "codex")
+        self.assertEqual(sol["cli_model"], "gpt-6-sol")
+        self.assertIn("Ultra", sol["capabilities"]["effort"])
+        self.assertIn("Fast", sol["capabilities"]["speed"])
+
+        luna = resolve_catalog_model(catalog, "6 Luna")
+        self.assertIsNotNone(luna)
+        self.assertEqual(luna["provider"], "codex")
+        self.assertEqual(luna["cli_model"], "gpt-6-luna")
+        self.assertIn("Extra High", luna["capabilities"]["effort"])
+        self.assertIn("Fast", luna["capabilities"]["speed"])
+
     def test_runtime_catalog_registers_dynamic_codex_model(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)
         dynamic_model = {

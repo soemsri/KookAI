@@ -140,6 +140,7 @@ from model_catalog import (
     resolve_catalog_model,
     save_model_catalog,
 )
+from model_discovery import sync_model_catalog
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -275,6 +276,7 @@ def cli_timeout_message(cli_name: str, exc: subprocess.TimeoutExpired) -> str:
 TUNNEL_ALLOWED_EXACT_PATHS = {
     "/api/pair",
     "/api/models",
+    "/api/models/sync",
     "/api/projects",
     "/api/chat-history",
     "/api/chat",
@@ -562,14 +564,57 @@ class CreateProjectRequest(BaseModel):
     name: str
 
 
+async def periodic_model_catalog_sync_loop(interval_seconds: int = 1800):
+    """Periodically check for newly released or cached models in the background."""
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            catalog_target = (
+                MODEL_CATALOG_PATH
+                if os.path.isfile(MODEL_CATALOG_PATH)
+                else BUILTIN_MODEL_CATALOG_PATH
+            )
+            catalog, updated = await asyncio.to_thread(
+                sync_model_catalog,
+                catalog_target,
+                force=True,
+            )
+            if updated:
+                logging.info(
+                    "Background sync updated model catalog to version %s (%d models)",
+                    catalog["catalog_version"],
+                    len(catalog["models"]),
+                )
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logging.debug("Periodic model catalog sync encountered error: %s", exc)
+
+
 @app.on_event("startup")
 async def startup_event():
+    # Auto-sync model catalog with newly discovered models from providers on boot
+    catalog_target = (
+        MODEL_CATALOG_PATH
+        if os.path.isfile(MODEL_CATALOG_PATH)
+        else BUILTIN_MODEL_CATALOG_PATH
+    )
+    try:
+        await asyncio.to_thread(
+            sync_model_catalog,
+            catalog_target,
+            force=True,
+        )
+    except Exception as exc:
+        logging.warning("Initial model catalog sync failed: %s", exc)
+
     catalog = load_runtime_model_catalog()
     logging.info(
         "Loaded model catalog %s with %s enabled models",
         catalog["catalog_version"],
         sum(1 for model in catalog["models"] if model["enabled"]),
     )
+    asyncio.create_task(periodic_model_catalog_sync_loop())
     requirements_path = os.path.join(APP_DIR, "requirements.txt")
     cli_statuses = await asyncio.to_thread(
         auto_install_missing,
@@ -836,6 +881,9 @@ async def connect_cli_account(cli_id: str, request: Request):
     )
 
 
+_last_models_sync_check_time: float = 0.0
+
+
 @app.get("/api/models")
 async def get_models(request: Request, include_disabled: bool = False):
     verify_authorization(request)
@@ -844,6 +892,25 @@ async def get_models(request: Request, include_disabled: bool = False):
             status_code=403,
             detail="Local access is required to view disabled models",
         )
+
+    # Throttle non-blocking auto-sync check (every 5 minutes)
+    global _last_models_sync_check_time
+    now = time.time()
+    if now - _last_models_sync_check_time > 300:
+        _last_models_sync_check_time = now
+        catalog_target = (
+            MODEL_CATALOG_PATH
+            if os.path.isfile(MODEL_CATALOG_PATH)
+            else BUILTIN_MODEL_CATALOG_PATH
+        )
+        asyncio.create_task(
+            asyncio.to_thread(
+                sync_model_catalog,
+                catalog_target,
+                force=False,
+            )
+        )
+
     try:
         catalog = load_runtime_model_catalog()
     except ModelCatalogError as exc:
@@ -854,6 +921,33 @@ async def get_models(request: Request, include_disabled: bool = False):
             include_disabled=include_disabled,
         )
     )
+
+
+@app.post("/api/models/sync")
+async def sync_models_endpoint(request: Request):
+    verify_authorization(request)
+    catalog_target = (
+        MODEL_CATALOG_PATH
+        if os.path.isfile(MODEL_CATALOG_PATH)
+        else BUILTIN_MODEL_CATALOG_PATH
+    )
+    try:
+        catalog, updated = await asyncio.to_thread(
+            sync_model_catalog,
+            catalog_target,
+            force=True,
+        )
+        return JSONResponse(
+            content={
+                "status": "success",
+                "updated": updated,
+                "catalog_version": catalog["catalog_version"],
+                "model_count": len(catalog["models"]),
+            }
+        )
+    except Exception as exc:
+        logging.error("Failed to sync model catalog: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.put("/api/models")

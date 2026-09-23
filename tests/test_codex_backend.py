@@ -12,8 +12,12 @@ class CodexBackendTests(unittest.TestCase):
     def test_model_and_provider_mapping(self):
         self.assertEqual(codex_backend.codex_model_slug("6 Astra"), "gpt-6-astra")
         self.assertEqual(codex_backend.codex_model_slug("GPT-6 Astra"), "gpt-6-astra")
+        self.assertEqual(codex_backend.codex_model_slug("6 Sol"), "gpt-6-sol")
+        self.assertEqual(codex_backend.codex_model_slug("6 Luna"), "gpt-6-luna")
         self.assertEqual(codex_backend.codex_model_slug("5.6 Sol"), "gpt-5.6-sol")
         self.assertEqual(codex_backend.resolve_provider(None, "6 Astra"), "codex")
+        self.assertEqual(codex_backend.resolve_provider(None, "6 Sol"), "codex")
+        self.assertEqual(codex_backend.resolve_provider(None, "6 Luna"), "codex")
         self.assertEqual(codex_backend.resolve_provider(None, "5.4"), "codex")
         self.assertEqual(
             codex_backend.resolve_provider(None, "Gemini 3.5 Flash (High)"),

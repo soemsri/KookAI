@@ -488,6 +488,39 @@
       "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
     },
     {
+      "id": "6 Sol",
+      "label": "6 Sol",
+      "description": "Codex GPT-6 Sol for complex, open-ended work",
+      "provider": "codex",
+      "cli_model": "gpt-6-sol",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "6 Luna",
+      "label": "6 Luna",
+      "description": "Codex GPT-6 Luna for clear, repeatable work",
+      "provider": "codex",
+      "cli_model": "gpt-6-luna",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+    },
+    {
+      "id": "6 Terra",
+      "label": "6 Terra",
+      "description": "Codex GPT-6 Terra everyday all-rounder",
+      "provider": "codex",
+      "cli_model": "gpt-6-terra",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+    },
+    {
       "id": "5.6 Sol",
       "label": "5.6 Sol",
       "description": "Codex for complex, open-ended work",

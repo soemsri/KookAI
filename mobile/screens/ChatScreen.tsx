@@ -3702,7 +3702,10 @@ allowQueue: false,
                     {/* Model Selector Dropdown */}
                     <TouchableOpacity
                       style={[styles.modelPickerBtn, { backgroundColor: theme.bgSecondary }]}
-                      onPress={() => setIsModelModalOpen(true)}
+                      onPress={() => {
+                        setIsModelModalOpen(true);
+                        refreshModelCatalog();
+                      }}
                       disabled={isPromptDisabled}
                     >
                       <Text style={[styles.modelPickerText, { color: theme.textPrimary }]}>

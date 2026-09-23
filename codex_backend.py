@@ -29,6 +29,12 @@ from zai_backend import is_zai_model
 CODEX_MODEL_MAP = {
     "6 Astra": "gpt-6-astra",
     "GPT-6 Astra": "gpt-6-astra",
+    "6 Sol": "gpt-6-sol",
+    "GPT-6 Sol": "gpt-6-sol",
+    "6 Luna": "gpt-6-luna",
+    "GPT-6 Luna": "gpt-6-luna",
+    "6 Terra": "gpt-6-terra",
+    "GPT-6 Terra": "gpt-6-terra",
     "5.6 Sol": "gpt-5.6-sol",
     "5.6 Terra": "gpt-5.6-terra",
     "5.6 Luna": "gpt-5.6-luna",
@@ -57,6 +63,12 @@ CODEX_SPEED_MAP = {
 CODEX_FAST_MODELS = {
     "6 Astra",
     "GPT-6 Astra",
+    "6 Sol",
+    "GPT-6 Sol",
+    "6 Luna",
+    "GPT-6 Luna",
+    "6 Terra",
+    "GPT-6 Terra",
     "5.6 Sol",
     "5.6 Terra",
     "5.6 Luna",
@@ -67,6 +79,12 @@ CODEX_FAST_MODELS = {
 CODEX_MODEL_EFFORTS = {
     "6 Astra": {"low", "medium", "high", "xhigh", "ultra"},
     "GPT-6 Astra": {"low", "medium", "high", "xhigh", "ultra"},
+    "6 Sol": {"low", "medium", "high", "xhigh", "ultra"},
+    "GPT-6 Sol": {"low", "medium", "high", "xhigh", "ultra"},
+    "6 Luna": {"low", "medium", "high", "xhigh"},
+    "GPT-6 Luna": {"low", "medium", "high", "xhigh"},
+    "6 Terra": {"low", "medium", "high", "xhigh", "ultra"},
+    "GPT-6 Terra": {"low", "medium", "high", "xhigh", "ultra"},
     "5.6 Sol": {"low", "medium", "high", "xhigh", "ultra"},
     "5.6 Terra": {"low", "medium", "high", "xhigh", "ultra"},
     "5.6 Luna": {"low", "medium", "high", "xhigh"},
@@ -222,11 +240,13 @@ def normalize_codex_effort(
             model_name,
         )
         supported = CODEX_MODEL_EFFORTS.get(display_model)
+        if not supported:
+            supported = {"low", "medium", "high", "xhigh"}
         supported_cli = {
             CODEX_EFFORT_MAP.get(str(item).lower(), str(item).lower())
-            for item in (supported or set())
+            for item in supported
         }
-        if not supported or cli_value not in supported_cli:
+        if cli_value not in supported_cli:
             raise ValueError(
                 f"Effort {canonical_display} is not supported by Codex model {display_model}"
             )
