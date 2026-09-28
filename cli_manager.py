@@ -703,7 +703,11 @@ def _powershell_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def launch_cli_login(cli_id: str, working_directory: str) -> dict[str, Any]:
+def launch_cli_login(
+    cli_id: str,
+    working_directory: str,
+    env_override: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
     """Open the CLI authentication flow in a new local terminal window."""
     if cli_id not in CLI_DEFINITIONS:
         raise KeyError(cli_id)
@@ -717,6 +721,12 @@ def launch_cli_login(cli_id: str, working_directory: str) -> dict[str, Any]:
         }
 
     login_line = _shell_login_line(executable, definition.connect_args)
+    if env_override:
+        env_exports = "; ".join(f"export {k}={shlex.quote(str(v))}" for k, v in env_override.items())
+        login_line = f"{env_exports}; {login_line}"
+
+    merged_env = {**os.environ, **(env_override or {})}
+
     try:
         if (
             working_directory
@@ -747,7 +757,9 @@ def launch_cli_login(cli_id: str, working_directory: str) -> dict[str, Any]:
                     *(_powershell_quote(arg) for arg in definition.connect_args),
                 ]
             )
+            ps_env = "".join(f"$env:{k}={_powershell_quote(str(v))}; " for k, v in (env_override or {}).items())
             script = (
+                f"{ps_env}"
                 f"Set-Location -LiteralPath {_powershell_quote(cwd)}; "
                 f"{invocation}; "
                 "Write-Host ''; "
@@ -757,6 +769,7 @@ def launch_cli_login(cli_id: str, working_directory: str) -> dict[str, Any]:
             subprocess.Popen(
                 [powershell, "-NoProfile", "-Command", script],
                 cwd=cwd,
+                env=merged_env,
                 creationflags=creation_flags,
             )
         elif sys_platform() == "darwin":
@@ -774,6 +787,7 @@ def launch_cli_login(cli_id: str, working_directory: str) -> dict[str, Any]:
                     'tell application "Terminal" to activate',
                 ],
                 cwd=cwd,
+                env=merged_env,
             )
         else:
             if not (
@@ -815,8 +829,9 @@ def launch_cli_login(cli_id: str, working_directory: str) -> dict[str, Any]:
                 ]
             else:
                 command = [terminal_path, "-e", "bash", "-lc", login_line]
-            subprocess.Popen(command, cwd=cwd)
+            subprocess.Popen(command, cwd=cwd, env=merged_env)
     except (OSError, RuntimeError) as exc:
+
         return {
             "launched": False,
             "message": str(exc),

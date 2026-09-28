@@ -935,6 +935,35 @@
           <div class="cli-connections-list" id="cliConnectionsList" aria-live="polite">
             <div class="cli-loading">Loading CLI status…</div>
           </div>
+
+          <div class="cli-profiles-section" style="margin-top: 24px; border-top: 1px solid var(--border-color, #333); padding-top: 16px;">
+            <div class="cli-settings-header">
+              <div>
+                <h3>Multi-User Profiles</h3>
+                <p>Support multiple user accounts per model (e.g. Work vs Personal). Each profile stores credentials in an isolated directory.</p>
+              </div>
+            </div>
+            
+            <div class="profile-add-form" style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;">
+              <select id="newProfileCli" class="settings-select" style="max-width: 140px; padding: 6px 10px; border-radius: 6px; background: var(--bg-surface, #222); color: inherit; border: 1px solid var(--border-color, #444);">
+                <option value="codex">Codex</option>
+                <option value="claude">Claude</option>
+                <option value="agy">Google Agy</option>
+                <option value="kimi">Kimi</option>
+                <option value="xai">Grok</option>
+                <option value="muse">Muse</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="zai">Z.ai</option>
+              </select>
+              <input type="text" id="newProfileLabel" placeholder="Account label (e.g. a@gmail.com)" style="flex: 1; min-width: 180px; padding: 6px 12px; border-radius: 6px; background: var(--bg-surface, #222); color: inherit; border: 1px solid var(--border-color, #444);">
+              <button type="button" class="cli-action-btn primary" id="addProfileBtn">+ Add Profile</button>
+            </div>
+            <div id="profileFormMessage" class="cli-action-message hidden" style="margin-bottom: 12px;"></div>
+            
+            <div id="harnessProfilesList" class="cli-connections-list">
+              <div class="cli-loading">Loading profiles…</div>
+            </div>
+          </div>
         </div>
 
         <!-- Tab Content 4: System Info & Diagnostics -->

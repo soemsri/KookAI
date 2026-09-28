@@ -2226,6 +2226,147 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  const harnessProfilesList = document.getElementById("harnessProfilesList");
+  const addProfileBtn = document.getElementById("addProfileBtn");
+  const newProfileCli = document.getElementById("newProfileCli");
+  const newProfileLabel = document.getElementById("newProfileLabel");
+  const profileFormMessage = document.getElementById("profileFormMessage");
+
+  function setProfileFormMessage(message, isError = false) {
+    if (!profileFormMessage) return;
+    profileFormMessage.textContent = message;
+    profileFormMessage.classList.toggle("error", isError);
+    profileFormMessage.classList.toggle("hidden", !message);
+  }
+
+  async function loadHarnessProfiles() {
+    if (!harnessProfilesList) return;
+    try {
+      const response = await fetch("/api/harness/profiles");
+      if (!response.ok) throw new Error("Failed to load profiles");
+      const data = await response.json();
+      const profiles = data.profiles || [];
+      renderHarnessProfiles(profiles);
+    } catch (err) {
+      harnessProfilesList.innerHTML = `<div class="cli-loading" style="color:var(--danger,#f44336);">Error loading profiles: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderHarnessProfiles(profiles) {
+    if (!harnessProfilesList) return;
+    if (profiles.length === 0) {
+      harnessProfilesList.innerHTML = `<div class="cli-loading" style="opacity:0.7;">No multi-user profiles created yet. Use the form above to add one.</div>`;
+      return;
+    }
+
+    harnessProfilesList.innerHTML = profiles.map(p => `
+      <div class="cli-connection-card" data-profile-card="${escapeHtml(p.id)}" style="display:flex; justify-content:space-between; align-items:center; padding:12px; margin-bottom:8px; border-radius:8px; background:var(--bg-surface-2, rgba(255,255,255,0.03)); border:1px solid var(--border-color, #333);">
+        <div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <strong style="font-size:14px;">${escapeHtml(p.label)}</strong>
+            <span class="badge" style="font-size:11px; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.1);">${escapeHtml(p.cli_id.toUpperCase())}</span>
+            ${p.is_default ? '<span class="badge" style="font-size:11px; padding:2px 6px; border-radius:4px; background:#4caf50; color:#fff;">Default</span>' : ''}
+          </div>
+          <div style="font-size:12px; opacity:0.6; margin-top:4px;">ID: <code>${escapeHtml(p.id)}</code></div>
+          <div class="cli-action-message hidden" data-profile-message="${escapeHtml(p.id)}"></div>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button type="button" class="cli-action-btn primary" data-profile-action="connect" data-profile-id="${escapeHtml(p.id)}" title="Open sign-in terminal on server">Connect</button>
+          ${!p.is_default ? `<button type="button" class="cli-action-btn" data-profile-action="default" data-profile-id="${escapeHtml(p.id)}">Make Default</button>` : ''}
+          <button type="button" class="cli-action-btn danger" data-profile-action="delete" data-profile-id="${escapeHtml(p.id)}">Delete</button>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  async function handleProfileCardAction(profileId, action) {
+    const card = harnessProfilesList?.querySelector(`[data-profile-card="${CSS.escape(profileId)}"]`);
+    const messageEl = card?.querySelector(`[data-profile-message="${CSS.escape(profileId)}"]`);
+    const buttons = card?.querySelectorAll("button") || [];
+
+    const setMessage = (msg, isErr = false) => {
+      if (!messageEl) return;
+      messageEl.textContent = msg;
+      messageEl.classList.toggle("error", isErr);
+      messageEl.classList.toggle("hidden", !msg);
+    };
+
+    if (action === "connect") {
+      buttons.forEach(b => b.disabled = true);
+      setMessage("Opening sign-in window on server computer…");
+      try {
+        const res = await fetch(`/api/harness/profiles/${encodeURIComponent(profileId)}/connect`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.message || "Failed to launch login");
+        setMessage(data.message || "Sign-in terminal opened.");
+      } catch (err) {
+        setMessage(err.message, true);
+      } finally {
+        buttons.forEach(b => b.disabled = false);
+      }
+    } else if (action === "default") {
+      try {
+        const res = await fetch(`/api/harness/profiles/${encodeURIComponent(profileId)}/default`, { method: "POST" });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.detail || "Failed to set default profile");
+        }
+        await loadHarnessProfiles();
+      } catch (err) {
+        setMessage(err.message, true);
+      }
+    } else if (action === "delete") {
+      if (!confirm("Are you sure you want to delete this profile and its isolated credentials?")) return;
+      try {
+        const res = await fetch(`/api/harness/profiles/${encodeURIComponent(profileId)}`, { method: "DELETE" });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.detail || "Failed to delete profile");
+        }
+        await loadHarnessProfiles();
+      } catch (err) {
+        setMessage(err.message, true);
+      }
+    }
+  }
+
+  if (addProfileBtn) {
+    addProfileBtn.addEventListener("click", async () => {
+      const cli_id = newProfileCli ? newProfileCli.value : "codex";
+      const label = newProfileLabel ? newProfileLabel.value.trim() : "";
+      if (!label) {
+        setProfileFormMessage("Please enter an account label", true);
+        return;
+      }
+      addProfileBtn.disabled = true;
+      setProfileFormMessage("Creating profile…");
+      try {
+        const res = await fetch("/api/harness/profiles", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cli_id, label })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Failed to create profile");
+        if (newProfileLabel) newProfileLabel.value = "";
+        setProfileFormMessage(`Created profile "${label}" successfully! Click Connect to authenticate.`);
+        await loadHarnessProfiles();
+      } catch (err) {
+        setProfileFormMessage(err.message, true);
+      } finally {
+        addProfileBtn.disabled = false;
+      }
+    });
+  }
+
+  if (harnessProfilesList) {
+    harnessProfilesList.addEventListener("click", event => {
+      const btn = event.target.closest("[data-profile-action]");
+      if (!btn || btn.disabled) return;
+      handleProfileCardAction(btn.dataset.profileId, btn.dataset.profileAction);
+    });
+  }
+
   const DEFAULT_SETTINGS_TAB = "settingsGeneral";
 
   function activateSettingsTab(targetId = DEFAULT_SETTINGS_TAB) {
@@ -2249,6 +2390,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (targetId === "settingsCli") {
       loadCliStatuses();
+      loadHarnessProfiles();
     } else if (targetId === "settingsModels") {
       loadModelCatalogEditor();
     }

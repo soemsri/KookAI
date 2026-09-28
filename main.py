@@ -141,6 +141,16 @@ from model_catalog import (
     save_model_catalog,
 )
 from model_discovery import sync_model_catalog
+from profile_manager import (
+    create_profile,
+    delete_profile,
+    get_default_profile,
+    get_profile,
+    get_profile_scoped_env,
+    list_profiles,
+    set_default_profile,
+    update_profile_status,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -888,6 +898,87 @@ async def connect_cli_account(cli_id: str, request: Request):
     )
 
 
+class CreateProfileRequest(BaseModel):
+    cli_id: str
+    label: str
+    profile_id: Optional[str] = None
+
+
+@app.get("/api/harness/profiles")
+async def get_harness_profiles(request: Request, cli_id: Optional[str] = None):
+    verify_authorization(request)
+    return JSONResponse(content={"profiles": list_profiles(cli_id=cli_id)})
+
+
+@app.post("/api/harness/profiles")
+async def create_harness_profile_endpoint(request: CreateProfileRequest, req_raw: Request):
+    verify_cli_admin(req_raw)
+    try:
+        record = create_profile(
+            cli_id=request.cli_id,
+            label=request.label,
+            profile_id=request.profile_id,
+        )
+        return JSONResponse(status_code=201, content=record)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/harness/profiles/{profile_id}")
+async def delete_harness_profile_endpoint(profile_id: str, req_raw: Request):
+    verify_cli_admin(req_raw)
+    try:
+        ok = delete_profile(profile_id, delete_files=True)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        return JSONResponse(content={"success": True, "deleted": profile_id})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/harness/profiles/{profile_id}/default")
+async def set_default_harness_profile_endpoint(profile_id: str, req_raw: Request):
+    verify_cli_admin(req_raw)
+    prof = get_profile(profile_id)
+    if not prof:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    ok = set_default_profile(prof["cli_id"], profile_id)
+    return JSONResponse(content={"success": ok, "default_profile": profile_id})
+
+
+@app.post("/api/harness/profiles/{profile_id}/connect")
+async def connect_harness_profile_endpoint(profile_id: str, req_raw: Request):
+    verify_cli_admin(req_raw)
+    prof = get_profile(profile_id)
+    if not prof:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    cli_id = prof["cli_id"]
+    statuses = {
+        status["id"]: status
+        for status in await asyncio.to_thread(
+            get_cli_statuses,
+            os.path.join(APP_DIR, "requirements.txt"),
+        )
+    }
+    status = statuses.get(cli_id)
+    if not status or not status["installed"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{cli_id} is not installed. Install it before connecting.",
+        )
+    scoped_env = get_profile_scoped_env(profile_id)
+    result = await asyncio.to_thread(
+        launch_cli_login,
+        cli_id,
+        APP_DIR,
+        env_override=scoped_env,
+    )
+    return JSONResponse(
+        status_code=200 if result["launched"] else 503,
+        content=result,
+    )
+
+
 _last_models_sync_check_time: float = 0.0
 
 
@@ -982,6 +1073,7 @@ class ChatRequest(BaseModel):
     effort: Optional[str] = "Medium"
     speed: Optional[str] = "Standard"
     thinking: Optional[bool] = True
+    profile_id: Optional[str] = None
 
 
 def resolve_chat_model(request: ChatRequest) -> dict:
@@ -2521,6 +2613,7 @@ def run_agent_command(
     env=None,
     cancel_event=None,
     task_id=None,
+    profile_id=None,
 ):
     tid = task_id or current_task_id_var.get()
     if cancel_event is None and tid:
@@ -2528,6 +2621,12 @@ def run_agent_command(
 
     if cancel_event and cancel_event.is_set():
         raise AgentCommandCancelled("Prompt execution was cancelled by user")
+
+    if profile_id:
+        try:
+            env = get_profile_scoped_env(profile_id, base_env=env)
+        except Exception as exc:
+            logging.warning("Failed to apply profile environment for %s: %s", profile_id, exc)
 
     popen_kwargs = hidden_subprocess_kwargs()
     if os.name != "nt":
@@ -2961,6 +3060,7 @@ def run_codex_cli(
     speed: str = "Standard",
     image_paths: Optional[List[str]] = None,
     progress_callback=None,
+    profile_id: Optional[str] = None,
 ):
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
@@ -3008,13 +3108,14 @@ def run_codex_cli(
             image_paths=image_paths,
         )
         logging.info(
-            "Executing Codex CLI in %s with model=%s effort=%s speed=%s target=%s resume=%s",
+            "Executing Codex CLI in %s with model=%s effort=%s speed=%s target=%s resume=%s profile=%s",
             cwd_path,
             model_ui_name,
             effort_display,
             speed_display,
             target,
             bool(codex_session_id(run_conversation_id)),
+            profile_id,
         )
         result = run_agent_command(
             cmd,
@@ -3024,6 +3125,7 @@ def run_codex_cli(
             progress_line_classifier=classify_codex_progress_line,
             raw_line_callback=capture_codex_line,
             stdin_text=message_with_context,
+            profile_id=profile_id,
         )
         parsed = parse_codex_jsonl(result.stdout or "")
         return result, {
@@ -3102,6 +3204,7 @@ def run_claude_cli(
     effort: str = "Medium",
     thinking: bool = True,
     progress_callback=None,
+    profile_id: Optional[str] = None,
 ):
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
@@ -3137,13 +3240,14 @@ def run_claude_cli(
             conversation_id=run_conversation_id,
         )
         logging.info(
-            "Executing Claude CLI in %s with model=%s effort=%s thinking=%s target=%s resume=%s",
+            "Executing Claude CLI in %s with model=%s effort=%s thinking=%s target=%s resume=%s profile=%s",
             cwd_path,
             model_ui_name,
             effort_display,
             thinking,
             target,
             bool(claude_session_id(run_conversation_id)),
+            profile_id,
         )
         result = run_agent_command(
             cmd,
@@ -3154,6 +3258,7 @@ def run_claude_cli(
             raw_line_callback=capture_claude_line,
             stdin_text=message_with_context,
             env=build_claude_environment(thinking),
+            profile_id=profile_id,
         )
         parsed = parse_claude_stream_json(result.stdout or "")
         return result, {
@@ -3865,7 +3970,13 @@ def _invoke_provider_backend(
     thinking: bool,
     image_paths: Optional[List[str]],
     progress_callback,
+    profile_id: Optional[str] = None,
 ):
+    if not profile_id:
+        def_prof = get_default_profile(prov)
+        if def_prof:
+            profile_id = def_prof.get("id")
+
     if prov == "codex":
         return run_codex_cli(
             message,
@@ -3877,6 +3988,7 @@ def _invoke_provider_backend(
             speed,
             image_paths,
             progress_callback,
+            profile_id=profile_id,
         )
     elif prov == "claude":
         return run_claude_cli(
@@ -3888,6 +4000,7 @@ def _invoke_provider_backend(
             effort,
             thinking,
             progress_callback,
+            profile_id=profile_id,
         )
     elif prov == "kimi":
         return run_kimi_cli(
@@ -3978,6 +4091,7 @@ def run_selected_cli(
     progress_callback=None,
     cancel_event=None,
     task_id=None,
+    profile_id: Optional[str] = None,
 ):
     if cancel_event is None and task_id:
         cancel_event = chat_task_cancel_events.get(task_id)
@@ -3999,6 +4113,16 @@ def run_selected_cli(
     primary_failed = False
     primary_error_msg = ""
     try:
+        backend_kwargs = {}
+        if profile_id is not None:
+            try:
+                import inspect
+                sig = inspect.signature(_invoke_provider_backend)
+                if "profile_id" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                    backend_kwargs["profile_id"] = profile_id
+            except Exception:
+                pass
+
         reply, resolved_cid = _invoke_provider_backend(
             selected_provider,
             model_ui_name,
@@ -4011,6 +4135,7 @@ def run_selected_cli(
             thinking,
             image_paths,
             progress_callback,
+            **backend_kwargs,
         )
         attempted_providers.add(selected_provider)
         if not is_execution_failure(reply):
@@ -4621,6 +4746,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
             progress_callback,
             cancel_event=cancel_event,
             task_id=task_id,
+            profile_id=request.profile_id,
         )
 
     msg_lower = message.strip().lower()
@@ -5228,6 +5354,7 @@ async def start_chat_task_endpoint(request: ChatRequest, req_raw: Request):
             "effort": request.effort,
             "speed": request.speed,
             "thinking": request.thinking,
+            "profile_id": request.profile_id,
             "events": [],
             "next_seq": 0,
             "result": None,

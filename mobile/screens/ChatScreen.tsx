@@ -90,6 +90,14 @@ type: 'progress' | 'error';
 message: string;
 }
 
+interface HarnessProfile {
+  id: string;
+  cli_id: string;
+  label: string;
+  is_default: boolean;
+  status: string;
+}
+
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
 type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai' | 'muse' | 'deepseek' | 'zai';
@@ -1150,6 +1158,9 @@ const toggleThemeMode = async () => {
 
 // Modal Overlays
 const [isModelModalOpen, setIsModelModalOpen] = useState(false);
+const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+const [harnessProfiles, setHarnessProfiles] = useState<HarnessProfile[]>([]);
+const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
 const [isEffortModalOpen, setIsEffortModalOpen] = useState(false);
 const [isSpeedModalOpen, setIsSpeedModalOpen] = useState(false);
 const [isTargetModalOpen, setIsTargetModalOpen] = useState(false);
@@ -1494,6 +1505,24 @@ selectedProjectRef.current = selectedProject;
     }
   };
 
+  const loadHarnessProfiles = async () => {
+    try {
+      const data = await callHostApi('/api/harness/profiles');
+      if (data && Array.isArray(data.profiles)) {
+        setHarnessProfiles(data.profiles);
+        setSelectedProfileId((prev) => {
+          if (prev && data.profiles.some((p: any) => p.id === prev)) {
+            return prev;
+          }
+          const defaultProf = data.profiles.find((p: any) => p.is_default);
+          return defaultProf ? defaultProf.id : (data.profiles[0]?.id || null);
+        });
+      }
+    } catch (err) {
+      console.warn("Failed to load harness profiles:", err);
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -1521,6 +1550,7 @@ selectedProjectRef.current = selectedProject;
         await refreshServerList();
         await loadProjects();
         await loadConversations();
+        await loadHarnessProfiles();
         fetchUsageLimits();
         await checkAndAttachActiveTask();
       } finally {
@@ -2712,7 +2742,8 @@ allowQueue: false,
           thinking: requestThinking,
           workspace: requestProject,
           target: requestTarget,
-          conversation_id: convoId
+          conversation_id: convoId,
+          profile_id: selectedProfileId || undefined,
         })
       });
 
@@ -3715,6 +3746,23 @@ allowQueue: false,
                       </Text>
                       <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
                     </TouchableOpacity>
+
+                    {/* Multi-Tenant Harness Profile Selector Dropdown */}
+                    {harnessProfiles.length > 0 && (
+                      <TouchableOpacity
+                        style={[styles.modelPickerBtn, { backgroundColor: theme.bgSecondary, marginLeft: 6 }]}
+                        onPress={() => {
+                          loadHarnessProfiles();
+                          setIsProfileModalOpen(true);
+                        }}
+                        disabled={isPromptDisabled}
+                      >
+                        <Text style={[styles.modelPickerText, { color: theme.textPrimary }]} numberOfLines={1}>
+                          👤 {harnessProfiles.find(p => p.id === selectedProfileId)?.label || 'Profile'}
+                        </Text>
+                        <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
 
                   <View style={styles.toolRowRight}>
@@ -3938,6 +3986,50 @@ allowQueue: false,
                 </View>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Profile Picker bottom-sheet overlay */}
+      <Modal visible={isProfileModalOpen} transparent animationType="slide" onRequestClose={() => setIsProfileModalOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setIsProfileModalOpen(false)} />
+          <View style={[styles.bottomSheet, { backgroundColor: theme.bgPrimary, borderColor: theme.borderColor }]}>
+            <View style={[styles.bottomSheetHeader, { borderBottomColor: theme.borderColor }]}>
+              <Text style={[styles.bottomSheetTitle, { color: theme.textPrimary }]}>Select User Account Profile</Text>
+              <TouchableOpacity onPress={() => setIsProfileModalOpen(false)} style={styles.closeModalX}>
+                <Text style={{ color: theme.textSecondary, fontSize: 18 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.bottomSheetList}>
+              {harnessProfiles.map((p) => {
+                const isActive = p.id === selectedProfileId;
+                return (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
+                    onPress={() => {
+                      setSelectedProfileId(p.id);
+                      setIsProfileModalOpen(false);
+                      showToast(`Switched account to ${p.label}`);
+                    }}
+                  >
+                    <View style={styles.modalItemLeft}>
+                      <View style={[styles.badge, { backgroundColor: p.is_default ? '#4caf50' : 'rgba(255,255,255,0.1)' }]}>
+                        <Text style={[styles.badgeText, { color: '#ffffff' }]}>{p.cli_id.toUpperCase()}</Text>
+                      </View>
+                      <View style={styles.modelInfo}>
+                        <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{p.label}</Text>
+                        <Text style={[styles.modelDesc, { color: theme.textSecondary }]} numberOfLines={1}>
+                          {p.is_default ? 'Default Account on Server' : `Profile ID: ${p.id}`}
+                        </Text>
+                      </View>
+                    </View>
+                    {isActive && <Text style={{ color: theme.accent, fontSize: 16, fontWeight: '700' }}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
         </View>
       </Modal>
