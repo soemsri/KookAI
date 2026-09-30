@@ -96,8 +96,11 @@ def _is_runnable_deepseek(path: str) -> bool:
     try:
         if not os.path.isfile(path):
             return False
+        cmd = [path, "--version"]
+        if os.name == "nt" and os.path.splitext(path)[1].lower() in {".bat", ".cmd"}:
+            cmd = ["cmd.exe", "/d", "/s", "/c", path, "--version"]
         probe = subprocess.run(
-            [path, "--version"],
+            cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -126,12 +129,20 @@ def resolve_deepseek_executable() -> str:
         shutil.which("deepcode"),
         shutil.which("deepseek"),
         os.path.expanduser("~/.local/bin/deepcode.exe"),
+        os.path.expanduser("~/.local/bin/deepcode.bat"),
+        os.path.expanduser("~/.local/bin/deepcode.cmd"),
         os.path.expanduser("~/.local/bin/deepcode"),
         os.path.expanduser("~/.local/bin/deepseek.exe"),
+        os.path.expanduser("~/.local/bin/deepseek.bat"),
+        os.path.expanduser("~/.local/bin/deepseek.cmd"),
         os.path.expanduser("~/.local/bin/deepseek"),
         os.path.expanduser("~/.deepseek/bin/deepcode.exe"),
+        os.path.expanduser("~/.deepseek/bin/deepcode.bat"),
+        os.path.expanduser("~/.deepseek/bin/deepcode.cmd"),
         os.path.expanduser("~/.deepseek/bin/deepcode"),
         os.path.expanduser("~/.deepseek/bin/deepseek.exe"),
+        os.path.expanduser("~/.deepseek/bin/deepseek.bat"),
+        os.path.expanduser("~/.deepseek/bin/deepseek.cmd"),
         os.path.expanduser("~/.deepseek/bin/deepseek"),
     ]
 
@@ -162,8 +173,11 @@ def build_deepseek_command(
 ) -> list[str]:
     """Build a non-interactive DeepSeek Code command."""
     del target
+    base = [deepseek_path]
+    if os.name == "nt" and os.path.splitext(deepseek_path)[1].lower() in {".cmd", ".bat"}:
+        base = ["cmd.exe", "/d", "/s", "/c", deepseek_path]
     command = [
-        deepseek_path,
+        *base,
         "--model",
         deepseek_model_alias(model_name),
         "--prompt",

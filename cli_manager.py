@@ -584,6 +584,272 @@ def _install_native_muse() -> subprocess.CompletedProcess[str]:
     )
 
 
+_DEEPCODE_RUNNER_SCRIPT = '''#!/usr/bin/env python3
+"""DeepSeek Code CLI runner for KookAI."""
+import os
+import sys
+import json
+import urllib.request
+import urllib.error
+import uuid
+
+def _get_api_key():
+    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if key:
+        return key
+    home = os.path.expanduser("~")
+    for path in (
+        os.path.join(home, ".deepseek", "config.json"),
+        os.path.join(home, ".deepcode", "settings.json"),
+    ):
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        if data.get("api_key"):
+                            return str(data["api_key"]).strip()
+                        env_data = data.get("env", {})
+                        if isinstance(env_data, dict) and env_data.get("API_KEY"):
+                            return str(env_data["API_KEY"]).strip()
+            except Exception:
+                pass
+    return ""
+
+def _do_version():
+    print("DeepSeek Code CLI v1.0.0")
+    sys.exit(0)
+
+def _do_login():
+    print("DeepSeek Code CLI Authentication & Setup")
+    print("-" * 70)
+    print("URL: https://platform.deepseek.com/api_keys")
+    print("-" * 70)
+    print()
+    print("Opening DeepSeek API Keys portal...")
+    try:
+        import webbrowser
+        webbrowser.open("https://platform.deepseek.com/api_keys")
+    except Exception:
+        pass
+    print()
+    print("[Step 1] Open DeepSeek API Keys portal: https://platform.deepseek.com/api_keys")
+    print("[Step 2] Click '+ Create API key' and copy your key (starts with sk-...)")
+    print("[Step 3] Paste your DeepSeek API Key below and press Enter:")
+    print()
+    try:
+        user_key = input("Enter DeepSeek API Key (sk-...): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\\nLogin cancelled.")
+        sys.exit(1)
+
+    if user_key:
+        home = os.path.expanduser("~")
+        deepseek_dir = os.path.join(home, ".deepseek")
+        os.makedirs(deepseek_dir, exist_ok=True)
+        cfg_path = os.path.join(deepseek_dir, "config.json")
+        try:
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump({"api_key": user_key}, f, indent=2)
+            print()
+            print("[✓] DeepSeek API Key saved successfully to ~/.deepseek/config.json!")
+        except Exception as exc:
+            print(f"[!] Warning: Could not save to config: {exc}")
+    else:
+        existing = _get_api_key()
+        if existing:
+            print()
+            print("[✓] Using existing DeepSeek API Key configuration.")
+        else:
+            print()
+            print("[!] No key entered. You can also set the DEEPSEEK_API_KEY environment variable.")
+    print()
+    try:
+        input("Press Enter to close...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+    sys.exit(0)
+
+def _stream_deepseek(prompt, model, session_id):
+    api_key = _get_api_key()
+    print(json.dumps({"type": "session.resume_hint", "session_id": session_id}), flush=True)
+
+    if not api_key:
+        msg = (
+            "DeepSeek Code CLI is ready. To enable live AI responses, run `deepcode login` "
+            "or set your DEEPSEEK_API_KEY environment variable."
+        )
+        print(json.dumps({"type": "text", "data": msg}), flush=True)
+        print(json.dumps({"type": "end", "sessionId": session_id, "stopReason": "stop"}), flush=True)
+        return
+
+    model_name = "deepseek-chat"
+    if "reasoner" in model or "r1" in model.lower():
+        model_name = "deepseek-reasoner"
+    elif "coder" in model:
+        model_name = "deepseek-coder"
+    elif model.startswith("deepseek-"):
+        model_name = model
+
+    url = "https://api.deepseek.com/chat/completions"
+    payload = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "KookAI-DeepSeek-CLI/1.0",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        reasoning = delta.get("reasoning_content")
+                        if reasoning:
+                            print(json.dumps({"type": "thought", "message": reasoning}), flush=True)
+                        content = delta.get("content")
+                        if content:
+                            print(json.dumps({"type": "text", "data": content}), flush=True)
+                except Exception:
+                    continue
+        print(json.dumps({"type": "end", "sessionId": session_id, "stopReason": "stop"}), flush=True)
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode("utf-8", errors="replace")
+        try:
+            err_json = json.loads(err_body)
+            err_msg = err_json.get("error", {}).get("message", err_body)
+        except Exception:
+            err_msg = err_body or str(exc)
+        print(json.dumps({"type": "error", "message": f"DeepSeek API error ({exc.code}): {err_msg}"}), flush=True)
+        sys.exit(1)
+    except Exception as exc:
+        print(json.dumps({"type": "error", "message": f"DeepSeek request failed: {exc}"}), flush=True)
+        sys.exit(1)
+
+def main():
+    args = sys.argv[1:]
+    if not args or "--version" in args or "-v" in args:
+        _do_version()
+    if "login" in args:
+        _do_login()
+
+    prompt = ""
+    model = "deepseek-chat"
+    session_id = str(uuid.uuid4())[:8]
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--prompt" and i + 1 < len(args):
+            prompt = args[i + 1]
+            i += 2
+        elif arg == "--model" and i + 1 < len(args):
+            model = args[i + 1]
+            i += 2
+        elif arg == "--session" and i + 1 < len(args):
+            session_id = args[i + 1]
+            i += 2
+        elif arg in ("--cwd", "--output-format") and i + 1 < len(args):
+            i += 2
+        else:
+            i += 1
+
+    if prompt:
+        _stream_deepseek(prompt, model, session_id)
+    else:
+        _do_version()
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _install_native_deepseek() -> subprocess.CompletedProcess[str]:
+    npm = shutil.which("npm")
+    if npm:
+        try:
+            res = _install_npm_package("@vegamo/deepcode-cli")
+            if res.returncode == 0:
+                resolved = resolve_cli_executable("deepseek")
+                if resolved:
+                    return res
+        except Exception as exc:
+            LOGGER.warning("npm install @vegamo/deepcode-cli failed: %s", exc)
+
+    home = os.path.expanduser("~")
+    deepseek_dir = os.path.join(home, ".deepseek", "bin")
+    os.makedirs(deepseek_dir, exist_ok=True)
+
+    deepcode_script = os.path.join(deepseek_dir, "deepcode")
+    with open(deepcode_script, "w", encoding="utf-8") as f:
+        f.write(_DEEPCODE_RUNNER_SCRIPT)
+    if os.name != "nt":
+        os.chmod(deepcode_script, 0o755)
+
+    if os.name == "nt":
+        deepcode_bat = os.path.join(deepseek_dir, "deepcode.bat")
+        with open(deepcode_bat, "w", encoding="utf-8") as f:
+            f.write(
+                '@echo off\n'
+                'setlocal\n'
+                'where python >nul 2>nul\n'
+                'if %ERRORLEVEL% equ 0 (\n'
+                '    python "%~dp0deepcode" %*\n'
+                '    exit /b %ERRORLEVEL%\n'
+                ')\n'
+                'where py >nul 2>nul\n'
+                'if %ERRORLEVEL% equ 0 (\n'
+                '    py -3 "%~dp0deepcode" %*\n'
+                '    exit /b %ERRORLEVEL%\n'
+                ')\n'
+                'echo Python 3 is required to run deepcode >&2\n'
+                'exit /b 1\n'
+            )
+        deepcode_cmd = os.path.join(deepseek_dir, "deepcode.cmd")
+        with open(deepcode_cmd, "w", encoding="utf-8") as f:
+            f.write(
+                '@echo off\n'
+                'setlocal\n'
+                'where python >nul 2>nul\n'
+                'if %ERRORLEVEL% equ 0 (\n'
+                '    python "%~dp0deepcode" %*\n'
+                '    exit /b %ERRORLEVEL%\n'
+                ')\n'
+                'where py >nul 2>nul\n'
+                'if %ERRORLEVEL% equ 0 (\n'
+                '    py -3 "%~dp0deepcode" %*\n'
+                '    exit /b %ERRORLEVEL%\n'
+                ')\n'
+                'echo Python 3 is required to run deepcode >&2\n'
+                'exit /b 1\n'
+            )
+
+    return subprocess.CompletedProcess(
+        args=["deepcode", "--version"],
+        returncode=0,
+        stdout="DeepSeek Code CLI v1.0.0\n",
+        stderr="",
+    )
+
+
 def _install_npm_package(package_name: str) -> subprocess.CompletedProcess[str]:
     npm = shutil.which("npm")
     if not npm:
@@ -639,6 +905,8 @@ def install_cli(cli_id: str) -> dict[str, Any]:
                 result = _install_native_grok()
             elif definition.install_kind == "native_muse":
                 result = _install_native_muse()
+            elif definition.install_kind == "native_deepseek":
+                result = _install_native_deepseek()
             elif definition.install_kind == "npm":
                 result = _install_npm_package(definition.install_source)
             else:
@@ -745,6 +1013,12 @@ def launch_cli_login(
             webbrowser.open("https://dev.meta.ai/api-keys/")
         except Exception as exc:
             LOGGER.warning("Could not automatically open browser for Meta Muse login: %s", exc)
+    if cli_id == "deepseek":
+        import webbrowser
+        try:
+            webbrowser.open("https://platform.deepseek.com/api_keys")
+        except Exception as exc:
+            LOGGER.warning("Could not automatically open browser for DeepSeek login: %s", exc)
     try:
         if os.name == "nt":
             powershell = shutil.which("powershell.exe") or shutil.which("pwsh")

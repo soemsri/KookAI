@@ -174,6 +174,88 @@ class CliManagerTests(unittest.TestCase):
         self.assertEqual(definition.connect_args, ("login",))
         self.assertEqual(definition.executable, "grok")
 
+    def test_deepseek_uses_native_installer_and_login_command(self):
+        definition = cli_manager.CLI_DEFINITIONS["deepseek"]
+
+        self.assertEqual(definition.install_kind, "native_deepseek")
+        self.assertEqual(definition.connect_args, ("login",))
+        self.assertEqual(definition.executable, "deepcode")
+
+    def test_install_cli_native_deepseek_success(self):
+        installed_flag = {"installed": False}
+
+        def mock_resolve(cid):
+            return "/home/user/.deepseek/bin/deepcode" if installed_flag["installed"] else None
+
+        def mock_install():
+            installed_flag["installed"] = True
+            return completed(returncode=0, stdout="DeepSeek Code CLI v1.0.0")
+
+        with (
+            mock.patch.object(
+                cli_manager,
+                "resolve_cli_executable",
+                side_effect=mock_resolve,
+            ),
+            mock.patch.object(
+                cli_manager,
+                "_run_probe",
+                return_value=completed(returncode=0, stdout="DeepSeek Code CLI v1.0.0"),
+            ),
+            mock.patch.object(
+                cli_manager,
+                "_install_native_deepseek",
+                side_effect=mock_install,
+            ) as native_deepseek_install,
+        ):
+            result = cli_manager.install_cli("deepseek")
+        self.assertTrue(result["installed"])
+        self.assertEqual(result["status"], "installed")
+        self.assertEqual(result["version"], "DeepSeek Code CLI v1.0.0")
+        native_deepseek_install.assert_called_once()
+
+    def test_install_native_deepseek_creates_executable_files(self):
+        with tempfile.TemporaryDirectory() as temp_home:
+            with (
+                mock.patch.object(cli_manager.shutil, "which", return_value=None),
+                mock.patch.dict(os.environ, {"HOME": temp_home, "USERPROFILE": temp_home}),
+                mock.patch.object(os.path, "expanduser", side_effect=lambda p: p.replace("~", temp_home)),
+            ):
+                res = cli_manager._install_native_deepseek()
+                self.assertEqual(res.returncode, 0)
+                self.assertIn("DeepSeek Code CLI", res.stdout)
+                bin_dir = os.path.join(temp_home, ".deepseek", "bin")
+                self.assertTrue(os.path.isdir(bin_dir))
+                self.assertTrue(os.path.isfile(os.path.join(bin_dir, "deepcode")))
+                if os.name == "nt":
+                    self.assertTrue(os.path.isfile(os.path.join(bin_dir, "deepcode.bat")))
+                    self.assertTrue(os.path.isfile(os.path.join(bin_dir, "deepcode.cmd")))
+
+    def test_launch_deepseek_login_opens_browser_and_terminal(self):
+        with (
+            mock.patch.object(
+                cli_manager,
+                "resolve_cli_executable",
+                return_value="/usr/bin/deepcode",
+            ),
+            mock.patch.object(cli_manager, "sys_platform", return_value="linux"),
+            mock.patch.object(
+                cli_manager.shutil,
+                "which",
+                side_effect=lambda name: "/usr/bin/xterm" if name == "xterm" else None,
+            ),
+            mock.patch.object(cli_manager.os, "name", "posix"),
+            mock.patch.object(cli_manager.subprocess, "Popen") as popen,
+            mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False),
+            mock.patch("webbrowser.open") as mock_webbrowser,
+        ):
+            result = cli_manager.launch_cli_login("deepseek", "/tmp")
+        self.assertTrue(result["launched"])
+        mock_webbrowser.assert_called_once_with("https://platform.deepseek.com/api_keys")
+        terminal_command = popen.call_args.args[0]
+        self.assertIn("deepcode", terminal_command[-1])
+        self.assertIn("login", terminal_command[-1])
+
     def test_launch_codex_login_opens_a_terminal(self):
         with (
             mock.patch.object(
