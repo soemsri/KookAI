@@ -26,3 +26,4 @@ logs/
 .data/
 server.log
 /.kookai_cache
+*.apk
