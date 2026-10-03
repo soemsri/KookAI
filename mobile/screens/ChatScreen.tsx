@@ -3725,52 +3725,59 @@ allowQueue: false,
 
                 {/* Tools Row inside prompt card */}
                 <View style={styles.promptToolRow}>
-                  <View style={styles.toolRowLeft}>
-                    <TouchableOpacity
-                      style={[styles.toolBtn, { backgroundColor: isPlusModalOpen ? theme.accent : theme.bgSecondary }]}
-                      onPress={() => setIsPlusModalOpen(true)}
-                      disabled={uploadingMedia || isPromptDisabled}
+                  <View style={styles.toolRowLeftContainer}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      keyboardShouldPersistTaps="handled"
+                      contentContainerStyle={styles.toolRowLeftScroll}
                     >
-                      {uploadingMedia ? (
-                        <ActivityIndicator size="small" color={theme.textSecondary} />
-                      ) : (
-                        <Text style={{ color: isPlusModalOpen ? '#ffffff' : theme.textSecondary, fontSize: 16 }}>＋</Text>
-                      )}
-                    </TouchableOpacity>
-
-                    {/* Model Selector Dropdown */}
-                    <TouchableOpacity
-                      style={[styles.modelPickerBtn, { backgroundColor: theme.bgSecondary }]}
-                      onPress={() => {
-                        setIsModelModalOpen(true);
-                        refreshModelCatalog();
-                      }}
-                      disabled={isPromptDisabled}
-                    >
-                      <Text style={[styles.modelPickerText, { color: theme.textPrimary }]}>
-                        {isCodexModel(selectedModel)
-                          ? `${getModelLabel(selectedModel)} ${selectedCodexEffort}`
-                          : getModelLabel(selectedModel)}
-                      </Text>
-                      <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
-                    </TouchableOpacity>
-
-                    {/* Multi-Tenant Harness Profile Selector Dropdown */}
-                    {harnessProfiles.length > 0 && (
                       <TouchableOpacity
-                        style={[styles.modelPickerBtn, { backgroundColor: theme.bgSecondary, marginLeft: 6 }]}
+                        style={[styles.toolBtn, { backgroundColor: isPlusModalOpen ? theme.accent : theme.bgSecondary }]}
+                        onPress={() => setIsPlusModalOpen(true)}
+                        disabled={uploadingMedia || isPromptDisabled}
+                      >
+                        {uploadingMedia ? (
+                          <ActivityIndicator size="small" color={theme.textSecondary} />
+                        ) : (
+                          <Text style={{ color: isPlusModalOpen ? '#ffffff' : theme.textSecondary, fontSize: 16 }}>＋</Text>
+                        )}
+                      </TouchableOpacity>
+
+                      {/* Model Selector Dropdown */}
+                      <TouchableOpacity
+                        style={[styles.modelPickerBtn, { backgroundColor: theme.bgSecondary }]}
                         onPress={() => {
-                          loadHarnessProfiles();
-                          setIsProfileModalOpen(true);
+                          setIsModelModalOpen(true);
+                          refreshModelCatalog();
                         }}
                         disabled={isPromptDisabled}
                       >
-                        <Text style={[styles.modelPickerText, { color: theme.textPrimary }]} numberOfLines={1}>
-                          👤 {harnessProfiles.find(p => p.id === selectedProfileId)?.label || 'Profile'}
+                        <Text style={[styles.modelPickerText, { color: theme.textPrimary }]} numberOfLines={1} ellipsizeMode="tail">
+                          {isCodexModel(selectedModel)
+                            ? `${getModelLabel(selectedModel)} ${selectedCodexEffort}`
+                            : getModelLabel(selectedModel)}
                         </Text>
                         <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
                       </TouchableOpacity>
-                    )}
+
+                      {/* Multi-Tenant Harness Profile Selector Dropdown */}
+                      {harnessProfiles.length > 0 && (
+                        <TouchableOpacity
+                          style={[styles.modelPickerBtn, { backgroundColor: theme.bgSecondary }]}
+                          onPress={() => {
+                            loadHarnessProfiles();
+                            setIsProfileModalOpen(true);
+                          }}
+                          disabled={isPromptDisabled}
+                        >
+                          <Text style={[styles.modelPickerText, { color: theme.textPrimary }]} numberOfLines={1} ellipsizeMode="tail">
+                            👤 {harnessProfiles.find(p => p.id === selectedProfileId)?.label || 'Profile'}
+                          </Text>
+                          <Text style={{ color: theme.textSecondary, fontSize: 10, marginLeft: 4 }}>▼</Text>
+                        </TouchableOpacity>
+                      )}
+                    </ScrollView>
                   </View>
 
                   <View style={styles.toolRowRight}>
@@ -5469,6 +5476,17 @@ queuedPromptBubble: {
     alignItems: 'center',
     marginTop: 8,
   },
+  toolRowLeftContainer: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 8,
+  },
+  toolRowLeftScroll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingRight: 4,
+  },
   toolRowLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -5478,6 +5496,7 @@ queuedPromptBubble: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexShrink: 0,
   },
   toolBtn: {
     width: 28,
@@ -5511,10 +5530,10 @@ queuedPromptBubble: {
   modelPickerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 12,
-    maxWidth: 230,
+    maxWidth: 160,
   },
   modelPickerText: {
     fontSize: 11,
