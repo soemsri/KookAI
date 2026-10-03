@@ -1,6 +1,6 @@
 {
   "name": "kookai",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "main": "index.ts",
   "dependencies": {
     "expo": "~56.0.12",
