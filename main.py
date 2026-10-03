@@ -5759,13 +5759,11 @@ def run_ccusage_safely():
 async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
     verify_authorization(request)
     
-    # Resolve target profile if specified or default for agy
+    # Resolve target profile if specified
     target_prof_id = profile_id or request.query_params.get("profile_id")
     target_profile = None
     if target_prof_id:
         target_profile = get_profile(target_prof_id)
-    if not target_profile:
-        target_profile = get_default_profile("agy")
 
     is_ultra = False
     target_profile_root = None
