@@ -2854,7 +2854,7 @@ allowQueue: false,
     ]);
   };
 
-  const fetchUsageLimits = async () => {
+  const fetchUsageLimits = async (overrideProfileId?: string) => {
     usageLimitControllerRef.current?.abort();
     const controller = new AbortController();
     usageLimitControllerRef.current = controller;
@@ -2863,7 +2863,9 @@ allowQueue: false,
     setLoadingUsage(true);
     setUsageLimitError('');
     try {
-      const data = await callHostApi('/api/usage-limits', { signal: controller.signal });
+      const activeProf = overrideProfileId ?? selectedProfileId;
+      const profileParam = activeProf ? `?profile_id=${encodeURIComponent(activeProf)}` : '';
+      const data = await callHostApi(`/api/usage-limits${profileParam}`, { signal: controller.signal });
       setUsageLimitData(data);
     } catch (err: any) {
       console.error("Error loading usage limits:", err);
@@ -2883,6 +2885,12 @@ allowQueue: false,
       }
     }
   };
+
+  useEffect(() => {
+    if (selectedProfileId) {
+      fetchUsageLimits(selectedProfileId);
+    }
+  }, [selectedProfileId]);
 
   const getActiveUsagePercentage = () => {
     if (!usageLimitData) return 0;
@@ -4010,6 +4018,7 @@ allowQueue: false,
                     style={[styles.modalItem, isActive && { backgroundColor: theme.bgActive }]}
                     onPress={() => {
                       setSelectedProfileId(p.id);
+                      fetchUsageLimits(p.id);
                       setIsProfileModalOpen(false);
                       showToast(`Switched account to ${p.label}`);
                     }}

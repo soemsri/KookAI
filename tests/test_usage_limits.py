@@ -215,8 +215,9 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertEqual(data["claudeRateLimits"]["weekly"]["remainingPercent"], 100.0)
         self.assertEqual(data["claudeRateLimits"]["hourly"]["remainingPercent"], 100.0)
 
+    @unittest.skipIf(os.name == "nt", "os.killpg only available on POSIX")
     @patch("main.subprocess.Popen")
-    @patch("main.os.killpg")
+    @patch("main.os.killpg", create=True)
     def test_run_ccusage_safely_kills_process_group_on_timeout(self, mock_killpg, mock_popen):
         import main
         import subprocess
@@ -227,11 +228,12 @@ class TestUsageLimitsAPI(unittest.TestCase):
         mock_popen.return_value = mock_proc
 
         with patch("main.os.name", "posix"):
-            with patch("main.os.getpgid", return_value=99999):
+            with patch("main.os.getpgid", return_value=99999, create=True):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     main.run_ccusage_safely()
 
-        mock_killpg.assert_called_once_with(99999, main.signal.SIGKILL)
+        sigkill = getattr(main.signal, "SIGKILL", 9)
+        mock_killpg.assert_called_once_with(99999, sigkill)
 
     def test_ccusage_cache_reuse(self):
         import main
@@ -370,8 +372,72 @@ class TestUsageLimitsAPI(unittest.TestCase):
         data = res.json()
         self.assertEqual(data.get("antigravityPlan"), "Google AI Pro")
 
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
+    @patch("main.get_profile")
+    @patch("main.fetch_antigravity_token_usage", return_value=(0, 0))
+    @patch("subprocess.run")
+    def test_get_usage_limits_with_ultra_profile(self, mock_subprocess, mock_agy, mock_get_profile, mock_ls, mock_codex, mock_auth):
+        mock_get_profile.return_value = {
+            "id": "prof_google_ultra_5x_66a188",
+            "cli_id": "agy",
+            "label": "Google Ultra 5x",
+            "profile_root": "/fake/profile/root",
+        }
+        proc_mock = MagicMock()
+        proc_mock.returncode = 0
+        proc_mock.stdout = json.dumps({"daily": [], "session": []})
+        mock_subprocess.return_value = proc_mock
+
+        res = self.client.get("/api/usage-limits?profile_id=prof_google_ultra_5x_66a188")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["antigravityPlan"], "Google AI Ultra")
+        self.assertEqual(data["geminiWeeklyLimit"], 50000000)
+        self.assertEqual(data["geminiHourlyLimit"], 5000000)
+        self.assertIsNotNone(data["geminiRateLimits"])
+        self.assertEqual(data["geminiRateLimits"]["remainingPercent"], 100.0)
+        self.assertEqual(data["geminiRateLimits"]["usedPercent"], 0.0)
+        self.assertEqual(data["geminiRateLimits"]["planName"], "Google AI Ultra")
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota")
+    @patch("main.get_profile")
+    @patch("main.get_profile_oauth_email", return_value="twqsdrfhk@gmail.com")
+    @patch("main.fetch_antigravity_token_usage", return_value=(0, 0))
+    @patch("subprocess.run")
+    def test_get_usage_limits_email_mismatch_discards_ls(self, mock_subprocess, mock_agy, mock_email, mock_get_profile, mock_ls, mock_codex, mock_auth):
+        # LS reports rangsarn@gmail.com (Pro), but profile is twqsdrfhk@gmail.com (Ultra)
+        mock_ls.return_value = {
+            "userStatus": {
+                "email": "rangsarn@gmail.com",
+                "userTier": {"name": "Google AI Pro"}
+            }
+        }
+        mock_get_profile.return_value = {
+            "id": "prof_google_ultra_5x_66a188",
+            "cli_id": "agy",
+            "label": "Google Ultra 5x",
+            "profile_root": "/fake/profile/root",
+        }
+        proc_mock = MagicMock()
+        proc_mock.returncode = 0
+        proc_mock.stdout = json.dumps({"daily": [], "session": []})
+        mock_subprocess.return_value = proc_mock
+
+        res = self.client.get("/api/usage-limits?profile_id=prof_google_ultra_5x_66a188")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        # Must retain Ultra plan and not be overwritten by LS rangsarn@gmail.com
+        self.assertEqual(data["antigravityPlan"], "Google AI Ultra")
+        self.assertEqual(data["geminiWeeklyLimit"], 50000000)
+        self.assertEqual(data["geminiRateLimits"]["remainingPercent"], 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

@@ -5605,10 +5605,55 @@ def fetch_antigravity_language_server_quota() -> Optional[dict[str, Any]]:
     return None
 
 
-def fetch_antigravity_token_usage(now_epoch: float) -> tuple[int, int]:
+def get_profile_oauth_email(profile: Optional[dict]) -> Optional[str]:
+    """Extract oauth email associated with a profile, if available."""
+    if not profile or not isinstance(profile, dict):
+        return None
+    if profile.get("email"):
+        return str(profile["email"]).strip()
+    profile_root = profile.get("profile_root")
+    if not profile_root or not os.path.isdir(profile_root):
+        return None
+
+    # Check antigravity-oauth-token in profile_root
+    token_file = os.path.join(profile_root, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+    if os.path.isfile(token_file):
+        try:
+            with open(token_file, "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+            if data.get("email"):
+                return str(data["email"]).strip()
+            id_token = data.get("id_token") or (data.get("token", {}) if isinstance(data.get("token"), dict) else {}).get("id_token")
+            if id_token and isinstance(id_token, str) and "." in id_token:
+                parts = id_token.split(".")
+                if len(parts) >= 2:
+                    import base64
+                    payload_b64 = parts[1]
+                    payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+                    payload_json = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8", errors="ignore")
+                    jwt_data = json.loads(payload_json)
+                    if jwt_data.get("email"):
+                        return str(jwt_data["email"]).strip()
+        except Exception as exc:
+            logging.debug("Could not parse profile oauth token %s: %s", token_file, exc)
+
+    return None
+
+
+def fetch_antigravity_token_usage(now_epoch: float, profile_root: Optional[str] = None) -> tuple[int, int]:
     """Calculate token usage for Antigravity / Gemini from local transcripts."""
-    brain_paths = [os.path.join(d, "brain/*") for d in ALL_ANTIGRAVITY_CLI_DIRS]
-    brain_paths.append(os.path.expanduser("~/.gemini/antigravity/brain/*"))
+    brain_paths = []
+    if profile_root and os.path.isdir(profile_root):
+        candidate_dirs = [
+            os.path.join(profile_root, ".gemini", "antigravity-cli", "brain", "*"),
+            os.path.join(profile_root, ".gemini", "antigravity", "brain", "*"),
+        ]
+        brain_paths = [p for p in candidate_dirs if glob.glob(p)]
+
+    if not brain_paths:
+        brain_paths = [os.path.join(d, "brain/*") for d in ALL_ANTIGRAVITY_CLI_DIRS]
+        brain_paths.append(os.path.expanduser("~/.gemini/antigravity/brain/*"))
+
     weekly_tokens = 0
     hourly_tokens = 0
     scanned_folders = set()
@@ -5711,9 +5756,34 @@ def run_ccusage_safely():
 
 
 @app.get("/api/usage-limits")
-async def get_usage_limits(request: Request):
+async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
     verify_authorization(request)
     
+    # Resolve target profile if specified or default for agy
+    target_prof_id = profile_id or request.query_params.get("profile_id")
+    target_profile = None
+    if target_prof_id:
+        target_profile = get_profile(target_prof_id)
+    if not target_profile:
+        target_profile = get_default_profile("agy")
+
+    is_ultra = False
+    target_profile_root = None
+    target_profile_email = None
+    if target_profile:
+        target_profile_root = target_profile.get("profile_root")
+        target_profile_email = get_profile_oauth_email(target_profile)
+        lbl = (target_profile.get("label") or "").lower()
+        pid = (target_profile.get("id") or "").lower()
+        if "ultra" in lbl or "ultra" in pid:
+            is_ultra = True
+
+    default_plan = "Google AI Ultra" if is_ultra else "Google AI Pro"
+    gw_limit = 50000000 if is_ultra else 10000000
+    gh_limit = 5000000 if is_ultra else 1000000
+    cw_limit = 100000000
+    ch_limit = 10000000
+
     result_data = {
         "geminiWeeklyPercent": 0.0,
         "geminiHourlyPercent": 0.0,
@@ -5724,17 +5794,17 @@ async def get_usage_limits(request: Request):
         "xaiWeeklyPercent": 0.0,
         "xaiHourlyPercent": 0.0,
         "geminiWeeklyUsed": 0,
-        "geminiWeeklyLimit": 10000000,
+        "geminiWeeklyLimit": gw_limit,
         "geminiHourlyUsed": 0,
-        "geminiHourlyLimit": 1000000,
+        "geminiHourlyLimit": gh_limit,
         "claudeWeeklyUsed": 0,
-        "claudeWeeklyLimit": 100000000,
+        "claudeWeeklyLimit": cw_limit,
         "claudeHourlyUsed": 0,
-        "claudeHourlyLimit": 10000000,
+        "claudeHourlyLimit": ch_limit,
         "gptWeeklyUsed": 0,
-        "gptWeeklyLimit": 100000000,
+        "gptWeeklyLimit": cw_limit,
         "gptHourlyUsed": 0,
-        "gptHourlyLimit": 10000000,
+        "gptHourlyLimit": ch_limit,
         "xaiWeeklyUsed": 0,
         "xaiWeeklyLimit": 0,
         "xaiHourlyUsed": 0,
@@ -5745,7 +5815,7 @@ async def get_usage_limits(request: Request):
         "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop.",
         "geminiUsageNote": "Gemini models use your Google AI / Antigravity workspace quota. Token usage reflects active workspace sessions and recent prompt activity.",
         "xaiUsageNote": "Grok usage and billing are managed by your xAI account. Grok Build does not currently expose an account-wide quota percentage here.",
-        "antigravityPlan": "Google AI Pro",
+        "antigravityPlan": default_plan,
     }
 
     # Fetch provider rate limits and Language Server status concurrently
@@ -5777,6 +5847,25 @@ async def get_usage_limits(request: Request):
             result_data["gptHourlyUsed"] = secondary["usedPercent"]
             result_data["gptHourlyLimit"] = 100
 
+    # If language server returned a status, verify email match and tier compatibility
+    if antigravity_status:
+        user_status = antigravity_status.get("userStatus") if isinstance(antigravity_status.get("userStatus"), dict) else antigravity_status
+        ls_email = None
+        if isinstance(user_status, dict):
+            ls_email = user_status.get("email") or user_status.get("userEmail") or (user_status.get("user", {}) if isinstance(user_status.get("user"), dict) else {}).get("email")
+        if target_profile_email and ls_email and target_profile_email.lower() != str(ls_email).lower():
+            logging.info("Antigravity language server email (%s) does not match profile email (%s); ignoring language server quota.", ls_email, target_profile_email)
+            antigravity_status = None
+
+    if antigravity_status and is_ultra:
+        user_status = antigravity_status.get("userStatus") if isinstance(antigravity_status.get("userStatus"), dict) else antigravity_status
+        user_tier = user_status.get("userTier", {}) if isinstance(user_status, dict) else {}
+        tier_id = str(user_tier.get("id", "")).lower()
+        tier_name = str(user_tier.get("name", "")).lower()
+        if ("pro" in tier_id or "pro" in tier_name) and not ("ultra" in tier_id or "ultra" in tier_name):
+            logging.info("Antigravity language server reports Pro tier but profile is Ultra; ignoring language server quota.")
+            antigravity_status = None
+
     if antigravity_status:
         user_status = antigravity_status.get("userStatus") if isinstance(antigravity_status.get("userStatus"), dict) else antigravity_status
         quota_summary = antigravity_status.get("quotaSummary") if isinstance(antigravity_status.get("quotaSummary"), dict) else None
@@ -5789,7 +5878,7 @@ async def get_usage_limits(request: Request):
                 tier_name = "Google AI Pro"
             elif "ultra" in tier_id:
                 tier_name = "Google AI Ultra"
-        plan_name = tier_name or result_data.get("antigravityPlan") or "Google AI Pro"
+        plan_name = tier_name or result_data.get("antigravityPlan") or default_plan
         result_data["antigravityPlan"] = plan_name
 
         gemini_weekly_bucket = None
@@ -6031,26 +6120,49 @@ async def get_usage_limits(request: Request):
                     if not is_testing:
                         _ccusage_cache["timestamp"] = now_ts
 
-    # Limits
-    gw_limit = 10000000
-    gh_limit = 1000000
+    # cw_limit and ch_limit
     cw_limit = 100000000
     ch_limit = 10000000
 
     if not result_data.get("geminiRateLimits"):
-        # Fallback to local Antigravity transcript scan if ccusage reports zero for Gemini
-        if gemini_weekly == 0 and gemini_hourly == 0:
+        # Fallback to local Antigravity transcript scan if ccusage reports zero for Gemini or when scoped to a specific profile
+        if (target_profile_root and os.path.isdir(target_profile_root)) or (gemini_weekly == 0 and gemini_hourly == 0):
             try:
-                agy_weekly, agy_hourly = fetch_antigravity_token_usage(datetime.datetime.now(datetime.timezone.utc).timestamp())
+                agy_weekly, agy_hourly = fetch_antigravity_token_usage(
+                    datetime.datetime.now(datetime.timezone.utc).timestamp(),
+                    profile_root=target_profile_root,
+                )
                 gemini_weekly = agy_weekly
                 gemini_hourly = agy_hourly
             except Exception as exc:
                 logging.warning(f"Failed to calculate local Antigravity usage: {exc}")
 
+        gemini_weekly_pct = min(100.0, round((gemini_weekly / gw_limit) * 100, 1))
+        gemini_hourly_pct = min(100.0, round((gemini_hourly / gh_limit) * 100, 1))
         result_data["geminiWeeklyUsed"] = gemini_weekly
-        result_data["geminiWeeklyPercent"] = min(100.0, round((gemini_weekly / gw_limit) * 100, 1))
+        result_data["geminiWeeklyPercent"] = gemini_weekly_pct
         result_data["geminiHourlyUsed"] = gemini_hourly
-        result_data["geminiHourlyPercent"] = min(100.0, round((gemini_hourly / gh_limit) * 100, 1))
+        result_data["geminiHourlyPercent"] = gemini_hourly_pct
+
+        rem_weekly = max(0.0, round(100.0 - gemini_weekly_pct, 1))
+        rem_hourly = max(0.0, round(100.0 - gemini_hourly_pct, 1))
+        result_data["geminiRateLimits"] = {
+            "available": True,
+            "planName": result_data["antigravityPlan"],
+            "weekly": {
+                "usedPercent": gemini_weekly_pct,
+                "remainingPercent": rem_weekly,
+                "description": f"You have {rem_weekly:.0f}% of your weekly limit remaining" if rem_weekly >= 100 else f"Used {gemini_weekly:,} of {gw_limit:,} tokens ({gemini_weekly_pct:.1f}%)",
+            },
+            "hourly": {
+                "usedPercent": gemini_hourly_pct,
+                "remainingPercent": rem_hourly,
+                "description": f"You have {rem_hourly:.0f}% of your 5-hour limit remaining" if rem_hourly >= 100 else f"Used {gemini_hourly:,} of {gh_limit:,} tokens ({gemini_hourly_pct:.1f}%)",
+            },
+            "usedPercent": gemini_hourly_pct,
+            "remainingPercent": rem_hourly,
+            "description": None,
+        }
 
     if not result_data.get("claudeRateLimits"):
         result_data["claudeWeeklyUsed"] = claude_weekly
