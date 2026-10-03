@@ -2493,6 +2493,51 @@ body {
   border-color: var(--border-focus);
 }
 
+.settings-select {
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color var(--transition-fast);
+  cursor: pointer;
+}
+
+.settings-select:focus {
+  border-color: var(--border-focus);
+}
+
+.settings-select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.profile-add-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.profile-add-form .settings-select {
+  max-width: 140px;
+  padding: 7px 10px;
+}
+
+.profile-add-form .settings-input {
+  flex: 1;
+  min-width: 180px;
+  padding: 7px 12px;
+}
+
+.profile-add-form .settings-input::placeholder {
+  color: var(--text-muted);
+}
+
 /* User Role & Admin Badges */
 .user-role-badge {
   display: inline-flex;

@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import tempfile
 from unittest import mock
 import pytest
@@ -81,8 +82,7 @@ def test_harness_profiles_api_lifecycle(client_with_temp_profiles):
             assert mock_launch.called
             call_kwargs = mock_launch.call_args.kwargs
             env_override = call_kwargs.get("env_override") or mock_launch.call_args.args[2]
-            assert "CODEX_HOME" in env_override
-            assert env_override["CODEX_HOME"].endswith("prof_work/.codex")
+            assert os.path.normpath(env_override["CODEX_HOME"]).endswith(os.path.normpath("prof_work/.codex"))
 
     # 7. Delete profile
     resp = client.delete("/api/harness/profiles/prof_work")
@@ -105,3 +105,47 @@ def test_harness_profiles_admin_permission_check(client_with_temp_profiles):
         )
         assert resp.status_code == 403
         assert "Local access is required" in resp.json()["detail"]
+
+
+def test_run_agy_cli_forwards_profile_id():
+    with mock.patch("main.run_agent_command") as mock_agent_cmd, \
+         mock.patch("main.get_existing_db_ids", return_value=set()):
+        mock_agent_cmd.return_value = subprocess.CompletedProcess(
+            args=["agy"], returncode=0, stdout="Success response", stderr=""
+        )
+        reply, cid = main.run_agy_cli(
+            message="hello",
+            model_ui_name="Google Ultra 5x",
+            conversation_id="conv_123",
+            profile_id="prof_google_ultra_5x_66a188",
+        )
+        assert reply == "Success response"
+        assert mock_agent_cmd.called
+        kwargs = mock_agent_cmd.call_args.kwargs
+        assert kwargs.get("profile_id") == "prof_google_ultra_5x_66a188"
+
+
+def test_invoke_provider_backend_resolves_default_profile():
+    with mock.patch("main.get_default_profile") as mock_get_def, \
+         mock.patch("main.run_agy_cli") as mock_run_agy:
+        mock_get_def.return_value = {"id": "prof_google_ultra_5x_66a188"}
+        mock_run_agy.return_value = ("hello reply", "cid_1")
+
+        reply, cid = main._invoke_provider_backend(
+            prov="agy",
+            message="hi",
+            prov_model="gemini-3.8-flash",
+            conversation_id="cid_1",
+            target="Sandbox",
+            workspace="agy",
+            effort="Medium",
+            speed="Standard",
+            thinking=True,
+            image_paths=None,
+            progress_callback=None,
+            profile_id=None,
+        )
+        assert mock_get_def.called
+        assert mock_run_agy.called
+        kwargs = mock_run_agy.call_args.kwargs
+        assert kwargs.get("profile_id") == "prof_google_ultra_5x_66a188"

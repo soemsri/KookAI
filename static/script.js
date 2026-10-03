@@ -2260,14 +2260,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     harnessProfilesList.innerHTML = profiles.map(p => `
-      <div class="cli-connection-card" data-profile-card="${escapeHtml(p.id)}" style="display:flex; justify-content:space-between; align-items:center; padding:12px; margin-bottom:8px; border-radius:8px; background:var(--bg-surface-2, rgba(255,255,255,0.03)); border:1px solid var(--border-color, #333);">
+      <div class="cli-connection-card" data-profile-card="${escapeHtml(p.id)}" style="display:flex; justify-content:space-between; align-items:center; padding:12px; margin-bottom:8px; border-radius:8px; background:var(--bg-primary); border:1px solid var(--border-color);">
         <div>
           <div style="display:flex; align-items:center; gap:8px;">
-            <strong style="font-size:14px;">${escapeHtml(p.label)}</strong>
-            <span class="badge" style="font-size:11px; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.1);">${escapeHtml(p.cli_id.toUpperCase())}</span>
-            ${p.is_default ? '<span class="badge" style="font-size:11px; padding:2px 6px; border-radius:4px; background:#4caf50; color:#fff;">Default</span>' : ''}
+            <strong style="font-size:14px; color:var(--text-primary);">${escapeHtml(p.label)}</strong>
+            <span class="badge" style="font-size:11px; padding:2px 6px; border-radius:4px; background:var(--bg-active); color:var(--text-secondary); font-weight:600;">${escapeHtml(p.cli_id.toUpperCase())}</span>
+            ${p.is_default ? '<span class="badge" style="font-size:11px; padding:2px 6px; border-radius:4px; background:#10b981; color:#fff; font-weight:600;">Default</span>' : ''}
           </div>
-          <div style="font-size:12px; opacity:0.6; margin-top:4px;">ID: <code>${escapeHtml(p.id)}</code></div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">ID: <code>${escapeHtml(p.id)}</code></div>
           <div class="cli-action-message hidden" data-profile-message="${escapeHtml(p.id)}"></div>
         </div>
         <div style="display:flex; gap:6px;">

@@ -2808,16 +2808,25 @@ def run_agent_command(
     )
 
 
-def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=None):
+def run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=None, profile_id=None):
     return run_agent_command(
         cmd,
         cwd_path,
         timeout=timeout,
         progress_callback=progress_callback,
         progress_line_classifier=classify_cli_progress_line,
+        profile_id=profile_id,
     )
 
-def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: str = "Sandbox", workspace: str = "agy", progress_callback=None):
+def run_agy_cli(
+    message: str,
+    model_ui_name: str,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    progress_callback=None,
+    profile_id: Optional[str] = None,
+):
     mapped_model = map_model_name(model_ui_name)
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
@@ -2939,8 +2948,9 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
                         pass
         return newest
     
+    extra_agy_kwargs = {"profile_id": profile_id} if profile_id else {}
     try:
-        result = run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
+        result = run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback, **extra_agy_kwargs)
         
         # Check stderr and stdout; agy can report conversation failures with exit code 0.
         if result.returncode != 0 or is_recoverable_conversation_error(result):
@@ -2957,7 +2967,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
                 if progress_callback:
                     progress_callback("progress", "Retrying after clearing conversation lock...")
                 try:
-                    result = run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
+                    result = run_agy_command(cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback, **extra_agy_kwargs)
                 except subprocess.TimeoutExpired:
                     result = subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Error: timeout waiting for response")
 
@@ -2981,7 +2991,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
                     logging.info(f"Executing fallback agy CLI in {cwd_path}: {' '.join(fallback_cmd)}")
                     if progress_callback:
                         progress_callback("progress", "Starting a fresh conversation after retry failed...")
-                    result = run_agy_command(fallback_cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
+                    result = run_agy_command(fallback_cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback, **extra_agy_kwargs)
                     use_continue = False # We've started a new conversation
         
         # Scan for new DB ID if we started a new conversation
@@ -3035,7 +3045,7 @@ def run_agy_cli(message: str, model_ui_name: str, conversation_id: str, target: 
                     if token in ("--continue", "-c"):
                         continue
                     fallback_cmd.append(token)
-                result = run_agy_command(fallback_cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback)
+                result = run_agy_command(fallback_cmd, cwd_path, timeout=AGY_CLI_TIMEOUT, progress_callback=progress_callback, **extra_agy_kwargs)
                 if result.returncode == 0 and not is_recoverable_conversation_error(result):
                     after_dbs = get_existing_db_ids()
                     new_ids = after_dbs - before_dbs
@@ -3334,6 +3344,7 @@ def run_kimi_cli(
     target: str = "Sandbox",
     workspace: str = "agy",
     progress_callback=None,
+    profile_id: Optional[str] = None,
 ):
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
@@ -3380,6 +3391,7 @@ def run_kimi_cli(
             progress_callback=progress_callback,
             progress_line_classifier=classify_kimi_progress_line,
             raw_line_callback=capture_kimi_line,
+            profile_id=profile_id,
         )
         parsed = parse_kimi_stream_json(result.stdout or "")
         streamed_message = "\n".join(stream_result["parts"])
@@ -3460,6 +3472,7 @@ def run_grok_cli(
     workspace: str = "agy",
     effort: str = "Medium",
     progress_callback=None,
+    profile_id: Optional[str] = None,
 ):
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
@@ -3509,6 +3522,7 @@ def run_grok_cli(
             progress_callback=progress_callback,
             progress_line_classifier=classify_grok_progress_line,
             raw_line_callback=capture_grok_line,
+            profile_id=profile_id,
         )
         parsed = parse_grok_streaming_json(result.stdout or "")
         return result, {
@@ -3588,6 +3602,7 @@ def run_muse_cli(
     workspace: str = "agy",
     effort: str = "Medium",
     progress_callback=None,
+    profile_id: Optional[str] = None,
 ):
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
@@ -3637,6 +3652,7 @@ def run_muse_cli(
             progress_callback=progress_callback,
             progress_line_classifier=classify_muse_progress_line,
             raw_line_callback=capture_muse_line,
+            profile_id=profile_id,
         )
         parsed = parse_muse_streaming_json(result.stdout or "")
         return result, {
@@ -3715,6 +3731,7 @@ def run_deepseek_cli(
     target: str = "Sandbox",
     workspace: str = "agy",
     progress_callback=None,
+    profile_id: Optional[str] = None,
 ):
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
@@ -3762,6 +3779,7 @@ def run_deepseek_cli(
             progress_callback=progress_callback,
             progress_line_classifier=classify_deepseek_progress_line,
             raw_line_callback=capture_deepseek_line,
+            profile_id=profile_id,
         )
         parsed = parse_deepseek_stream_json(result.stdout or "")
         return result, {
@@ -3840,6 +3858,7 @@ def run_zai_cli(
     target: str = "Sandbox",
     workspace: str = "agy",
     progress_callback=None,
+    profile_id: Optional[str] = None,
 ):
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
@@ -3876,6 +3895,7 @@ def run_zai_cli(
             progress_callback=progress_callback,
             progress_line_classifier=classify_zai_progress_line,
             raw_line_callback=capture,
+            profile_id=profile_id,
         )
         parsed = parse_zai_stream_json(result.stdout or "")
         return result, {
@@ -4010,6 +4030,7 @@ def _invoke_provider_backend(
             target,
             workspace,
             progress_callback,
+            profile_id=profile_id,
         )
     elif prov == "xai":
         return run_grok_cli(
@@ -4020,6 +4041,7 @@ def _invoke_provider_backend(
             workspace,
             effort,
             progress_callback,
+            profile_id=profile_id,
         )
     elif prov == "muse":
         return run_muse_cli(
@@ -4030,6 +4052,7 @@ def _invoke_provider_backend(
             workspace,
             effort,
             progress_callback,
+            profile_id=profile_id,
         )
     elif prov == "deepseek":
         return run_deepseek_cli(
@@ -4039,6 +4062,7 @@ def _invoke_provider_backend(
             target,
             workspace,
             progress_callback,
+            profile_id=profile_id,
         )
     elif prov == "zai":
         return run_zai_cli(
@@ -4048,6 +4072,7 @@ def _invoke_provider_backend(
             target,
             workspace,
             progress_callback,
+            profile_id=profile_id,
         )
     else:
         return run_agy_cli(
@@ -4057,6 +4082,7 @@ def _invoke_provider_backend(
             target,
             workspace,
             progress_callback,
+            profile_id=profile_id,
         )
 
 

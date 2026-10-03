@@ -944,8 +944,8 @@
               </div>
             </div>
             
-            <div class="profile-add-form" style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;">
-              <select id="newProfileCli" class="settings-select" style="max-width: 140px; padding: 6px 10px; border-radius: 6px; background: var(--bg-surface, #222); color: inherit; border: 1px solid var(--border-color, #444);">
+            <div class="profile-add-form">
+              <select id="newProfileCli" class="settings-select">
                 <option value="codex">Codex</option>
                 <option value="claude">Claude</option>
                 <option value="agy">Google Agy</option>
@@ -955,7 +955,7 @@
                 <option value="deepseek">DeepSeek</option>
                 <option value="zai">Z.ai</option>
               </select>
-              <input type="text" id="newProfileLabel" placeholder="Account label (e.g. a@gmail.com)" style="flex: 1; min-width: 180px; padding: 6px 12px; border-radius: 6px; background: var(--bg-surface, #222); color: inherit; border: 1px solid var(--border-color, #444);">
+              <input type="text" id="newProfileLabel" class="settings-input" placeholder="Account label (e.g. a@gmail.com)">
               <button type="button" class="cli-action-btn primary" id="addProfileBtn">+ Add Profile</button>
             </div>
             <div id="profileFormMessage" class="cli-action-message hidden" style="margin-bottom: 12px;"></div>
