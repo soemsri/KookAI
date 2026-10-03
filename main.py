@@ -5522,8 +5522,159 @@ async def upload_media_endpoint(conversation_id: str, filename: str, request: Re
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
-def fetch_antigravity_language_server_quota() -> Optional[dict[str, Any]]:
-    """Fetch live model quota status directly from Antigravity Language Server."""
+def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Fetch live model quota directly from Google Cloud Code API using OAuth token."""
+    import base64
+    import datetime
+    import shutil
+    import subprocess
+
+    candidates = []
+    if profile_root:
+        candidates.extend([
+            os.path.join(profile_root, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+            os.path.join(profile_root, ".gemini", "antigravity", "antigravity-oauth-token"),
+            os.path.join(profile_root, ".gemini", "antigravity", "jetski-standalone-oauth-token"),
+        ])
+    home = os.path.expanduser("~")
+    candidates.extend([
+        os.path.join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+        os.path.join(home, ".gemini", "antigravity", "antigravity-oauth-token"),
+        os.path.join(home, ".gemini", "antigravity", "jetski-standalone-oauth-token"),
+        "/root/.gemini/antigravity-cli/antigravity-oauth-token",
+        "/root/.gemini/antigravity/antigravity-oauth-token",
+    ])
+
+    token_path = None
+    for p in candidates:
+        if os.path.isfile(p):
+            token_path = p
+            break
+
+    if not token_path:
+        return None
+
+    try:
+        with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+
+    token_info = data.get("token") or {}
+    access_token = token_info.get("access_token")
+    expiry_str = token_info.get("expiry")
+
+    # If near expiry (< 3 min) or missing, refresh via agy CLI
+    needs_refresh = False
+    if expiry_str:
+        try:
+            clean_exp = expiry_str.split(".")[0] + "Z"
+            exp_dt = datetime.datetime.strptime(clean_exp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+            now_dt = datetime.datetime.now(datetime.timezone.utc)
+            if (exp_dt - now_dt).total_seconds() < 180:
+                needs_refresh = True
+        except Exception:
+            pass
+
+    if needs_refresh or not access_token:
+        agy_cmd = shutil.which("agy") or "/root/.local/bin/agy"
+        if not (agy_cmd and os.path.isfile(agy_cmd)):
+            local_app = os.path.expanduser("~/.local/bin/agy")
+            if os.path.isfile(local_app):
+                agy_cmd = local_app
+        if agy_cmd and (shutil.which(agy_cmd) or os.path.isfile(agy_cmd)):
+            env = os.environ.copy()
+            if profile_root:
+                env["HOME"] = profile_root
+            try:
+                subprocess.run([agy_cmd, "models"], env=env, timeout=6, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
+                    data = json.load(f)
+                token_info = data.get("token") or {}
+                access_token = token_info.get("access_token")
+            except Exception:
+                pass
+
+    if not access_token:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "User-Agent": "antigravity/2.19.1",
+    }
+
+    quota_summary = None
+    user_status = {}
+
+    # Extract email from id_token
+    email = data.get("email")
+    if not email:
+        id_token = data.get("id_token") or token_info.get("id_token")
+        if id_token and isinstance(id_token, str) and "." in id_token:
+            parts = id_token.split(".")
+            if len(parts) >= 2:
+                try:
+                    payload = parts[1]
+                    payload += "=" * ((4 - len(payload) % 4) % 4)
+                    claims = json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8", errors="ignore"))
+                    email = claims.get("email")
+                except Exception:
+                    pass
+
+    # 1. RetrieveUserQuotaSummary
+    try:
+        req = urllib.request.Request(
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            data=json.dumps({}).encode("utf-8"),
+            headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            if resp.status == 200:
+                quota_summary = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        logging.debug(f"retrieveUserQuotaSummary error: {exc}")
+
+    # 2. loadCodeAssist for user tier
+    try:
+        req = urllib.request.Request(
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+            data=json.dumps({}).encode("utf-8"),
+            headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            if resp.status == 200:
+                ca_data = json.loads(resp.read().decode("utf-8"))
+                paid_tier = ca_data.get("paidTier") or {}
+                curr_tier = ca_data.get("currentTier") or {}
+                tier_to_use = paid_tier if paid_tier.get("name") else curr_tier
+                user_status = {
+                    "userTier": tier_to_use,
+                    "email": email,
+                }
+    except Exception as exc:
+        logging.debug(f"loadCodeAssist error: {exc}")
+        if email:
+            user_status["email"] = email
+
+    if quota_summary or user_status:
+        return {
+            "userStatus": user_status,
+            "quotaSummary": quota_summary,
+        }
+    return None
+
+def fetch_antigravity_language_server_quota(profile_root: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Fetch live model quota status from Google Cloud Code API or Antigravity Language Server."""
+    # 1. Try direct Cloud Code REST API first using OAuth token (for headless Linux/VPS or profiles)
+    try:
+        cloud_quota = fetch_antigravity_cloudcode_quota(profile_root)
+        if cloud_quota and (cloud_quota.get("quotaSummary") or cloud_quota.get("userStatus")):
+            return cloud_quota
+    except Exception as exc:
+        logging.debug(f"Direct Cloud Code quota fetch failed: {exc}")
+
+    # 2. Fall back to local Language Server process scanner (for desktop IDE sessions)
     try:
         import psutil
         import ssl
@@ -5764,6 +5915,11 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
     target_profile = None
     if target_prof_id:
         target_profile = get_profile(target_prof_id)
+    if not target_profile:
+        try:
+            target_profile = get_default_profile("agy")
+        except Exception:
+            target_profile = None
 
     is_ultra = False
     target_profile_root = None
@@ -5818,7 +5974,7 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
 
     # Fetch provider rate limits and Language Server status concurrently
     codex_task = asyncio.to_thread(fetch_codex_rate_limits, timeout_seconds=3)
-    agy_task = asyncio.to_thread(fetch_antigravity_language_server_quota)
+    agy_task = asyncio.to_thread(fetch_antigravity_language_server_quota, profile_root=target_profile_root)
 
     codex_rate_limits, antigravity_status = await asyncio.gather(
         codex_task, agy_task, return_exceptions=True
