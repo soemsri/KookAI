@@ -54,16 +54,12 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()
         
-        # Verify gemini token calculations
-        # totalTokens - cacheReadTokens = 400000 for weekly
-        self.assertEqual(data["geminiWeeklyUsed"], 400000)
-        # (400000 / 10000000) * 100 = 4.0%
-        self.assertEqual(data["geminiWeeklyPercent"], 4.0)
+        # Local token totals must not be presented as account quota.
+        self.assertIsNone(data["geminiWeeklyUsed"])
+        self.assertIsNone(data["geminiWeeklyPercent"])
         
-        # totalTokens - cacheReadTokens = 100000 for hourly
-        self.assertEqual(data["geminiHourlyUsed"], 100000)
-        # (100000 / 1000000) * 100 = 10.0%
-        self.assertEqual(data["geminiHourlyPercent"], 10.0)
+        self.assertIsNone(data["geminiHourlyUsed"])
+        self.assertIsNone(data["geminiHourlyPercent"])
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
@@ -80,11 +76,11 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()
         
-        # Should be 0 when no usage data exists
-        self.assertEqual(data["geminiWeeklyUsed"], 0)
-        self.assertEqual(data["geminiWeeklyPercent"], 0.0)
-        self.assertEqual(data["geminiHourlyUsed"], 0)
-        self.assertEqual(data["geminiHourlyPercent"], 0.0)
+        # Missing Gemini quota is unknown, not zero.
+        self.assertIsNone(data["geminiWeeklyUsed"])
+        self.assertIsNone(data["geminiWeeklyPercent"])
+        self.assertIsNone(data["geminiHourlyUsed"])
+        self.assertIsNone(data["geminiHourlyPercent"])
         self.assertEqual(data["claudeWeeklyUsed"], 0)
         self.assertEqual(data["claudeWeeklyPercent"], 0.0)
 
@@ -103,11 +99,11 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()
         
-        # Should reflect Antigravity transcript scan
-        self.assertEqual(data["geminiWeeklyUsed"], 725000)
-        self.assertEqual(data["geminiWeeklyPercent"], 7.2)
-        self.assertEqual(data["geminiHourlyUsed"], 90000)
-        self.assertEqual(data["geminiHourlyPercent"], 9.0)
+        # Transcript estimates must not masquerade as account quota.
+        self.assertIsNone(data["geminiWeeklyUsed"])
+        self.assertIsNone(data["geminiWeeklyPercent"])
+        self.assertIsNone(data["geminiHourlyUsed"])
+        self.assertIsNone(data["geminiHourlyPercent"])
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
@@ -138,10 +134,10 @@ class TestUsageLimitsAPI(unittest.TestCase):
         data = res.json()
         
         self.assertIsNotNone(data.get("geminiRateLimits"))
-        self.assertEqual(data["geminiRateLimits"]["remainingPercent"], 96.5)
-        self.assertEqual(data["geminiRateLimits"]["usedPercent"], 3.5)
-        self.assertEqual(data["geminiWeeklyPercent"], 3.5)
-        self.assertEqual(data["geminiHourlyPercent"], 3.5)
+        self.assertFalse(data["geminiRateLimits"]["available"])
+        self.assertIsNone(data["geminiRateLimits"]["usedPercent"])
+        self.assertIsNone(data["geminiWeeklyPercent"])
+        self.assertIsNone(data["geminiHourlyPercent"])
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
@@ -286,8 +282,8 @@ class TestUsageLimitsAPI(unittest.TestCase):
             res = self.client.get("/api/usage-limits")
             self.assertEqual(res.status_code, 200)
             data = res.json()
-            self.assertEqual(data["geminiWeeklyUsed"], 12345)
-            self.assertEqual(data["geminiHourlyUsed"], 6789)
+            self.assertIsNone(data["geminiWeeklyUsed"])
+            self.assertIsNone(data["geminiHourlyUsed"])
             mock_ccusage.assert_not_called()
 
     @patch("main.verify_authorization", return_value=True)
@@ -370,7 +366,7 @@ class TestUsageLimitsAPI(unittest.TestCase):
         res = self.client.get("/api/usage-limits")
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data.get("antigravityPlan"), "Google AI Pro")
+        self.assertIsNone(data.get("antigravityPlan"))
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
@@ -393,13 +389,13 @@ class TestUsageLimitsAPI(unittest.TestCase):
         res = self.client.get("/api/usage-limits?profile_id=prof_google_ultra_5x_66a188")
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data["antigravityPlan"], "Google AI Ultra")
-        self.assertEqual(data["geminiWeeklyLimit"], 50000000)
-        self.assertEqual(data["geminiHourlyLimit"], 5000000)
+        self.assertIsNone(data["antigravityPlan"])
+        self.assertIsNone(data["geminiWeeklyLimit"])
+        self.assertIsNone(data["geminiHourlyLimit"])
         self.assertIsNotNone(data["geminiRateLimits"])
-        self.assertEqual(data["geminiRateLimits"]["remainingPercent"], 100.0)
-        self.assertEqual(data["geminiRateLimits"]["usedPercent"], 0.0)
-        self.assertEqual(data["geminiRateLimits"]["planName"], "Google AI Ultra")
+        self.assertIsNone(data["geminiRateLimits"]["remainingPercent"])
+        self.assertIsNone(data["geminiRateLimits"]["usedPercent"])
+        self.assertIsNone(data["geminiRateLimits"]["planName"])
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
@@ -430,10 +426,10 @@ class TestUsageLimitsAPI(unittest.TestCase):
         res = self.client.get("/api/usage-limits?profile_id=prof_google_ultra_5x_66a188")
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        # Must retain Ultra plan and not be overwritten by LS rangsarn@gmail.com
-        self.assertEqual(data["antigravityPlan"], "Google AI Ultra")
-        self.assertEqual(data["geminiWeeklyLimit"], 50000000)
-        self.assertEqual(data["geminiRateLimits"]["remainingPercent"], 100.0)
+        # Neither a mismatched account nor a profile label proves the plan.
+        self.assertIsNone(data["antigravityPlan"])
+        self.assertIsNone(data["geminiWeeklyLimit"])
+        self.assertIsNone(data["geminiRateLimits"]["remainingPercent"])
 
 
 if __name__ == "__main__":

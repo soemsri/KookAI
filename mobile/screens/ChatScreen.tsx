@@ -333,7 +333,7 @@ const getUsageBucketForModel = (modelName: string, planName?: string): {
 
   const lowered = getModelLabel(modelName).toLowerCase();
   if (catalogBucket === 'gemini' || lowered.includes('gemini')) {
-    const plan = planName || 'Google AI Pro';
+    const plan = planName || 'Plan unavailable';
     return { key: 'gemini', title: `Gemini Models (${plan})` };
   }
   if (catalogBucket === 'gpt' || lowered.includes('gpt') || lowered.includes('kimi')) {
@@ -386,7 +386,7 @@ const slashCommands: PromptSuggestion[] = [
 
 const USAGE_LIMIT_TIMEOUT_MS = 8000;
 const DEFAULT_USAGE_LIMIT_DATA = {
-  antigravityPlan: "Google AI Pro",
+  antigravityPlan: null,
   geminiWeeklyPercent: 0,
   geminiHourlyPercent: 0,
   claudeWeeklyPercent: 0,
@@ -2866,6 +2866,7 @@ allowQueue: false,
       const activeProf = overrideProfileId ?? selectedProfileId;
       const profileParam = activeProf ? `?profile_id=${encodeURIComponent(activeProf)}` : '';
       const data = await callHostApi(`/api/usage-limits${profileParam}`, { signal: controller.signal });
+      if (usageLimitControllerRef.current !== controller || controller.signal.aborted) return;
       setUsageLimitData(data);
     } catch (err: any) {
       console.error("Error loading usage limits:", err);
@@ -2887,9 +2888,8 @@ allowQueue: false,
   };
 
   useEffect(() => {
-    if (selectedProfileId) {
-      fetchUsageLimits(selectedProfileId);
-    }
+    setUsageLimitData(DEFAULT_USAGE_LIMIT_DATA);
+    fetchUsageLimits(selectedProfileId ?? undefined);
   }, [selectedProfileId]);
 
   const getActiveUsagePercentage = () => {
@@ -2903,8 +2903,9 @@ allowQueue: false,
       }
     }
     const bucket = getUsageBucketForModel(selectedModel);
-    if (bucket.key === 'gemini' && usageLimitData.geminiRateLimits) {
-      const hourly = usageLimitData.geminiRateLimits.hourly || usageLimitData.geminiRateLimits;
+    if (bucket.key === 'gemini') {
+      const hourly = usageLimitData.geminiRateLimits?.hourly;
+      if (usageLimitData.geminiRateLimits?.source !== "antigravity" || usageLimitData.geminiRateLimits?.available !== true || !Number.isFinite(hourly?.usedPercent)) return 0;
       return usageMode === 'usage'
         ? Number(hourly.usedPercent ?? 0)
         : Number(hourly.remainingPercent ?? Math.max(0, 100 - (hourly.usedPercent ?? 0)));
@@ -2989,8 +2990,24 @@ allowQueue: false,
         ? usageLimitData?.claudeRateLimits
         : null;
 
+    const reportedWindow = period === 'Weekly' ? rateLimits?.weekly : rateLimits?.hourly;
+    if ((bucket === 'gemini' || rateLimits) &&
+        ((bucket === 'gemini' && rateLimits?.source !== 'antigravity') || rateLimits?.available !== true || !Number.isFinite(reportedWindow?.usedPercent))) {
+      return (
+        <View style={styles.usageRow}>
+          <View style={styles.usageRowLabel}>
+            <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>{label}</Text>
+            <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
+              Quota unavailable. Check Antigravity for account limits.
+            </Text>
+          </View>
+          <Text style={{ color: theme.textSecondary }}>—</Text>
+        </View>
+      );
+    }
+
     if (rateLimits) {
-      const bucketData = period === 'Weekly' ? (rateLimits.weekly || rateLimits) : (rateLimits.hourly || rateLimits.fiveHour || rateLimits);
+      const bucketData = reportedWindow;
       const usedPercent = Number(bucketData?.usedPercent ?? rateLimits.usedPercent ?? 0);
       const remainingPercent = Number(bucketData?.remainingPercent ?? rateLimits.remainingPercent ?? Math.max(0, 100 - usedPercent));
       const displayPercent = usageMode === 'usage' ? usedPercent : remainingPercent;
@@ -4645,7 +4662,7 @@ allowQueue: false,
               <ScrollView style={styles.popupScroll}>
                 <View style={styles.usageSection}>
                   <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>
-                    {getUsageBucketForModel(selectedModel, usageLimitData?.antigravityPlan || usageLimitData?.geminiRateLimits?.planName).title}
+                    {getUsageBucketForModel(selectedModel, (usageLimitData?.geminiRateLimits?.source ? usageLimitData?.antigravityPlan : undefined)).title}
                   </Text>
                   {getUsageBucketForModel(selectedModel).note ? (
                     <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textMuted }]}>
@@ -4684,7 +4701,7 @@ allowQueue: false,
                   ) : (
                     <>
                       <Text style={[styles.usageStatusText, { color: theme.textMuted }]}>{usageLimitError}</Text>
-                      <TouchableOpacity style={styles.usageRetryBtn} onPress={fetchUsageLimits}>
+                      <TouchableOpacity style={styles.usageRetryBtn} onPress={() => fetchUsageLimits()}>
                         <Text style={[styles.usageRetryText, { color: theme.accent }]}>Retry</Text>
                       </TouchableOpacity>
                     </>

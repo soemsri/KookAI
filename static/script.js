@@ -2682,7 +2682,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const catalogBucket = getCatalogModel(currentModel)?.usage_bucket;
     const lowerModel = getModelLabel(currentModel).toLowerCase();
     if (catalogBucket === "gemini" || lowerModel.includes("gemini")) {
-      const plan = usageData?.antigravityPlan || usageData?.geminiRateLimits?.planName || "Google AI Pro";
+      const plan = (usageData?.geminiRateLimits?.source ? usageData?.antigravityPlan : null) || "Plan unavailable";
       return {
         key: "gemini",
         title: "Gemini Models",
@@ -2746,7 +2746,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const activeHourlyPercent = codexPrimary
       ? Number(codexPrimary.usedPercent || 0)
       : Number(usageData[`${activeBucket.key}HourlyPercent`] || 0);
-    const mainVal = isUsage ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent);
+    const quotaUnavailable = activeBucket.key === "gemini" &&
+      (usageData.geminiRateLimits?.source !== "antigravity" || usageData.geminiRateLimits?.available !== true ||
+       !Number.isFinite(usageData.geminiRateLimits?.hourly?.usedPercent));
+    const mainVal = quotaUnavailable ? 0 : (isUsage ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent));
 
     const mainCircle = document.getElementById("mainUsageBtnChartCircle");
     if (mainCircle) {
@@ -2775,10 +2778,24 @@ document.addEventListener("DOMContentLoaded", () => {
       const isGemini = dataPrefix.startsWith("gemini") && usageData.geminiRateLimits;
       const isClaudeRateLimit = dataPrefix.startsWith("claude") && usageData.claudeRateLimits;
       
+      const limits = dataPrefix.startsWith("gemini") ? usageData.geminiRateLimits :
+        dataPrefix.startsWith("claude") ? usageData.claudeRateLimits : null;
+      const windowData = dataPrefix.toLowerCase().includes("weekly") ? limits?.weekly : limits?.hourly;
+      if ((dataPrefix.startsWith("gemini") || limits) &&
+          ((dataPrefix.startsWith("gemini") && limits?.source !== "antigravity") || limits?.available !== true || !Number.isFinite(windowData?.usedPercent))) {
+        const percentEl = document.getElementById(`${elementPrefix}Percent`);
+        const chartEl = document.getElementById(`${elementPrefix}Chart`);
+        const descEl = document.getElementById(`${elementPrefix}Desc`);
+        if (percentEl) percentEl.textContent = "—";
+        if (chartEl) chartEl.setAttribute("stroke-dasharray", "0, 100");
+        if (descEl) descEl.textContent = "Quota unavailable. Check Antigravity for account limits.";
+        return;
+      }
+
       if (isGemini || isClaudeRateLimit) {
         const rateLimits = isGemini ? usageData.geminiRateLimits : usageData.claudeRateLimits;
         const isWeekly = dataPrefix.toLowerCase().includes("weekly");
-        const bucketData = isWeekly ? (rateLimits.weekly || rateLimits) : (rateLimits.hourly || rateLimits.fiveHour || rateLimits);
+        const bucketData = windowData;
         const usedPercent = Number(bucketData.usedPercent !== undefined ? bucketData.usedPercent : (rateLimits.usedPercent || 0));
         const remainingPercent = Number(bucketData.remainingPercent !== undefined ? bucketData.remainingPercent : (rateLimits.remainingPercent || Math.max(0, 100 - usedPercent)));
         const val = isUsage ? usedPercent : remainingPercent;
