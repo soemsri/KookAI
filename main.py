@@ -4997,6 +4997,39 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
                 f"User Task:\n{fable_text}"
             )
             reply, resolved_cid = execute_selected(wrapped_message)
+    elif msg_lower.startswith("/impeccable"):
+        impeccable_text = message[11:].strip()
+        if not impeccable_text:
+            reply = (
+                "🎨 **Impeccable Design Specialist & Frontend Craft**\n\n"
+                "Please specify a UI task or subcommand after `/impeccable`.\n\n"
+                "**Common Commands:**\n"
+                "- `/impeccable audit [target]`: Technical quality checks (a11y, responsive, contrast, perf)\n"
+                "- `/impeccable polish [target]`: Final craft pass, micro-spacing, typography & layout hierarchy\n"
+                "- `/impeccable critique [target]`: UX design review with heuristic scoring\n"
+                "- `/impeccable bolder [target]`: Amplify timid or bland designs with distinct personality\n"
+                "- `/impeccable quieter [target]`: Tone down aggressive or overstimulating designs\n"
+                "- `/impeccable harden [target]`: Edge cases, empty states, error states, and i18n resilience\n"
+                "- `/impeccable animate [target]`: Purposeful animations, transitions, and micro-interactions\n"
+                "- `/impeccable shape [feature]`: Plan UX/UI architecture before writing frontend code\n\n"
+                "**Examples:**\n"
+                "`/impeccable polish ChatScreen input bar and send button`\n"
+                "`/impeccable audit mobile UI for accessibility and touch targets`"
+            )
+            resolved_cid = conversation_id
+        else:
+            wrapped_message = (
+                "[SYSTEM: IMPECCABLE DESIGN SPECIALIST ACTIVATED]\n"
+                "You are operating as an award-winning design director with impeccable craft and frontend expertise.\n"
+                "Ground design decisions in the workspace's PRODUCT.md and DESIGN.md guidelines.\n\n"
+                "CORE PRINCIPLES & OPERATIONAL INVARIANTS:\n"
+                "1. Exceptional Craft: Production-grade code, sharp visual hierarchy, zero AI slop, no gimmicky glows, no unreadable micro-text.\n"
+                "2. State Over Decoration: Every chip, badge, or animation must communicate real state.\n"
+                "3. Bounded Verification: Inspect desktop/mobile viewports together, fix defects in a single focused batch.\n"
+                "4. Refinement vs Redesign: Refinement preserves existing identity and copy; redesign replaces with intentional new concepts.\n\n"
+                f"Design Task:\n{impeccable_text}"
+            )
+            reply, resolved_cid = execute_selected(wrapped_message)
     elif msg_lower.startswith("/goal"):
         goal_text = message[5:].strip()
         if not goal_text:
@@ -5064,6 +5097,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
         reply = (
             "💡 **Available Commands & Help Guide**\n\n"
             "- `/fable5 <task>`: Run task under Fable-5 high-reliability 8-step framework.\n"
+            "- `/impeccable <task>`: Craft out-of-distribution UI design, audit, polish, or critique.\n"
             "- `/goal <task>`: Start an extra-thorough, goal-oriented workflow on the workspace.\n"
             "- `/browser <task>`: Command browser subagent for web tasks.\n"
             "- `/grill-me`: Start an interactive design/requirement alignment session and save preferences.\n"

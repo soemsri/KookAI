@@ -59,7 +59,7 @@ class QuotaSourceTests(unittest.TestCase):
         with patch('main.os.path.isfile', side_effect=lambda p: not p.startswith('/isolated/')) as exists, \
              patch('main.urllib.request.urlopen') as network:
             self.assertIsNone(main.fetch_antigravity_cloudcode_quota('/isolated/profile'))
-            self.assertTrue(all(c.args[0].startswith('/isolated/profile/') for c in exists.call_args_list))
+            self.assertTrue(all(c.args[0].replace('\\', '/').startswith('/isolated/profile/') for c in exists.call_args_list))
             network.assert_not_called()
 
     def test_status_only_cloud_response_still_scans_language_servers(self):

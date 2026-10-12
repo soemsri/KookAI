@@ -1221,6 +1221,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const slashCommands = [
     { name: "/watch", desc: "Watch & analyze video (URL or local path)", type: "Command" },
     { name: "/fable5", desc: "Fable-5 high-reliability 8-step framework", type: "Command" },
+    { name: "/impeccable", desc: "Craft out-of-distribution UI design & polish", type: "Command" },
+    { name: "/impeccable audit", desc: "Technical UI checks (a11y, perf, responsive)", type: "Command" },
+    { name: "/impeccable polish", desc: "Final quality pass before shipping UI", type: "Command" },
+    { name: "/impeccable critique", desc: "UX review with heuristic scoring", type: "Command" },
+    { name: "/impeccable bolder", desc: "Amplify safe or bland designs", type: "Command" },
+    { name: "/impeccable quieter", desc: "Tone down aggressive or overstimulating UI", type: "Command" },
+    { name: "/impeccable harden", desc: "Production-ready: errors, i18n, edge cases", type: "Command" },
     { name: "/goal", desc: "Initiate goal mode checklist", type: "Command" },
     { name: "/browser", desc: "Launch browser automation tool", type: "Command" },
     { name: "/grill-me", desc: "Launch requirements audit survey", type: "Command" },
