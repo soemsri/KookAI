@@ -384,7 +384,7 @@ const slashCommands: PromptSuggestion[] = [
   { name: "/help", desc: "Show prompt help context panel", type: "Command" },
 ];
 
-const USAGE_LIMIT_TIMEOUT_MS = 8000;
+const USAGE_LIMIT_TIMEOUT_MS = 15000;
 const DEFAULT_USAGE_LIMIT_DATA = {
   antigravityPlan: null,
   geminiWeeklyPercent: 0,
@@ -1517,6 +1517,9 @@ selectedProjectRef.current = selectedProject;
           const defaultProf = data.profiles.find((p: any) => p.is_default);
           return defaultProf ? defaultProf.id : (data.profiles[0]?.id || null);
         });
+      } else {
+        setHarnessProfiles([]);
+        setSelectedProfileId(null);
       }
     } catch (err) {
       console.warn("Failed to load harness profiles:", err);
@@ -1773,6 +1776,8 @@ fetchUsageLimits();
     setQueuedPrompts([]);
     setTaskProgressEvents([]);
     setActiveConvoId('');
+    setSelectedProfileId(null);
+    setHarnessProfiles([]);
 
     setLoadingWorkspaces(true);
     setLoadingProjects(true);
@@ -1788,6 +1793,9 @@ fetchUsageLimits();
       activeConvoProjectRef.current = list[0];
       SecureStore.setItemAsync(PREFERENCE_KEYS.project, list[0]).catch(() => {});
       await loadConversations(true);
+      await loadHarnessProfiles();
+      fetchUsageLimits(null);
+      refreshModelCatalog();
       showToast(`Switched to "${server.name}"`);
     } catch (err) {
       console.error("Error switching server:", err);
@@ -2854,7 +2862,7 @@ allowQueue: false,
     ]);
   };
 
-  const fetchUsageLimits = async (overrideProfileId?: string) => {
+  const fetchUsageLimits = async (overrideProfileId?: string | null, forceRefresh: boolean = false) => {
     usageLimitControllerRef.current?.abort();
     const controller = new AbortController();
     usageLimitControllerRef.current = controller;
@@ -2863,9 +2871,34 @@ allowQueue: false,
     setLoadingUsage(true);
     setUsageLimitError('');
     try {
-      const activeProf = overrideProfileId ?? selectedProfileId;
-      const profileParam = activeProf ? `?profile_id=${encodeURIComponent(activeProf)}` : '';
-      const data = await callHostApi(`/api/usage-limits${profileParam}`, { signal: controller.signal });
+      const activeProf = overrideProfileId !== undefined ? overrideProfileId : selectedProfileId;
+      const normalizedProf = typeof activeProf === 'string' ? activeProf.trim() : '';
+      const validProf = normalizedProf && !['null', 'undefined', 'none', 'default'].includes(normalizedProf.toLowerCase())
+        ? normalizedProf
+        : null;
+      const queryParts: string[] = [];
+      if (validProf) queryParts.push(`profile_id=${encodeURIComponent(validProf)}`);
+      if (forceRefresh) queryParts.push('refresh=true');
+      const queryString = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
+      let data: any;
+      try {
+        data = await callHostApi(`/api/usage-limits${queryString}`, { signal: controller.signal });
+      } catch (apiErr: any) {
+        // Self-heal: If the requested profile was deleted or does not exist on the current host,
+        // clear selected profile, reload profiles, and fallback to default host usage.
+        const isProfileNotFound = apiErr?.status === 404
+          && typeof apiErr?.message === 'string'
+          && /profile not found/i.test(apiErr.message);
+        if (validProf && isProfileNotFound && !controller.signal.aborted) {
+          console.warn(`Profile "${validProf}" not found on host. Falling back to default host usage.`);
+          data = await callHostApi(`/api/usage-limits${forceRefresh ? '?refresh=true' : ''}`, { signal: controller.signal });
+          setSelectedProfileId(null);
+          void loadHarnessProfiles();
+          showToast('Account profile was unavailable. Showing default account usage.');
+        } else {
+          throw apiErr;
+        }
+      }
       if (usageLimitControllerRef.current !== controller || controller.signal.aborted) return;
       setUsageLimitData(data);
     } catch (err: any) {
@@ -2889,7 +2922,7 @@ allowQueue: false,
 
   useEffect(() => {
     setUsageLimitData(DEFAULT_USAGE_LIMIT_DATA);
-    fetchUsageLimits(selectedProfileId ?? undefined);
+    fetchUsageLimits(selectedProfileId);
   }, [selectedProfileId]);
 
   const getActiveUsagePercentage = () => {
@@ -3119,6 +3152,7 @@ allowQueue: false,
 
   const openUsageModal = () => {
     setIsUsageModalOpen(true);
+    void loadHarnessProfiles();
     fetchUsageLimits();
   };
 
@@ -4034,6 +4068,28 @@ allowQueue: false,
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.bottomSheetList}>
+              <TouchableOpacity
+                style={[styles.modalItem, selectedProfileId === null && { backgroundColor: theme.bgActive }]}
+                onPress={() => {
+                  setSelectedProfileId(null);
+                  fetchUsageLimits(null);
+                  setIsProfileModalOpen(false);
+                  showToast('Switched to Default Host Account');
+                }}
+              >
+                <View style={styles.modalItemLeft}>
+                  <View style={[styles.badge, { backgroundColor: '#2196f3' }]}>
+                    <Text style={[styles.badgeText, { color: '#ffffff' }]}>HOST</Text>
+                  </View>
+                  <View style={styles.modelInfo}>
+                    <Text style={[styles.modelName, { color: theme.textPrimary }, selectedProfileId === null && { fontWeight: '700' }]}>Default Host Account</Text>
+                    <Text style={[styles.modelDesc, { color: theme.textSecondary }]} numberOfLines={1}>
+                      Primary server environment
+                    </Text>
+                  </View>
+                </View>
+                {selectedProfileId === null && <Text style={{ color: theme.accent, fontSize: 16, fontWeight: '700' }}>✓</Text>}
+              </TouchableOpacity>
               {harnessProfiles.map((p) => {
                 const isActive = p.id === selectedProfileId;
                 return (
@@ -4701,7 +4757,10 @@ allowQueue: false,
                   ) : (
                     <>
                       <Text style={[styles.usageStatusText, { color: theme.textMuted }]}>{usageLimitError}</Text>
-                      <TouchableOpacity style={styles.usageRetryBtn} onPress={() => fetchUsageLimits()}>
+                      <TouchableOpacity style={styles.usageRetryBtn} onPress={() => {
+                        void loadHarnessProfiles();
+                        fetchUsageLimits(undefined, true);
+                      }}>
                         <Text style={[styles.usageRetryText, { color: theme.accent }]}>Retry</Text>
                       </TouchableOpacity>
                     </>

@@ -15,9 +15,9 @@ if [ ! -x "./venv/bin/python" ]; then
 fi
 
 # main.py installs missing Python and CLI requirements on first launch.
-./venv/bin/python main.py
-
-# Keep terminal open on exit to view errors/status
-echo ""
-echo "Server stopped."
-read -r -p "Press Enter to exit..."
+while true; do
+  ./venv/bin/python main.py
+  EXIT_CODE=$?
+  echo "Server stopped with exit code $EXIT_CODE. Restarting in 2 seconds..."
+  sleep 2
+done

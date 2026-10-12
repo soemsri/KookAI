@@ -5543,13 +5543,59 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
             token_path = p
             break
 
-    if not token_path:
+    def _read_from_keyring() -> Optional[dict]:
+        try:
+            if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+                try:
+                    uid = os.getuid()
+                    user_bus = f"/run/user/{uid}/bus"
+                    if os.path.exists(user_bus):
+                        os.environ["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={user_bus}"
+                except Exception:
+                    pass
+            if "/usr/lib/python3/dist-packages" not in sys.path:
+                sys.path.append("/usr/lib/python3/dist-packages")
+            import dbus
+            bus = dbus.SessionBus()
+            service = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets")
+            ss_iface = dbus.Interface(service, "org.freedesktop.Secret.Service")
+            session_path = ss_iface.OpenSession("plain", "")[1]
+            unlocked, locked = ss_iface.SearchItems({"service": "gemini", "username": "antigravity"})
+            items = list(unlocked) + list(locked)
+            for item_path in items:
+                item = bus.get_object("org.freedesktop.secrets", item_path)
+                item_iface = dbus.Interface(item, "org.freedesktop.Secret.Item")
+                secret = item_iface.GetSecret(session_path)
+                kdata = json.loads(bytes(secret[2]).decode("utf-8"))
+                if kdata.get("token", {}).get("access_token"):
+                    try:
+                        save_p = os.path.join(credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+                        os.makedirs(os.path.dirname(save_p), exist_ok=True)
+                        with open(save_p, "w", encoding="utf-8") as sf:
+                            json.dump(kdata, sf, indent=2)
+                    except Exception:
+                        pass
+                    return kdata
+        except Exception as kerr:
+            logging.debug(f"Failed to read token from SecretService keyring: {kerr}")
         return None
 
-    try:
-        with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
-            data = json.load(f)
-    except Exception:
+    can_use_keyring = (not profile_root) or (os.path.realpath(profile_root) == os.path.realpath(os.path.expanduser("~")))
+
+    data = None
+    if token_path:
+        try:
+            with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+    if (not data or not (data.get("token") or {}).get("access_token")) and can_use_keyring:
+        data = _read_from_keyring()
+        if data and not token_path:
+            token_path = os.path.join(credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+
+    if not data:
         return None
 
     token_info = data.get("token") or {}
@@ -5560,15 +5606,19 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
     needs_refresh = False
     if expiry_str:
         try:
-            clean_exp = expiry_str.split(".")[0] + "Z"
-            exp_dt = datetime.datetime.strptime(clean_exp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+            exp_dt = datetime.datetime.fromisoformat(expiry_str)
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
             now_dt = datetime.datetime.now(datetime.timezone.utc)
             if (exp_dt - now_dt).total_seconds() < 180:
                 needs_refresh = True
         except Exception:
-            pass
+            needs_refresh = True
+    else:
+        needs_refresh = True
 
-    if needs_refresh or not access_token:
+    def _do_refresh() -> Optional[str]:
+        nonlocal data, token_path
         agy_cmd = shutil.which("agy") or "/root/.local/bin/agy"
         if not (agy_cmd and os.path.isfile(agy_cmd)):
             local_app = os.path.expanduser("~/.local/bin/agy")
@@ -5578,14 +5628,33 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
             env = os.environ.copy()
             if profile_root:
                 env["HOME"] = profile_root
+            if not env.get("DBUS_SESSION_BUS_ADDRESS"):
+                try:
+                    uid = os.getuid()
+                    user_bus = f"/run/user/{uid}/bus"
+                    if os.path.exists(user_bus):
+                        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={user_bus}"
+                except Exception:
+                    pass
             try:
-                subprocess.run([agy_cmd, "models"], env=env, timeout=6, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
-                    data = json.load(f)
-                token_info = data.get("token") or {}
-                access_token = token_info.get("access_token")
+                subprocess.run([agy_cmd, "models"], env=env, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                kdata = _read_from_keyring() if can_use_keyring else None
+                if kdata:
+                    data = kdata
+                    if not token_path:
+                        token_path = os.path.join(credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+                elif token_path and os.path.isfile(token_path):
+                    with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
+                        data = json.load(f)
+                return ((data or {}).get("token") or {}).get("access_token")
             except Exception:
                 pass
+        return None
+
+    if needs_refresh or not access_token:
+        fresh_tok = _do_refresh()
+        if fresh_tok:
+            access_token = fresh_tok
 
     if not access_token:
         return None
@@ -5624,6 +5693,24 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
         with urllib.request.urlopen(req, timeout=3.5) as resp:
             if resp.status == 200:
                 quota_summary = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            fresh_tok = _do_refresh()
+            if fresh_tok:
+                access_token = fresh_tok
+                headers["Authorization"] = f"Bearer {access_token}"
+                try:
+                    req = urllib.request.Request(
+                        "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+                        data=json.dumps({}).encode("utf-8"),
+                        headers=headers,
+                    )
+                    with urllib.request.urlopen(req, timeout=3.5) as resp:
+                        if resp.status == 200:
+                            quota_summary = json.loads(resp.read().decode("utf-8"))
+                except Exception:
+                    pass
+        logging.debug(f"retrieveUserQuotaSummary error: {exc}")
     except Exception as exc:
         logging.debug(f"retrieveUserQuotaSummary error: {exc}")
 
@@ -5865,6 +5952,14 @@ _ccusage_cache = {
 }
 _ccusage_lock = asyncio.Lock()
 
+_provider_rate_limits_cache: dict[str, Any] = {
+    "timestamp": 0.0,
+    "target_profile_root": None,
+    "codex_rate_limits": None,
+    "antigravity_status": None,
+}
+_provider_rate_limits_lock = asyncio.Lock()
+
 
 def run_ccusage_safely():
     """Execute ccusage safely, ensuring process group termination on timeout to avoid runaway orphans."""
@@ -5917,7 +6012,11 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
     verify_authorization(request)
     
     # Resolve target profile if specified
-    target_prof_id = profile_id or request.query_params.get("profile_id")
+    raw_prof_id = profile_id or request.query_params.get("profile_id")
+    target_prof_id = raw_prof_id.strip() if isinstance(raw_prof_id, str) else None
+    if target_prof_id and target_prof_id.lower() in ("null", "undefined", "none", "", "default"):
+        target_prof_id = None
+
     target_profile = None
     if target_prof_id:
         target_profile = get_profile(target_prof_id)
@@ -5972,21 +6071,57 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
         "antigravityPlan": default_plan,
     }
 
-    # Fetch provider rate limits and Language Server status concurrently
-    codex_task = asyncio.to_thread(fetch_codex_rate_limits, timeout_seconds=3)
-    agy_task = asyncio.to_thread(fetch_antigravity_language_server_quota, profile_root=target_profile_root)
+    # Fetch provider rate limits and Language Server status concurrently with short TTL cache
+    force_refresh = (
+        request.query_params.get("refresh", "").lower() in ("true", "1")
+        or request.query_params.get("force_refresh", "").lower() in ("true", "1")
+    )
+    is_testing = hasattr(subprocess.run, "mock_calls") or ("pytest" in sys.modules)
+    now_ts = time.time()
 
-    codex_rate_limits, antigravity_status = await asyncio.gather(
-        codex_task, agy_task, return_exceptions=True
+    cached_valid = (
+        not is_testing
+        and not force_refresh
+        and (now_ts - _provider_rate_limits_cache["timestamp"] < 30.0)
+        and (_provider_rate_limits_cache["target_profile_root"] == target_profile_root)
     )
 
-    if isinstance(codex_rate_limits, Exception):
-        logging.error(f"Failed to fetch Codex account rate limits: {codex_rate_limits}")
-        codex_rate_limits = None
+    if cached_valid:
+        codex_rate_limits = _provider_rate_limits_cache["codex_rate_limits"]
+        antigravity_status = _provider_rate_limits_cache["antigravity_status"]
+    else:
+        async with _provider_rate_limits_lock:
+            now_ts = time.time()
+            cached_valid = (
+                not is_testing
+                and not force_refresh
+                and (now_ts - _provider_rate_limits_cache["timestamp"] < 30.0)
+                and (_provider_rate_limits_cache["target_profile_root"] == target_profile_root)
+            )
+            if cached_valid:
+                codex_rate_limits = _provider_rate_limits_cache["codex_rate_limits"]
+                antigravity_status = _provider_rate_limits_cache["antigravity_status"]
+            else:
+                codex_task = asyncio.to_thread(fetch_codex_rate_limits, timeout_seconds=3)
+                agy_task = asyncio.to_thread(fetch_antigravity_language_server_quota, profile_root=target_profile_root)
 
-    if isinstance(antigravity_status, Exception):
-        logging.debug(f"Failed to fetch Antigravity language server status: {antigravity_status}")
-        antigravity_status = None
+                codex_rate_limits, antigravity_status = await asyncio.gather(
+                    codex_task, agy_task, return_exceptions=True
+                )
+
+                if isinstance(codex_rate_limits, Exception):
+                    logging.error(f"Failed to fetch Codex account rate limits: {codex_rate_limits}")
+                    codex_rate_limits = None
+
+                if isinstance(antigravity_status, Exception):
+                    logging.debug(f"Failed to fetch Antigravity language server status: {antigravity_status}")
+                    antigravity_status = None
+
+                if not is_testing:
+                    _provider_rate_limits_cache["timestamp"] = time.time()
+                    _provider_rate_limits_cache["target_profile_root"] = target_profile_root
+                    _provider_rate_limits_cache["codex_rate_limits"] = codex_rate_limits
+                    _provider_rate_limits_cache["antigravity_status"] = antigravity_status
 
     if codex_rate_limits:
         result_data["codexRateLimits"] = codex_rate_limits

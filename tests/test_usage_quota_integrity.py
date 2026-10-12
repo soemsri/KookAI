@@ -85,3 +85,9 @@ class QuotaSourceTests(unittest.TestCase):
             response = TestClient(main.app).get('/api/usage-limits?profile_id=deleted-profile')
             self.assertEqual(response.status_code, 404)
             fetch.assert_not_called()
+
+    def test_falsy_profile_ids_do_not_404(self):
+        with patch('main.verify_authorization'), patch('main.fetch_antigravity_language_server_quota', return_value=None):
+            for pid in ["null", "undefined", "none", "default", "", "   "]:
+                response = TestClient(main.app).get(f'/api/usage-limits?profile_id={pid}')
+                self.assertEqual(response.status_code, 200, f"Failed for profile_id={pid}")

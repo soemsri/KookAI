@@ -165,6 +165,88 @@ async function runSessionModelPersistenceTests() {
   }
   console.log("✓ Web client preferences save & load simulated successfully!");
 
+  // Test 7: Usage Limits self-healing on 404 profile not found
+  console.log("Testing fetchUsageLimits self-healing on 404 profile not found...");
+  let selectedProfileId: string | null = "stale_or_deleted_profile";
+  let usageData: any = null;
+  let usageError: string = "";
+
+  async function mockCallHostApi(endpoint: string) {
+    if (endpoint.includes("stale_or_deleted_profile")) {
+      const err: any = new Error("Usage profile not found");
+      err.status = 404;
+      throw err;
+    }
+    return { ok: true, geminiRateLimits: { available: false } };
+  }
+
+  async function simulatedFetchUsageLimits(overrideProfileId?: string | null) {
+    try {
+      const activeProf = overrideProfileId !== undefined ? overrideProfileId : selectedProfileId;
+      const normalizedProf = typeof activeProf === 'string' ? activeProf.trim() : '';
+      const validProf = normalizedProf && !['null', 'undefined', 'none', 'default'].includes(normalizedProf.toLowerCase())
+        ? normalizedProf
+        : null;
+      const profileParam = validProf ? `?profile_id=${encodeURIComponent(validProf)}` : '';
+      let data: any;
+      try {
+        data = await mockCallHostApi(`/api/usage-limits${profileParam}`);
+      } catch (apiErr: any) {
+        const isProfileNotFound = apiErr?.status === 404
+          && typeof apiErr?.message === 'string'
+          && /profile not found/i.test(apiErr.message);
+        if (validProf && isProfileNotFound) {
+          selectedProfileId = null; // Cleared!
+          data = await mockCallHostApi('/api/usage-limits');
+        } else {
+          throw apiErr;
+        }
+      }
+      usageData = data;
+      usageError = "";
+    } catch (err: any) {
+      usageError = err?.message || "Failed";
+    }
+  }
+
+  await simulatedFetchUsageLimits();
+  if (selectedProfileId !== null) {
+    throw new Error(`Expected selectedProfileId to self-heal to null, got "${selectedProfileId}"`);
+  }
+  if (!usageData || !usageData.ok) {
+    throw new Error(`Expected usageData to recover, got ${JSON.stringify(usageData)}`);
+  }
+  if (usageError !== "") {
+    throw new Error(`Expected usageError to be empty, got "${usageError}"`);
+  }
+  console.log("✓ fetchUsageLimits self-heals correctly when profile is not found!");
+
+  // An explicit null must bypass the currently selected profile. This is the
+  // path used by the "Default Host Account" item before React state re-renders.
+  selectedProfileId = "stale_or_deleted_profile";
+  usageData = null;
+  usageError = "";
+  await simulatedFetchUsageLimits(null);
+  if (!usageData?.ok || usageError !== "") {
+    throw new Error("Expected an explicit host-account selection to bypass the stale profile");
+  }
+
+  // Test 8: Server switch clears stale profile ID
+  console.log("Testing server switch profile cleanup...");
+  selectedProfileId = "server1_profile";
+  let harnessProfiles: any[] = [{ id: "server1_profile", label: "Server 1 User" }];
+
+  function simulatedHandleSwitchServer() {
+    selectedProfileId = null;
+    harnessProfiles = [];
+  }
+
+  simulatedHandleSwitchServer();
+  if (selectedProfileId !== null || harnessProfiles.length !== 0) {
+    throw new Error("Expected switch server to reset selectedProfileId to null and harnessProfiles to empty array");
+  }
+  console.log("✓ Server switch resets profile state cleanly!");
+
   console.log("=== ALL MODEL & SESSION PERSISTENCE TESTS PASSED! 🎉 ===");
 }
 
