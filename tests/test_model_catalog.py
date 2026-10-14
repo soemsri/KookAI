@@ -284,6 +284,20 @@ class ModelCatalogApiTests(unittest.TestCase):
         self.assertIsNotNone(cli_lookup)
         self.assertEqual(cli_lookup["id"], "6 Astra")
 
+    def test_codex_6_1_sol_is_available_and_is_the_codex_fallback(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+        model = resolve_catalog_model(catalog, "6.1 Sol")
+        self.assertIsNotNone(model)
+        self.assertEqual(model["provider"], "codex")
+        self.assertEqual(model["cli_model"], "gpt-6.1-sol")
+        self.assertIn("Ultra", model["capabilities"]["effort"])
+        self.assertIn("Fast", model["capabilities"]["speed"])
+        self.assertEqual(main.DEFAULT_PROVIDER_MODELS["codex"], "6.1 Sol")
+
+        cli_lookup = resolve_catalog_model(catalog, "gpt-6.1-sol")
+        self.assertIsNotNone(cli_lookup)
+        self.assertEqual(cli_lookup["id"], "6.1 Sol")
+
     def test_codex_6_sol_and_6_luna_are_available(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)
         sol = resolve_catalog_model(catalog, "6 Sol")

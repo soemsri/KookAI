@@ -10,11 +10,14 @@ import main
 
 class CodexBackendTests(unittest.TestCase):
     def test_model_and_provider_mapping(self):
+        self.assertEqual(codex_backend.codex_model_slug("6.1 Sol"), "gpt-6.1-sol")
+        self.assertEqual(codex_backend.codex_model_slug("GPT-6.1 Sol"), "gpt-6.1-sol")
         self.assertEqual(codex_backend.codex_model_slug("6 Astra"), "gpt-6-astra")
         self.assertEqual(codex_backend.codex_model_slug("GPT-6 Astra"), "gpt-6-astra")
         self.assertEqual(codex_backend.codex_model_slug("6 Sol"), "gpt-6-sol")
         self.assertEqual(codex_backend.codex_model_slug("6 Luna"), "gpt-6-luna")
         self.assertEqual(codex_backend.codex_model_slug("5.6 Sol"), "gpt-5.6-sol")
+        self.assertEqual(codex_backend.resolve_provider(None, "6.1 Sol"), "codex")
         self.assertEqual(codex_backend.resolve_provider(None, "6 Astra"), "codex")
         self.assertEqual(codex_backend.resolve_provider(None, "6 Sol"), "codex")
         self.assertEqual(codex_backend.resolve_provider(None, "6 Luna"), "codex")
@@ -29,6 +32,14 @@ class CodexBackendTests(unittest.TestCase):
             codex_backend.resolve_provider("codex", "Claude Sonnet 4.6 (Thinking)")
 
     def test_capability_validation(self):
+        self.assertEqual(
+            codex_backend.normalize_codex_effort("Ultra", "6.1 Sol"),
+            ("Ultra", "ultra"),
+        )
+        self.assertEqual(
+            codex_backend.normalize_codex_speed("Fast", "6.1 Sol"),
+            ("Fast", "priority"),
+        )
         self.assertEqual(
             codex_backend.normalize_codex_effort("Light", "6 Astra"),
             ("Light", "low"),

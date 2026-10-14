@@ -3945,7 +3945,7 @@ PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "zai", "xai", "muse
 DEFAULT_PROVIDER_MODELS = {
     "agy": "Gemini 3.8 Flash (High)",
     "claude": "Claude Sonnet 4.6 (Thinking)",
-    "codex": "5.6 Sol",
+    "codex": "6.1 Sol",
     "kimi": "Kimi K3",
     "zai": "GLM 5.2",
     "xai": "Grok 4.5",

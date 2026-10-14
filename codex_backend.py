@@ -27,6 +27,8 @@ from zai_backend import is_zai_model
 
 
 CODEX_MODEL_MAP = {
+    "6.1 Sol": "gpt-6.1-sol",
+    "GPT-6.1 Sol": "gpt-6.1-sol",
     "6 Astra": "gpt-6-astra",
     "GPT-6 Astra": "gpt-6-astra",
     "6 Sol": "gpt-6-sol",
@@ -61,6 +63,8 @@ CODEX_SPEED_MAP = {
 
 # Fast mode currently supports the GPT-6 family, GPT-5.6 family, GPT-5.5, and GPT-5.4.
 CODEX_FAST_MODELS = {
+    "6.1 Sol",
+    "GPT-6.1 Sol",
     "6 Astra",
     "GPT-6 Astra",
     "6 Sol",
@@ -77,6 +81,8 @@ CODEX_FAST_MODELS = {
 }
 
 CODEX_MODEL_EFFORTS = {
+    "6.1 Sol": {"low", "medium", "high", "xhigh", "ultra"},
+    "GPT-6.1 Sol": {"low", "medium", "high", "xhigh", "ultra"},
     "6 Astra": {"low", "medium", "high", "xhigh", "ultra"},
     "GPT-6 Astra": {"low", "medium", "high", "xhigh", "ultra"},
     "6 Sol": {"low", "medium", "high", "xhigh", "ultra"},

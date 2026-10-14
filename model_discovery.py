@@ -32,6 +32,22 @@ _last_auto_sync_time: float = 0.0
 
 KNOWN_CODEX_MODELS: list[dict[str, Any]] = [
     {
+        "id": "6.1 Sol",
+        "label": "6.1 Sol",
+        "description": "Latest workhorse model for coding and everyday work",
+        "provider": "codex",
+        "cli_model": "gpt-6.1-sol",
+        "badge": "Codex",
+        "usage_bucket": "gpt",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Light", "Medium", "High", "Extra High", "Ultra"],
+            "speed": ["Standard", "Fast"],
+            "thinking": False,
+            "thinking_required": False,
+        },
+    },
+    {
         "id": "6 Astra",
         "label": "6 Astra",
         "description": "Our most capable model for complex, demanding work",
@@ -146,6 +162,39 @@ KNOWN_CODEX_MODELS: list[dict[str, Any]] = [
 ]
 
 KNOWN_AGY_MODELS: list[dict[str, Any]] = [
+    {
+        "id": "Gemini 4 Argon (High)",
+        "label": "Gemini 4 Argon (High)",
+        "description": "Google flagship frontier reasoning model",
+        "provider": "agy",
+        "cli_model": "gemini-4-argon-high",
+        "badge": "Argon",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
+        "id": "Gemini 4 Argon (Medium)",
+        "label": "Gemini 4 Argon (Medium)",
+        "description": "Balanced frontier reasoning model",
+        "provider": "agy",
+        "cli_model": "gemini-4-argon-medium",
+        "badge": "Argon",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
+        "id": "Gemini 4 Argon (Low)",
+        "label": "Gemini 4 Argon (Low)",
+        "description": "Fast frontier reasoning model",
+        "provider": "agy",
+        "cli_model": "gemini-4-argon-low",
+        "badge": "Argon",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
     {
         "id": "Gemini 3.8 Flash (High)",
         "label": "Gemini 3.8 Flash (High)",
@@ -757,6 +806,8 @@ def parse_agy_models_output(output: str) -> list[dict[str, Any]]:
             badge = "Flash"
         elif "pro" in name_lower:
             badge = "Pro"
+        elif "argon" in name_lower:
+            badge = "Argon"
         elif "thinking" in name_lower:
             badge = "Thinking"
         else:

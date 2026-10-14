@@ -154,6 +154,9 @@ const colors = {
 };
 
 const FALLBACK_MODELS: ModelOption[] = [
+  { value: "Gemini 4 Argon (High)", desc: "Google flagship frontier reasoning model", provider: "agy", badge: "Argon" },
+  { value: "Gemini 4 Argon (Medium)", desc: "Balanced frontier reasoning model", provider: "agy", badge: "Argon" },
+  { value: "Gemini 4 Argon (Low)", desc: "Fast frontier reasoning model", provider: "agy", badge: "Argon" },
   { value: "Gemini 3.8 Flash (High)", desc: "Fastest response, ideal for coding tasks", provider: "agy" },
   { value: "Gemini 3.8 Flash (Medium)", desc: "Balanced speed and performance", provider: "agy" },
   { value: "Gemini 3.8 Flash (Low)", desc: "Fast, low resource usage", provider: "agy" },
@@ -198,6 +201,7 @@ const FALLBACK_MODELS: ModelOption[] = [
   { value: "Opus 4.6", desc: "Legacy Opus model", provider: "claude", supportsClaudeEffort: true },
   { value: "Opus 3", desc: "Legacy Opus model", provider: "claude" },
   { value: "Sonnet 4.6", desc: "Previous generation Sonnet", provider: "claude", supportsClaudeEffort: true },
+  { value: "6.1 Sol", desc: "Latest workhorse model for coding and everyday work", provider: "codex", supportsUltra: true, supportsFast: true },
   { value: "6 Astra", desc: "Our most capable model for complex, demanding work", provider: "codex", supportsUltra: true, supportsFast: true },
   { value: "5.6 Sol", desc: "Codex for complex, open-ended work", provider: "codex", supportsUltra: true, supportsFast: true },
   { value: "5.6 Terra", desc: "Codex everyday all-rounder", provider: "codex", supportsUltra: true, supportsFast: true },
@@ -479,6 +483,11 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
     return isDark
       ? { text: catalogBadge || 'Muse', bg: 'rgba(236, 72, 153, 0.15)', color: '#f472b6' }
       : { text: catalogBadge || 'Muse', bg: '#fce7f3', color: '#db2777' };
+  }
+  if (name.includes('argon')) {
+    return isDark
+      ? { text: catalogBadge || 'Argon', bg: 'rgba(99, 102, 241, 0.15)', color: '#818cf8' }
+      : { text: catalogBadge || 'Argon', bg: '#e0e7ff', color: '#4f46e5' };
   }
   if (name.includes('flash')) {
     return isDark

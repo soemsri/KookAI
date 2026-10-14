@@ -1,8 +1,56 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-09-08.1",
+  "catalog_version": "2026-10-14.1",
   "default_model": "Gemini 3.8 Flash (High)",
   "models": [
+    {
+      "id": "Gemini 4 Argon (High)",
+      "label": "Gemini 4 Argon (High)",
+      "description": "Google flagship frontier reasoning model",
+      "provider": "agy",
+      "cli_model": "gemini-4-argon-high",
+      "badge": "Argon",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Gemini 4 Argon (Medium)",
+      "label": "Gemini 4 Argon (Medium)",
+      "description": "Balanced frontier reasoning model",
+      "provider": "agy",
+      "cli_model": "gemini-4-argon-medium",
+      "badge": "Argon",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Gemini 4 Argon (Low)",
+      "label": "Gemini 4 Argon (Low)",
+      "description": "Fast frontier reasoning model",
+      "provider": "agy",
+      "cli_model": "gemini-4-argon-low",
+      "badge": "Argon",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
     {
       "id": "Gemini 3.8 Flash (High)",
       "label": "Gemini 3.8 Flash (High)",
@@ -12,7 +60,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.8 Flash (Medium)",
@@ -23,7 +76,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.8 Flash (Low)",
@@ -34,7 +92,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.7 Flash (High)",
@@ -45,7 +108,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.7 Flash (Medium)",
@@ -56,7 +124,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.7 Flash (Low)",
@@ -67,7 +140,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.6 Flash (High)",
@@ -78,7 +156,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.6 Flash (Medium)",
@@ -89,7 +172,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.6 Flash (Low)",
@@ -100,7 +188,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.5 Flash (High)",
@@ -111,7 +204,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.5 Flash (Medium)",
@@ -122,7 +220,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.5 Flash (Low)",
@@ -133,7 +236,12 @@
       "badge": "Flash",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.1 Pro (High)",
@@ -144,7 +252,12 @@
       "badge": "Pro",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Gemini 3.1 Pro (Low)",
@@ -155,7 +268,12 @@
       "badge": "Pro",
       "usage_bucket": "gemini",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Claude Sonnet 4.6 (Thinking)",
@@ -166,7 +284,12 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Claude Opus 4.6 (Thinking)",
@@ -177,7 +300,12 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "GPT-OSS 120B (Medium)",
@@ -188,7 +316,12 @@
       "badge": "GPT",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "GLM 5.2",
@@ -199,7 +332,12 @@
       "badge": "GLM",
       "usage_bucket": "zai",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "GLM 5 Turbo",
@@ -210,7 +348,12 @@
       "badge": "GLM",
       "usage_bucket": "zai",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "GLM 4.7",
@@ -221,7 +364,12 @@
       "badge": "GLM",
       "usage_bucket": "zai",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "GLM 4.5 Air",
@@ -232,7 +380,12 @@
       "badge": "GLM",
       "usage_bucket": "zai",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "DeepSeek Pro 0813",
@@ -243,7 +396,12 @@
       "badge": "DeepSeek",
       "usage_bucket": "deepseek",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "DeepSeek V4",
@@ -254,7 +412,12 @@
       "badge": "DeepSeek",
       "usage_bucket": "deepseek",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "DeepSeek R1",
@@ -265,7 +428,12 @@
       "badge": "DeepSeek",
       "usage_bucket": "deepseek",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "DeepSeek V3",
@@ -276,7 +444,12 @@
       "badge": "DeepSeek",
       "usage_bucket": "deepseek",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "DeepSeek Coder V2.5",
@@ -287,7 +460,12 @@
       "badge": "DeepSeek",
       "usage_bucket": "deepseek",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "DeepSeek Coder 33B",
@@ -298,7 +476,12 @@
       "badge": "DeepSeek",
       "usage_bucket": "deepseek",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "DeepSeek Math 7B",
@@ -309,7 +492,12 @@
       "badge": "DeepSeek",
       "usage_bucket": "deepseek",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "Kimi K3",
@@ -320,7 +508,12 @@
       "badge": "Kimi",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "Grok 4.6",
@@ -331,7 +524,16 @@
       "badge": "Grok",
       "usage_bucket": "xai",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High"], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "Grok 4.5",
@@ -342,7 +544,16 @@
       "badge": "Grok",
       "usage_bucket": "xai",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High"], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "Grok 4.20 Reasoning",
@@ -353,7 +564,12 @@
       "badge": "Grok",
       "usage_bucket": "xai",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "Grok 4.20 Non-Reasoning",
@@ -364,7 +580,12 @@
       "badge": "Grok",
       "usage_bucket": "xai",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Grok Build 0.1",
@@ -375,7 +596,12 @@
       "badge": "Grok",
       "usage_bucket": "xai",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "Fable 5",
@@ -386,7 +612,18 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     },
     {
       "id": "Opus 5",
@@ -397,7 +634,18 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "Sonnet 5",
@@ -408,7 +656,18 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "Haiku 4.5",
@@ -419,7 +678,12 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "Opus 4.8",
@@ -430,7 +694,18 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "Opus 4.7",
@@ -441,7 +716,18 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High", "Extra", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "Opus 4.6",
@@ -452,7 +738,17 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "Opus 3",
@@ -463,7 +759,12 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": [], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
     },
     {
       "id": "Sonnet 4.6",
@@ -474,7 +775,42 @@
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High", "Max"], "speed": [], "thinking": true, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "6.1 Sol",
+      "label": "6.1 Sol",
+      "description": "Latest workhorse model for coding and everyday work",
+      "provider": "codex",
+      "cli_model": "gpt-6.1-sol",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High",
+          "Ultra"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "6 Astra",
@@ -485,7 +821,21 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High",
+          "Ultra"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "6 Sol",
@@ -496,7 +846,21 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High",
+          "Ultra"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "6 Luna",
@@ -507,7 +871,20 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "6 Terra",
@@ -518,7 +895,21 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High",
+          "Ultra"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "5.6 Sol",
@@ -529,7 +920,21 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High",
+          "Ultra"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "5.6 Terra",
@@ -540,7 +945,21 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High", "Ultra"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High",
+          "Ultra"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "5.6 Luna",
@@ -551,7 +970,20 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "5.5",
@@ -562,7 +994,20 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "5.4",
@@ -573,7 +1018,20 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard", "Fast"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "5.4 Mini",
@@ -584,7 +1042,19 @@
       "badge": "Codex",
       "usage_bucket": "gpt",
       "enabled": true,
-      "capabilities": {"effort": ["Light", "Medium", "High", "Extra High"], "speed": ["Standard"], "thinking": false, "thinking_required": false}
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High"
+        ],
+        "speed": [
+          "Standard"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
     },
     {
       "id": "Muse Spark 1.2",
@@ -595,7 +1065,148 @@
       "badge": "Muse",
       "usage_bucket": "muse",
       "enabled": true,
-      "capabilities": {"effort": ["Low", "Medium", "High"], "speed": [], "thinking": true, "thinking_required": true}
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
+      "id": "Claude Opus 5.5 (Low)",
+      "label": "Claude Opus 5.5 (Low)",
+      "description": "Antigravity Claude Opus 5.5 (Low) model",
+      "provider": "agy",
+      "cli_model": "claude-opus-5-5-low",
+      "badge": "Gemini",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Opus 5.5 (Medium)",
+      "label": "Claude Opus 5.5 (Medium)",
+      "description": "Antigravity Claude Opus 5.5 (Medium) model",
+      "provider": "agy",
+      "cli_model": "claude-opus-5-5-medium",
+      "badge": "Gemini",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Opus 5.5 (High)",
+      "label": "Claude Opus 5.5 (High)",
+      "description": "Antigravity Claude Opus 5.5 (High) model",
+      "provider": "agy",
+      "cli_model": "claude-opus-5-5-high",
+      "badge": "Gemini",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Sonnet 5.5 (Low)",
+      "label": "Claude Sonnet 5.5 (Low)",
+      "description": "Antigravity Claude Sonnet 5.5 (Low) model",
+      "provider": "agy",
+      "cli_model": "claude-sonnet-5-5-low",
+      "badge": "Gemini",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Sonnet 5.5 (Medium)",
+      "label": "Claude Sonnet 5.5 (Medium)",
+      "description": "Antigravity Claude Sonnet 5.5 (Medium) model",
+      "provider": "agy",
+      "cli_model": "claude-sonnet-5-5-medium",
+      "badge": "Gemini",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Sonnet 5.5 (High)",
+      "label": "Claude Sonnet 5.5 (High)",
+      "description": "Antigravity Claude Sonnet 5.5 (High) model",
+      "provider": "agy",
+      "cli_model": "claude-sonnet-5-5-high",
+      "badge": "Gemini",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Kimi K2.5",
+      "label": "Kimi K2.5",
+      "description": "Moonshot Kimi K2.5 fast coding model",
+      "provider": "kimi",
+      "cli_model": "kimi-for-coding/k2.5",
+      "badge": "Kimi",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
+      "id": "Muse Spark 1.3",
+      "label": "Muse Spark 1.3",
+      "description": "Meta Muse Spark 1.3 enhanced speed and precision",
+      "provider": "muse",
+      "cli_model": "muse-spark-1.3",
+      "badge": "Muse",
+      "usage_bucket": "muse",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
     }
   ]
 }

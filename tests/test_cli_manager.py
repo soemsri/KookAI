@@ -481,6 +481,48 @@ class CliApiTests(unittest.TestCase):
         self.assertEqual(len(invocations), 2)
         self.assertEqual(invocations[1], ("agy", "Gemini 3.8 Flash (High)"))
 
+    def test_run_selected_cli_failover_to_codex_uses_6_1_sol(self):
+        invocations = []
+
+        def mock_invoke(
+            prov,
+            prov_model,
+            message,
+            conversation_id,
+            target,
+            workspace,
+            effort,
+            speed,
+            thinking,
+            image_paths,
+            progress_callback,
+        ):
+            invocations.append((prov, prov_model))
+            if prov == "claude":
+                return "❌ **Execution Error**: provider unavailable", conversation_id
+            if prov == "codex":
+                return "Hello from the latest Codex fallback", "codex-cid-1"
+            return "❌ **Execution Error**: Unsupported", conversation_id
+
+        with (
+            mock.patch.object(main, "_invoke_provider_backend", side_effect=mock_invoke),
+            mock.patch.object(
+                main, "is_provider_available", side_effect=lambda p: p == "codex"
+            ),
+        ):
+            reply, cid = main.run_selected_cli(
+                message="Test failover to Codex",
+                model_ui_name="Claude Sonnet 4.6 (Thinking)",
+                conversation_id="conv-codex-fallback",
+                target="Sandbox",
+                workspace="agy",
+                provider="claude",
+            )
+
+        self.assertIn("failed over to **codex** (6.1 Sol)", reply)
+        self.assertEqual(cid, "codex-cid-1")
+        self.assertEqual(invocations, [("claude", "Claude Sonnet 4.6 (Thinking)"), ("codex", "6.1 Sol")])
+
     def test_run_agy_cli_recovers_from_timeout_response(self):
         calls = []
 

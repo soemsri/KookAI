@@ -25,6 +25,7 @@ from model_catalog import (
 
 class ModelDiscoveryTests(unittest.TestCase):
     def test_normalize_codex_label(self):
+        self.assertEqual(model_discovery.normalize_codex_label("gpt-6.1-sol", "GPT-6.1-Sol"), "6.1 Sol")
         self.assertEqual(model_discovery.normalize_codex_label("gpt-6-sol", "GPT-6-Sol"), "6 Sol")
         self.assertEqual(model_discovery.normalize_codex_label("gpt-6-luna", "GPT-6-Luna"), "6 Luna")
         self.assertEqual(model_discovery.normalize_codex_label("gpt-5.6-terra", "GPT-5.6-Terra"), "5.6 Terra")
@@ -183,6 +184,7 @@ class ModelDiscoveryTests(unittest.TestCase):
             self.assertIn("zai", providers_in_catalog)
 
             # Check individual models
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "6.1 Sol"))
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "6 Sol"))
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Fable 5"))
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Grok 4.6"))
