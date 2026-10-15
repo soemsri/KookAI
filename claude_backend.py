@@ -28,6 +28,7 @@ CLAUDE_MODEL_MAP = {
 }
 
 CLAUDE_EFFORT_MAP = {
+    "light": "low",
     "low": "low",
     "medium": "medium",
     "high": "high",

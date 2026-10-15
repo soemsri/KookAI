@@ -264,7 +264,7 @@ migrate_legacy_data_dir(LEGACY_ANTIGRAVITY_CLI_DIR, ANTIGRAVITY_CLI_DIR)
 
 # A CLI is considered stuck only after this many seconds without output.
 # Set to 0 to disable the inactivity timeout.
-AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "600"))
+AGY_CLI_TIMEOUT = int(os.environ.get("AGY_CLI_TIMEOUT", "1800"))
 # Optional hard ceiling for a single CLI run. Zero keeps legitimately long,
 # active jobs running without an arbitrary wall-clock cutoff.
 AGY_CLI_MAX_RUNTIME = int(os.environ.get("AGY_CLI_MAX_RUNTIME", "0"))
@@ -2421,7 +2421,7 @@ def map_model_name(model_ui_name: str) -> str:
     catalog = load_runtime_model_catalog()
     model = resolve_catalog_model(catalog, model_ui_name)
     if not model:
-        return model_ui_name or "Gemini 3.8 Flash (High)"
+        return model_ui_name or "Gemini 4 Argon (High)"
     cli_m = model.get("cli_model", "")
     return cli_m or model_ui_name
 
@@ -2838,6 +2838,28 @@ def run_agy_cli(
         ] if part)
 
     def is_recoverable_conversation_error(result):
+        # If exit code is 0, stdout contains the assistant's valid response.
+        # Only treat exit code 0 as an error if stderr explicitly contains fatal errors,
+        # or stdout contains explicit agy agent fatal termination banners.
+        # Do NOT match generic words like 'timeout' or 'locked' in stdout on exit code 0.
+        if result.returncode == 0:
+            stderr_text = (result.stderr or "").lower()
+            stdout_text = (result.stdout or "").lower()
+            fatal_explicit_errors = (
+                "agent execution terminated due to error",
+                "terminated due to error",
+                "trajectory not found",
+                "failed to create conversation",
+                "failed to get conversation",
+                "database is locked",
+                "stream goroutine exited",
+            )
+            if any(err in stderr_text for err in fatal_explicit_errors):
+                return True
+            if any(err in stdout_text for err in ("agent execution terminated due to error", "terminated due to error")):
+                return True
+            return False
+
         output = command_output(result).lower()
         return (
             "trajectory not found" in output
@@ -3943,7 +3965,7 @@ def run_zai_cli(
 PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "zai", "xai", "muse", "deepseek"]
 
 DEFAULT_PROVIDER_MODELS = {
-    "agy": "Gemini 3.8 Flash (High)",
+    "agy": "Gemini 4 Argon (High)",
     "claude": "Claude Sonnet 4.6 (Thinking)",
     "codex": "6.1 Sol",
     "kimi": "Kimi K3",
@@ -4199,7 +4221,7 @@ def run_selected_cli(
                 continue
 
             fallback_model = DEFAULT_PROVIDER_MODELS.get(
-                fallback_prov, "Gemini 3.8 Flash (High)"
+                fallback_prov, "Gemini 4 Argon (High)"
             )
 
             if progress_callback:

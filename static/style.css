@@ -1273,6 +1273,7 @@ body {
   border-radius: 4px;
 }
 
+.model-badge.argon { background-color: #e0e7ff; color: #4f46e5; }
 .model-badge.flash { background-color: #fef3c7; color: #d97706; }
 .model-badge.pro { background-color: #dbeafe; color: #2563eb; }
 .model-badge.claude { background-color: #ffedd5; color: #ea580c; }

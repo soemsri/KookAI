@@ -428,7 +428,7 @@ class CliApiTests(unittest.TestCase):
         self.assertIn("Hello from Claude fallback", reply)
         self.assertEqual(cid, "claude-cid-1")
 
-    def test_run_selected_cli_failover_to_agy_uses_gemini_3_8_flash_high(self):
+    def test_run_selected_cli_failover_to_agy_uses_gemini_4_argon_high(self):
         progress_events = []
         invocations = []
 
@@ -475,11 +475,11 @@ class CliApiTests(unittest.TestCase):
             )
 
         self.assertIn("Automatic Failover", reply)
-        self.assertIn("failed over to **agy** (Gemini 3.8 Flash (High))", reply)
+        self.assertIn("failed over to **agy** (Gemini 4 Argon (High))", reply)
         self.assertIn("Hello from agy fallback", reply)
         self.assertEqual(cid, "agy-cid-1")
         self.assertEqual(len(invocations), 2)
-        self.assertEqual(invocations[1], ("agy", "Gemini 3.8 Flash (High)"))
+        self.assertEqual(invocations[1], ("agy", "Gemini 4 Argon (High)"))
 
     def test_run_selected_cli_failover_to_codex_uses_6_1_sol(self):
         invocations = []
@@ -642,6 +642,35 @@ class CliApiTests(unittest.TestCase):
         self.assertIsInstance(dbs, set)
         self.assertGreater(len(dbs), 0)
 
+    def test_run_agy_cli_does_not_failover_when_stdout_mentions_timeout_on_exit_0(self):
+        calls = []
+
+        def mock_run_command(cmd, cwd_path, timeout=None, progress_callback=None, **kwargs):
+            calls.append(list(cmd))
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="Here is how to configure socket timeout and avoid locked files.", stderr=""
+            )
+
+        with (
+            mock.patch.object(main, "get_existing_db_ids", return_value={"conv-123"}),
+            mock.patch.object(main, "get_conversation_project", return_value="KookAI"),
+            mock.patch.object(main, "run_agy_command", side_effect=mock_run_command),
+            mock.patch.object(main, "kill_processes_locking_db") as mock_kill,
+        ):
+            reply, cid = main.run_agy_cli(
+                message="Tell me about timeouts",
+                model_ui_name="Gemini 3.8 Flash (High)",
+                conversation_id="conv-123",
+                target="Sandbox",
+                workspace="KookAI",
+            )
+
+        self.assertEqual(reply, "Here is how to configure socket timeout and avoid locked files.")
+        self.assertEqual(cid, "conv-123")
+        self.assertFalse(mock_kill.called)
+        self.assertEqual(len(calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+

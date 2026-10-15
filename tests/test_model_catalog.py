@@ -250,24 +250,36 @@ class ModelCatalogApiTests(unittest.TestCase):
             "Gemini 3.8 Flash (Low)",
         )
         self.assertEqual(
+            main.map_model_name("Gemini 4 Argon (High)"),
+            "gemini-4-argon-high",
+        )
+        self.assertEqual(
+            main.map_model_name("Gemini 4 Argon (Medium)"),
+            "gemini-4-argon-medium",
+        )
+        self.assertEqual(
+            main.map_model_name("Gemini 4 Argon (Low)"),
+            "gemini-4-argon-low",
+        )
+        self.assertEqual(
             main.map_model_name("6 Astra"),
             "gpt-6-astra",
         )
         self.assertEqual(
             main.map_model_name(""),
-            "Gemini 3.8 Flash (High)",
+            "Gemini 4 Argon (High)",
         )
         self.assertEqual(
             main.map_model_name(None),
-            "Gemini 3.8 Flash (High)",
+            "Gemini 4 Argon (High)",
         )
 
-    def test_default_model_and_agy_fallback_is_gemini_3_8_flash_high(self):
+    def test_default_model_and_agy_fallback_is_gemini_4_argon_high(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)
-        self.assertEqual(catalog["default_model"], "Gemini 3.8 Flash (High)")
+        self.assertEqual(catalog["default_model"], "Gemini 4 Argon (High)")
         self.assertEqual(
             main.DEFAULT_PROVIDER_MODELS.get("agy"),
-            "Gemini 3.8 Flash (High)",
+            "Gemini 4 Argon (High)",
         )
 
     def test_codex_6_astra_is_available(self):

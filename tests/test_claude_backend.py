@@ -18,6 +18,10 @@ class ClaudeBackendTests(unittest.TestCase):
             claude_backend.normalize_claude_effort("Extra", "Opus 5"),
             ("Extra", "xhigh"),
         )
+        self.assertEqual(
+            claude_backend.normalize_claude_effort("Light", "Opus 5"),
+            ("Low", "low"),
+        )
         with self.assertRaises(ValueError):
             claude_backend.normalize_claude_effort("Extra", "Sonnet 4.6")
 

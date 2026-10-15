@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-10-14.1",
-  "default_model": "Gemini 3.8 Flash (High)",
+  "catalog_version": "2026-10-15.1",
+  "default_model": "Gemini 4 Argon (High)",
   "models": [
     {
       "id": "Gemini 4 Argon (High)",
