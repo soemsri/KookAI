@@ -107,9 +107,19 @@ document.addEventListener("DOMContentLoaded", () => {
     "5.4 Mini": { ultra: false, fast: false }
   };
   let CLAUDE_MODELS = {
+    "Fable 5.1": { effort: true, extra: true, thinkingRequired: true },
     "Fable 5": { effort: true, extra: true, thinkingRequired: true },
+    "Opus 5.5": { effort: true, extra: true },
+    "Claude Opus 5.5 (High)": { effort: true, extra: true },
+    "Claude Opus 5.5 (Medium)": { effort: true, extra: true },
+    "Claude Opus 5.5 (Low)": { effort: true, extra: true },
     "Opus 5": { effort: true, extra: true },
+    "Sonnet 5.5": { effort: true, extra: true },
+    "Claude Sonnet 5.5 (High)": { effort: true, extra: true },
+    "Claude Sonnet 5.5 (Medium)": { effort: true, extra: true },
+    "Claude Sonnet 5.5 (Low)": { effort: true, extra: true },
     "Sonnet 5": { effort: true, extra: true },
+    "Haiku 5.5": { effort: true, extra: true },
     "Haiku 4.5": { effort: false, extra: false },
     "Opus 4.8": { effort: true, extra: true },
     "Opus 4.7": { effort: true, extra: true },

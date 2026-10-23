@@ -186,7 +186,10 @@ class ModelDiscoveryTests(unittest.TestCase):
             # Check individual models
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "6.1 Sol"))
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "6 Sol"))
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Fable 5.1"))
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Fable 5"))
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Opus 5.5"))
+            self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Claude Opus 5.5 (High)"))
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Grok 4.6"))
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "Kimi K3"))
             self.assertIsNotNone(resolve_catalog_model(updated_catalog, "DeepSeek Pro 0813"))
@@ -195,6 +198,7 @@ class ModelDiscoveryTests(unittest.TestCase):
             # Verify all provider backends were configured dynamically
             self.assertTrue(codex_backend.is_codex_model("6 Sol"))
             self.assertTrue(claude_backend.is_claude_model("Fable 5"))
+            self.assertTrue(claude_backend.is_claude_model("Opus 5.5"))
             self.assertTrue(grok_backend.is_grok_model("Grok 4.6"))
             self.assertTrue(kimi_backend.is_kimi_model("Kimi K3"))
             self.assertTrue(muse_backend.is_muse_model("Muse Spark 1.2"))

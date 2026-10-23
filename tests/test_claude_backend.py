@@ -11,12 +11,37 @@ import main
 
 class ClaudeBackendTests(unittest.TestCase):
     def test_model_provider_and_effort_mapping(self):
+        self.assertEqual(claude_backend.claude_model_slug("Fable 5.1"), "claude-fable-5-1")
         self.assertEqual(claude_backend.claude_model_slug("Fable 5"), "fable")
+        self.assertEqual(claude_backend.claude_model_slug("Opus 5.5"), "claude-opus-5-5")
+        self.assertEqual(claude_backend.claude_model_slug("Claude Opus 5.5 (High)"), "claude-opus-5-5")
+        self.assertEqual(claude_backend.claude_model_slug("claude-opus-5-5-high"), "claude-opus-5-5")
+        self.assertEqual(claude_backend.claude_model_slug("Sonnet 5.5"), "claude-sonnet-5-5")
+        self.assertEqual(claude_backend.claude_model_slug("Claude Sonnet 5.5 (High)"), "claude-sonnet-5-5")
+        self.assertEqual(claude_backend.claude_model_slug("Haiku 5.5"), "claude-haiku-5-5")
         self.assertEqual(claude_backend.claude_model_slug("Opus 4.8"), "claude-opus-4-8")
+        self.assertEqual(codex_backend.resolve_provider(None, "Opus 5.5"), "claude")
+        self.assertEqual(codex_backend.resolve_provider(None, "Claude Opus 5.5 (High)"), "claude")
         self.assertEqual(codex_backend.resolve_provider(None, "Sonnet 5"), "claude")
+        self.assertEqual(
+            claude_backend.normalize_claude_effort("Medium", "Claude Opus 5.5 (High)"),
+            ("High", "high"),
+        )
+        self.assertEqual(
+            claude_backend.normalize_claude_effort("Medium", "Claude Opus 5.5 (Low)"),
+            ("Low", "low"),
+        )
+        self.assertEqual(
+            claude_backend.normalize_claude_effort("Extra", "Opus 5.5"),
+            ("Extra", "xhigh"),
+        )
         self.assertEqual(
             claude_backend.normalize_claude_effort("Extra", "Opus 5"),
             ("Extra", "xhigh"),
+        )
+        self.assertEqual(
+            claude_backend.normalize_claude_effort("Light", "Opus 5.5"),
+            ("Low", "low"),
         )
         self.assertEqual(
             claude_backend.normalize_claude_effort("Light", "Opus 5"),

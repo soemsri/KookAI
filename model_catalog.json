@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-10-15.1",
+  "catalog_version": "2026-10-20.1",
   "default_model": "Gemini 4 Argon (High)",
   "models": [
     {
@@ -272,6 +272,138 @@
         "effort": [],
         "speed": [],
         "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Opus 5.5 (High)",
+      "label": "Claude Opus 5.5 (High)",
+      "description": "Anthropic Claude Opus 5.5 (High) model",
+      "provider": "claude",
+      "cli_model": "claude-opus-5-5-high",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Opus 5.5 (Medium)",
+      "label": "Claude Opus 5.5 (Medium)",
+      "description": "Anthropic Claude Opus 5.5 (Medium) model",
+      "provider": "claude",
+      "cli_model": "claude-opus-5-5-medium",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Opus 5.5 (Low)",
+      "label": "Claude Opus 5.5 (Low)",
+      "description": "Anthropic Claude Opus 5.5 (Low) model",
+      "provider": "claude",
+      "cli_model": "claude-opus-5-5-low",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Sonnet 5.5 (High)",
+      "label": "Claude Sonnet 5.5 (High)",
+      "description": "Anthropic Claude Sonnet 5.5 (High) model",
+      "provider": "claude",
+      "cli_model": "claude-sonnet-5-5-high",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Sonnet 5.5 (Medium)",
+      "label": "Claude Sonnet 5.5 (Medium)",
+      "description": "Anthropic Claude Sonnet 5.5 (Medium) model",
+      "provider": "claude",
+      "cli_model": "claude-sonnet-5-5-medium",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Sonnet 5.5 (Low)",
+      "label": "Claude Sonnet 5.5 (Low)",
+      "description": "Anthropic Claude Sonnet 5.5 (Low) model",
+      "provider": "claude",
+      "cli_model": "claude-sonnet-5-5-low",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
         "thinking_required": false
       }
     },
@@ -604,6 +736,28 @@
       }
     },
     {
+      "id": "Fable 5.1",
+      "label": "Fable 5.1",
+      "description": "Anthropic Fable 5.1 next-generation agent model",
+      "provider": "claude",
+      "cli_model": "claude-fable-5-1",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
       "id": "Fable 5",
       "label": "Fable 5",
       "description": "For your toughest challenges",
@@ -623,6 +777,28 @@
         "speed": [],
         "thinking": true,
         "thinking_required": true
+      }
+    },
+    {
+      "id": "Opus 5.5",
+      "label": "Opus 5.5",
+      "description": "For complex work and everyday tasks",
+      "provider": "claude",
+      "cli_model": "claude-opus-5-5",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
       }
     },
     {
@@ -648,11 +824,55 @@
       }
     },
     {
+      "id": "Sonnet 5.5",
+      "label": "Sonnet 5.5",
+      "description": "Anthropic Sonnet 5.5 balanced performance and speed",
+      "provider": "claude",
+      "cli_model": "claude-sonnet-5-5",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
       "id": "Sonnet 5",
       "label": "Sonnet 5",
       "description": "Most efficient for everyday tasks",
       "provider": "claude",
       "cli_model": "sonnet",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Haiku 5.5",
+      "label": "Haiku 5.5",
+      "description": "Anthropic Haiku 5.5 fast reasoning and execution",
+      "provider": "claude",
+      "cli_model": "claude-haiku-5-5",
       "badge": "Claude",
       "usage_bucket": "claude",
       "enabled": true,
@@ -1074,102 +1294,6 @@
         "speed": [],
         "thinking": true,
         "thinking_required": true
-      }
-    },
-    {
-      "id": "Claude Opus 5.5 (Low)",
-      "label": "Claude Opus 5.5 (Low)",
-      "description": "Antigravity Claude Opus 5.5 (Low) model",
-      "provider": "agy",
-      "cli_model": "claude-opus-5-5-low",
-      "badge": "Gemini",
-      "usage_bucket": "claude",
-      "enabled": true,
-      "capabilities": {
-        "effort": [],
-        "speed": [],
-        "thinking": false,
-        "thinking_required": false
-      }
-    },
-    {
-      "id": "Claude Opus 5.5 (Medium)",
-      "label": "Claude Opus 5.5 (Medium)",
-      "description": "Antigravity Claude Opus 5.5 (Medium) model",
-      "provider": "agy",
-      "cli_model": "claude-opus-5-5-medium",
-      "badge": "Gemini",
-      "usage_bucket": "claude",
-      "enabled": true,
-      "capabilities": {
-        "effort": [],
-        "speed": [],
-        "thinking": false,
-        "thinking_required": false
-      }
-    },
-    {
-      "id": "Claude Opus 5.5 (High)",
-      "label": "Claude Opus 5.5 (High)",
-      "description": "Antigravity Claude Opus 5.5 (High) model",
-      "provider": "agy",
-      "cli_model": "claude-opus-5-5-high",
-      "badge": "Gemini",
-      "usage_bucket": "claude",
-      "enabled": true,
-      "capabilities": {
-        "effort": [],
-        "speed": [],
-        "thinking": false,
-        "thinking_required": false
-      }
-    },
-    {
-      "id": "Claude Sonnet 5.5 (Low)",
-      "label": "Claude Sonnet 5.5 (Low)",
-      "description": "Antigravity Claude Sonnet 5.5 (Low) model",
-      "provider": "agy",
-      "cli_model": "claude-sonnet-5-5-low",
-      "badge": "Gemini",
-      "usage_bucket": "claude",
-      "enabled": true,
-      "capabilities": {
-        "effort": [],
-        "speed": [],
-        "thinking": false,
-        "thinking_required": false
-      }
-    },
-    {
-      "id": "Claude Sonnet 5.5 (Medium)",
-      "label": "Claude Sonnet 5.5 (Medium)",
-      "description": "Antigravity Claude Sonnet 5.5 (Medium) model",
-      "provider": "agy",
-      "cli_model": "claude-sonnet-5-5-medium",
-      "badge": "Gemini",
-      "usage_bucket": "claude",
-      "enabled": true,
-      "capabilities": {
-        "effort": [],
-        "speed": [],
-        "thinking": false,
-        "thinking_required": false
-      }
-    },
-    {
-      "id": "Claude Sonnet 5.5 (High)",
-      "label": "Claude Sonnet 5.5 (High)",
-      "description": "Antigravity Claude Sonnet 5.5 (High) model",
-      "provider": "agy",
-      "cli_model": "claude-sonnet-5-5-high",
-      "badge": "Gemini",
-      "usage_bucket": "claude",
-      "enabled": true,
-      "capabilities": {
-        "effort": [],
-        "speed": [],
-        "thinking": false,
-        "thinking_required": false
       }
     },
     {

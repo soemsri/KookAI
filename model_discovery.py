@@ -254,6 +254,22 @@ KNOWN_AGY_MODELS: list[dict[str, Any]] = [
 
 KNOWN_CLAUDE_MODELS: list[dict[str, Any]] = [
     {
+        "id": "Fable 5.1",
+        "label": "Fable 5.1",
+        "description": "Anthropic Fable 5.1 next-generation agent model",
+        "provider": "claude",
+        "cli_model": "claude-fable-5-1",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": True,
+        },
+    },
+    {
         "id": "Fable 5",
         "label": "Fable 5",
         "description": "Anthropic Fable 5 next-generation agent model",
@@ -267,6 +283,70 @@ KNOWN_CLAUDE_MODELS: list[dict[str, Any]] = [
             "speed": [],
             "thinking": True,
             "thinking_required": True,
+        },
+    },
+    {
+        "id": "Opus 5.5",
+        "label": "Opus 5.5",
+        "description": "For complex work and everyday tasks",
+        "provider": "claude",
+        "cli_model": "claude-opus-5-5",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
+        },
+    },
+    {
+        "id": "Claude Opus 5.5 (High)",
+        "label": "Claude Opus 5.5 (High)",
+        "description": "Anthropic Claude Opus 5.5 (High) model",
+        "provider": "claude",
+        "cli_model": "claude-opus-5-5-high",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
+        },
+    },
+    {
+        "id": "Claude Opus 5.5 (Medium)",
+        "label": "Claude Opus 5.5 (Medium)",
+        "description": "Anthropic Claude Opus 5.5 (Medium) model",
+        "provider": "claude",
+        "cli_model": "claude-opus-5-5-medium",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
+        },
+    },
+    {
+        "id": "Claude Opus 5.5 (Low)",
+        "label": "Claude Opus 5.5 (Low)",
+        "description": "Anthropic Claude Opus 5.5 (Low) model",
+        "provider": "claude",
+        "cli_model": "claude-opus-5-5-low",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
         },
     },
     {
@@ -286,6 +366,70 @@ KNOWN_CLAUDE_MODELS: list[dict[str, Any]] = [
         },
     },
     {
+        "id": "Sonnet 5.5",
+        "label": "Sonnet 5.5",
+        "description": "Anthropic Sonnet 5.5 balanced performance and speed",
+        "provider": "claude",
+        "cli_model": "claude-sonnet-5-5",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
+        },
+    },
+    {
+        "id": "Claude Sonnet 5.5 (High)",
+        "label": "Claude Sonnet 5.5 (High)",
+        "description": "Anthropic Claude Sonnet 5.5 (High) model",
+        "provider": "claude",
+        "cli_model": "claude-sonnet-5-5-high",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
+        },
+    },
+    {
+        "id": "Claude Sonnet 5.5 (Medium)",
+        "label": "Claude Sonnet 5.5 (Medium)",
+        "description": "Anthropic Claude Sonnet 5.5 (Medium) model",
+        "provider": "claude",
+        "cli_model": "claude-sonnet-5-5-medium",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
+        },
+    },
+    {
+        "id": "Claude Sonnet 5.5 (Low)",
+        "label": "Claude Sonnet 5.5 (Low)",
+        "description": "Anthropic Claude Sonnet 5.5 (Low) model",
+        "provider": "claude",
+        "cli_model": "claude-sonnet-5-5-low",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
+        },
+    },
+    {
         "id": "Sonnet 5",
         "label": "Sonnet 5",
         "description": "Anthropic Sonnet 5 balanced performance and speed",
@@ -299,6 +443,22 @@ KNOWN_CLAUDE_MODELS: list[dict[str, Any]] = [
             "speed": [],
             "thinking": True,
             "thinking_required": True,
+        },
+    },
+    {
+        "id": "Haiku 5.5",
+        "label": "Haiku 5.5",
+        "description": "Anthropic Haiku 5.5 fast reasoning and execution",
+        "provider": "claude",
+        "cli_model": "claude-haiku-5-5",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": False,
         },
     },
     {
@@ -808,26 +968,44 @@ def parse_agy_models_output(output: str) -> list[dict[str, Any]]:
             badge = "Pro"
         elif "argon" in name_lower:
             badge = "Argon"
+        elif "claude" in name_lower or "claude" in slug_lower:
+            badge = "Claude"
+        elif "gpt" in name_lower or "gpt" in slug_lower or "oss" in slug_lower:
+            badge = "GPT"
         elif "thinking" in name_lower:
             badge = "Thinking"
         else:
             badge = "Gemini"
 
-        results.append({
-            "id": name,
-            "label": name,
-            "description": f"Antigravity {name} model",
-            "provider": "agy",
-            "cli_model": slug,
-            "badge": badge,
-            "usage_bucket": usage_bucket,
-            "enabled": True,
-            "capabilities": {
+        is_claude_5_5 = slug_lower.startswith(("claude-opus-5-5", "claude-sonnet-5-5"))
+        provider = "claude" if is_claude_5_5 else "agy"
+        description = f"Anthropic {name} model" if is_claude_5_5 else f"Antigravity {name} model"
+        capabilities = (
+            {
+                "effort": ["Low", "Medium", "High", "Extra", "Max"],
+                "speed": [],
+                "thinking": True,
+                "thinking_required": False,
+            }
+            if is_claude_5_5
+            else {
                 "effort": [],
                 "speed": [],
                 "thinking": False,
                 "thinking_required": False,
-            },
+            }
+        )
+
+        results.append({
+            "id": name,
+            "label": name,
+            "description": description,
+            "provider": provider,
+            "cli_model": slug,
+            "badge": badge,
+            "usage_bucket": usage_bucket,
+            "enabled": True,
+            "capabilities": capabilities,
         })
 
     return results
@@ -1103,7 +1281,7 @@ def sync_model_catalog(
         all_candidates = discover_all_models()
 
         new_models_added = []
-        for candidate in all_candidates:
+        for idx, candidate in enumerate(all_candidates):
             cli_m = candidate.get("cli_model")
             mid = candidate.get("id")
             mlabel = candidate.get("label")
@@ -1114,7 +1292,35 @@ def sync_model_catalog(
             existing_cli_models.add(cli_m)
             existing_ids.add(mid)
             existing_labels.add(mlabel)
-            existing_models.append(candidate)
+
+            provider = candidate.get("provider")
+            insert_pos = None
+            # Try to insert before the next sibling from the same provider that already exists
+            for next_cand in all_candidates[idx + 1:]:
+                if next_cand.get("provider") != provider:
+                    continue
+                next_id = next_cand.get("id")
+                next_cli = next_cand.get("cli_model")
+                for existing_idx, existing_m in enumerate(existing_models):
+                    if existing_m.get("provider") == provider and (
+                        existing_m.get("id") == next_id or existing_m.get("cli_model") == next_cli
+                    ):
+                        insert_pos = existing_idx
+                        break
+                if insert_pos is not None:
+                    break
+
+            # Otherwise insert after the last model of the same provider
+            if insert_pos is None:
+                for existing_idx in range(len(existing_models) - 1, -1, -1):
+                    if existing_models[existing_idx].get("provider") == provider:
+                        insert_pos = existing_idx + 1
+                        break
+
+            if insert_pos is not None:
+                existing_models.insert(insert_pos, candidate)
+            else:
+                existing_models.append(candidate)
             new_models_added.append(candidate)
 
         if not new_models_added:

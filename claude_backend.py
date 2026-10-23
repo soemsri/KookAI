@@ -15,16 +15,56 @@ from functools import lru_cache
 from typing import Any, Optional
 
 
+CLAUDE_SLUG_ALIASES = {
+    "claude-opus-5-5-high": "claude-opus-5-5",
+    "claude-opus-5-5-medium": "claude-opus-5-5",
+    "claude-opus-5-5-low": "claude-opus-5-5",
+    "claude-sonnet-5-5-high": "claude-sonnet-5-5",
+    "claude-sonnet-5-5-medium": "claude-sonnet-5-5",
+    "claude-sonnet-5-5-low": "claude-sonnet-5-5",
+    "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
+    "Claude Opus 4.6 (Thinking)": "claude-opus-4-6",
+}
+
+CLAUDE_PRESET_EFFORTS = {
+    "Claude Opus 5.5 (High)": "High",
+    "Claude Opus 5.5 (Medium)": "Medium",
+    "Claude Opus 5.5 (Low)": "Low",
+    "claude-opus-5-5-high": "High",
+    "claude-opus-5-5-medium": "Medium",
+    "claude-opus-5-5-low": "Low",
+    "Claude Sonnet 5.5 (High)": "High",
+    "Claude Sonnet 5.5 (Medium)": "Medium",
+    "Claude Sonnet 5.5 (Low)": "Low",
+    "claude-sonnet-5-5-high": "High",
+    "claude-sonnet-5-5-medium": "Medium",
+    "claude-sonnet-5-5-low": "Low",
+}
+
 CLAUDE_MODEL_MAP = {
+    "Fable 5.1": "claude-fable-5-1",
     "Fable 5": "fable",
+    "Opus 5.5": "claude-opus-5-5",
+    "Claude Opus 5.5": "claude-opus-5-5",
+    "Claude Opus 5.5 (High)": "claude-opus-5-5",
+    "Claude Opus 5.5 (Medium)": "claude-opus-5-5",
+    "Claude Opus 5.5 (Low)": "claude-opus-5-5",
     "Opus 5": "opus",
+    "Sonnet 5.5": "claude-sonnet-5-5",
+    "Claude Sonnet 5.5": "claude-sonnet-5-5",
+    "Claude Sonnet 5.5 (High)": "claude-sonnet-5-5",
+    "Claude Sonnet 5.5 (Medium)": "claude-sonnet-5-5",
+    "Claude Sonnet 5.5 (Low)": "claude-sonnet-5-5",
     "Sonnet 5": "sonnet",
+    "Haiku 5.5": "claude-haiku-5-5",
     "Haiku 4.5": "haiku",
     "Opus 4.8": "claude-opus-4-8",
     "Opus 4.7": "claude-opus-4-7",
     "Opus 4.6": "claude-opus-4-6",
+    "Claude Opus 4.6 (Thinking)": "claude-opus-4-6",
     "Opus 3": "claude-3-opus-20240229",
     "Sonnet 4.6": "claude-sonnet-4-6",
+    "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
 }
 
 CLAUDE_EFFORT_MAP = {
@@ -35,17 +75,32 @@ CLAUDE_EFFORT_MAP = {
     "extra": "xhigh",
     "extra high": "xhigh",
     "xhigh": "xhigh",
+    "ultra": "max",
     "max": "max",
 }
 
 CLAUDE_MODEL_EFFORTS = {
+    "Fable 5.1": {"low", "medium", "high", "xhigh", "max"},
     "Fable 5": {"low", "medium", "high", "xhigh", "max"},
+    "Opus 5.5": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Opus 5.5": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Opus 5.5 (High)": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Opus 5.5 (Medium)": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Opus 5.5 (Low)": {"low", "medium", "high", "xhigh", "max"},
     "Opus 5": {"low", "medium", "high", "xhigh", "max"},
+    "Sonnet 5.5": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Sonnet 5.5": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Sonnet 5.5 (High)": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Sonnet 5.5 (Medium)": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Sonnet 5.5 (Low)": {"low", "medium", "high", "xhigh", "max"},
     "Sonnet 5": {"low", "medium", "high", "xhigh", "max"},
+    "Haiku 5.5": {"low", "medium", "high", "xhigh", "max"},
     "Opus 4.8": {"low", "medium", "high", "xhigh", "max"},
     "Opus 4.7": {"low", "medium", "high", "xhigh", "max"},
     "Opus 4.6": {"low", "medium", "high", "max"},
+    "Claude Opus 4.6 (Thinking)": {"low", "medium", "high", "max"},
     "Sonnet 4.6": {"low", "medium", "high", "max"},
+    "Claude Sonnet 4.6 (Thinking)": {"low", "medium", "high", "max"},
 }
 
 CLAUDE_CONVERSATION_PREFIX = "claude_"
@@ -61,9 +116,11 @@ def configure_claude_catalog(models: list[dict[str, Any]]) -> None:
         cli_model = str(model.get("cli_model", "")).strip()
         if not model_id or not cli_model:
             continue
-        CLAUDE_MODEL_MAP[model_id] = cli_model
+        normalized_cli = CLAUDE_SLUG_ALIASES.get(cli_model, cli_model)
+        CLAUDE_MODEL_MAP[model_id] = normalized_cli
+        CLAUDE_MODEL_MAP[cli_model] = normalized_cli
         if label:
-            CLAUDE_MODEL_MAP[label] = cli_model
+            CLAUDE_MODEL_MAP[label] = normalized_cli
 
         capabilities = model.get("capabilities", {})
         effort_values = capabilities.get("effort", [])
@@ -74,10 +131,12 @@ def configure_claude_catalog(models: list[dict[str, Any]]) -> None:
         }
         if supported_efforts:
             CLAUDE_MODEL_EFFORTS[model_id] = supported_efforts
+            CLAUDE_MODEL_EFFORTS[cli_model] = supported_efforts
             if label:
                 CLAUDE_MODEL_EFFORTS[label] = supported_efforts
         else:
             CLAUDE_MODEL_EFFORTS.pop(model_id, None)
+            CLAUDE_MODEL_EFFORTS.pop(cli_model, None)
             if label:
                 CLAUDE_MODEL_EFFORTS.pop(label, None)
 
@@ -97,18 +156,27 @@ def _hidden_subprocess_kwargs() -> dict[str, Any]:
 
 
 def is_claude_model(model_name: str) -> bool:
-    return model_name in CLAUDE_MODEL_MAP or model_name in CLAUDE_MODEL_MAP.values()
+    return (
+        model_name in CLAUDE_MODEL_MAP
+        or model_name in CLAUDE_MODEL_MAP.values()
+        or model_name in CLAUDE_SLUG_ALIASES
+    )
 
 
 def claude_model_slug(model_name: str) -> str:
+    if model_name in CLAUDE_SLUG_ALIASES:
+        return CLAUDE_SLUG_ALIASES[model_name]
     if model_name in CLAUDE_MODEL_MAP:
-        return CLAUDE_MODEL_MAP[model_name]
+        slug = CLAUDE_MODEL_MAP[model_name]
+        return CLAUDE_SLUG_ALIASES.get(slug, slug)
     if model_name in CLAUDE_MODEL_MAP.values():
-        return model_name
+        return CLAUDE_SLUG_ALIASES.get(model_name, model_name)
     raise ValueError(f"Unsupported Claude model: {model_name}")
 
 
 def claude_display_model(model_name: str) -> str:
+    if model_name in CLAUDE_MODEL_EFFORTS:
+        return model_name
     return next(
         (name for name, slug in CLAUDE_MODEL_MAP.items() if model_name in {name, slug}),
         model_name,
@@ -123,7 +191,11 @@ def normalize_claude_effort(
     effort: Optional[str],
     model_name: Optional[str] = None,
 ) -> tuple[str, str]:
-    display_value = (effort or "Medium").strip()
+    preset_effort = CLAUDE_PRESET_EFFORTS.get(model_name or "")
+    if preset_effort and (effort is None or effort.strip().lower() == "medium"):
+        display_value = preset_effort
+    else:
+        display_value = (effort or preset_effort or "Medium").strip()
     cli_value = CLAUDE_EFFORT_MAP.get(display_value.lower())
     if not cli_value:
         raise ValueError(f"Unsupported Claude effort: {display_value}")

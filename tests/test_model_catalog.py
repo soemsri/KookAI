@@ -226,6 +226,22 @@ class ModelCatalogApiTests(unittest.TestCase):
             "Claude Opus 4.6 (Thinking)",
         )
         self.assertEqual(
+            main.map_model_name("Claude Opus 5.5 (High)"),
+            "claude-opus-5-5-high",
+        )
+        self.assertEqual(
+            main.map_model_name("Claude Opus 5.5 (Medium)"),
+            "claude-opus-5-5-medium",
+        )
+        self.assertEqual(
+            main.map_model_name("Claude Opus 5.5 (Low)"),
+            "claude-opus-5-5-low",
+        )
+        self.assertEqual(
+            main.map_model_name("Opus 5.5"),
+            "claude-opus-5-5",
+        )
+        self.assertEqual(
             main.map_model_name("GPT-OSS 120B (Medium)"),
             "GPT-OSS 120B (Medium)",
         )
@@ -281,6 +297,43 @@ class ModelCatalogApiTests(unittest.TestCase):
             main.DEFAULT_PROVIDER_MODELS.get("agy"),
             "Gemini 4 Argon (High)",
         )
+
+    def test_claude_opus_5_5_is_available_for_claude_and_agy(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+
+        claude_opus = resolve_catalog_model(catalog, "Opus 5.5")
+        self.assertIsNotNone(claude_opus)
+        self.assertEqual(claude_opus["provider"], "claude")
+        self.assertEqual(claude_opus["cli_model"], "claude-opus-5-5")
+        self.assertEqual(claude_opus["badge"], "Claude")
+        self.assertEqual(claude_opus["usage_bucket"], "claude")
+        self.assertEqual(
+            claude_opus["capabilities"]["effort"],
+            ["Low", "Medium", "High", "Extra", "Max"],
+        )
+
+        for level, slug in [
+            ("High", "claude-opus-5-5-high"),
+            ("Medium", "claude-opus-5-5-medium"),
+            ("Low", "claude-opus-5-5-low"),
+        ]:
+            opus_variant = resolve_catalog_model(catalog, f"Claude Opus 5.5 ({level})")
+            self.assertIsNotNone(opus_variant)
+            self.assertEqual(opus_variant["provider"], "claude")
+            self.assertEqual(opus_variant["cli_model"], slug)
+            self.assertEqual(opus_variant["badge"], "Claude")
+            self.assertEqual(opus_variant["usage_bucket"], "claude")
+            resolved = main.resolve_chat_model(
+                main.ChatRequest(
+                    message="hello",
+                    model=f"Claude Opus 5.5 ({level})",
+                    workspace="agy",
+                    target="Sandbox",
+                    conversation_id="temp-claude-opus-55",
+                    provider="agy",
+                )
+            )
+            self.assertEqual(resolved["provider"], "claude")
 
     def test_codex_6_astra_is_available(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)

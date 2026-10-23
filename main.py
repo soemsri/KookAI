@@ -1085,9 +1085,10 @@ def resolve_chat_model(request: ChatRequest) -> dict:
         )
     requested_provider = (request.provider or "").strip().lower()
     if requested_provider and requested_provider != model["provider"]:
-        raise ValueError(
-            f"Model {model['id']} must use the {model['provider']} provider"
-        )
+        if not (requested_provider == "agy" and model["provider"] == "claude"):
+            raise ValueError(
+                f"Model {model['id']} must use the {model['provider']} provider"
+            )
     return model
 
 
@@ -3966,7 +3967,7 @@ PROVIDER_FAILOVER_ORDER = ["agy", "claude", "codex", "kimi", "zai", "xai", "muse
 
 DEFAULT_PROVIDER_MODELS = {
     "agy": "Gemini 4 Argon (High)",
-    "claude": "Claude Sonnet 4.6 (Thinking)",
+    "claude": "Opus 5.5",
     "codex": "6.1 Sol",
     "kimi": "Kimi K3",
     "zai": "GLM 5.2",
@@ -4658,7 +4659,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
                 raise ValueError(
                     f"Effort {effort} is not supported by model {model}"
                 )
-            effort, _ = normalize_claude_effort(effort, model)
+            effort, _ = normalize_claude_effort(request.effort, model)
     elif provider == "xai" and capabilities["effort"]:
         if effort not in capabilities["effort"]:
             raise ValueError(
