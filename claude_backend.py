@@ -7,10 +7,13 @@ easy to test.
 
 from __future__ import annotations
 
+import datetime
 import json
+import math
 import os
 import shutil
 import subprocess
+import time
 from functools import lru_cache
 from typing import Any, Optional
 
@@ -338,11 +341,117 @@ def _content_text(content: Any) -> str:
     )
 
 
-def parse_claude_stream_json(output: str) -> dict[str, Any]:
+def _parse_claude_rate_limit_window(raw: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    utilization = raw.get("utilization")
+    if isinstance(utilization, bool) or not isinstance(utilization, (int, float)):
+        return None
+    if not math.isfinite(utilization) or utilization < 0:
+        return None
+    resets_at = raw.get("resetsAt")
+    if isinstance(resets_at, bool) or not isinstance(resets_at, (int, float)) or resets_at <= 0:
+        resets_at = None
+    return {
+        "utilization": float(utilization),
+        "resetsAt": int(resets_at) if resets_at is not None else None,
+    }
+
+
+def parse_claude_rate_limit_info(info: Any, observed_at: float) -> Optional[dict[str, Any]]:
+    """Extract account windows from a Claude CLI ``rate_limit_event`` payload.
+
+    ``unifiedWindows`` mirrors Anthropic's ``anthropic-ratelimit-unified-*``
+    response headers: ``utilization`` is the fraction of the window used (it
+    can legitimately exceed 1) and ``resetsAt`` is epoch seconds. The CLI marks
+    this field internal, so a payload without it yields ``None``.
+    """
+    if not isinstance(info, dict):
+        return None
+    windows = info.get("unifiedWindows")
+    if not isinstance(windows, dict):
+        return None
+    hourly = _parse_claude_rate_limit_window(windows.get("five_hour"))
+    weekly = _parse_claude_rate_limit_window(windows.get("seven_day"))
+    if not hourly and not weekly:
+        return None
+    status = info.get("status")
+    return {
+        "status": status if isinstance(status, str) else None,
+        "observedAt": float(observed_at),
+        "hourly": hourly,
+        "weekly": weekly,
+    }
+
+
+def _epoch_to_iso(epoch: Optional[float]) -> Optional[str]:
+    if epoch is None:
+        return None
+    return datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def build_claude_rate_limits(snapshot: Optional[dict[str, Any]], now: float) -> dict[str, Any]:
+    """Shape a stored rate-limit snapshot for ``/api/usage-limits``.
+
+    The snapshot is only as fresh as the last Claude CLI run made by KookAI, so
+    a window whose reset time has passed is reported as reset rather than
+    repeating its stale utilization.
+    """
+    if not snapshot:
+        return {
+            "available": False,
+            "source": "claude_cli",
+            "weekly": None,
+            "hourly": None,
+            "usedPercent": None,
+            "remainingPercent": None,
+            "resetTime": None,
+            "observedAt": None,
+            "description": "No Claude account usage reported yet. Send a message with a Claude Code model to load your limits.",
+        }
+
+    def window_view(window: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        if not window:
+            return None
+        resets_at = window.get("resetsAt")
+        if resets_at is not None and resets_at <= now:
+            return {
+                "usedPercent": 0.0,
+                "remainingPercent": 100.0,
+                "resetTime": None,
+                "description": "This window has reset since KookAI last saw Claude usage.",
+            }
+        used = round(min(100.0, window["utilization"] * 100.0), 1)
+        return {
+            "usedPercent": used,
+            "remainingPercent": round(100.0 - used, 1),
+            "resetTime": _epoch_to_iso(resets_at),
+            "description": None,
+        }
+
+    hourly = window_view(snapshot.get("hourly"))
+    weekly = window_view(snapshot.get("weekly"))
+    primary = hourly or weekly or {}
+    return {
+        "available": True,
+        "source": "claude_cli",
+        "status": snapshot.get("status"),
+        "weekly": weekly,
+        "hourly": hourly,
+        "usedPercent": primary.get("usedPercent"),
+        "remainingPercent": primary.get("remainingPercent"),
+        "resetTime": primary.get("resetTime"),
+        "observedAt": _epoch_to_iso(snapshot.get("observedAt")),
+        "description": primary.get("description"),
+    }
+
+
+def parse_claude_stream_json(output: str, observed_at: Optional[float] = None) -> dict[str, Any]:
     session_id = None
     final_message = ""
     assistant_messages: list[str] = []
     errors: list[str] = []
+    rate_limits: Optional[dict[str, Any]] = None
 
     for raw_line in (output or "").splitlines():
         try:
@@ -374,6 +483,13 @@ def parse_claude_stream_json(output: str) -> dict[str, Any]:
             error = event.get("error") or event.get("message")
             if error:
                 errors.append(str(error))
+        elif event_type == "rate_limit_event":
+            parsed_limits = parse_claude_rate_limit_info(
+                event.get("rate_limit_info"),
+                observed_at if observed_at is not None else time.time(),
+            )
+            if parsed_limits:
+                rate_limits = parsed_limits
 
     if not final_message and assistant_messages:
         final_message = assistant_messages[-1]
@@ -381,6 +497,7 @@ def parse_claude_stream_json(output: str) -> dict[str, Any]:
         "session_id": session_id,
         "final_message": final_message,
         "errors": errors,
+        "rate_limits": rate_limits,
     }
 
 

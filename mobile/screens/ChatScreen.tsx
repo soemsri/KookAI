@@ -303,10 +303,13 @@ const getCodexSpeeds = (modelName: string) => (
     : codexSpeedList.filter((item) => item.value !== "Fast")
 );
 
+type ClaudeRateLimitsField = 'claudeRateLimits' | 'antigravityClaudeRateLimits';
+
 const getUsageBucketForModel = (modelName: string, planName?: string): {
   key: UsageBucketKey;
   title: string;
   note?: string;
+  rateLimitsField?: ClaudeRateLimitsField;
 } => {
   const catalogBucket = getModelOption(modelName)?.usageBucket;
   if (isCodexModel(modelName)) {
@@ -353,7 +356,20 @@ const getUsageBucketForModel = (modelName: string, planName?: string): {
   if (catalogBucket === 'gpt' || lowered.includes('gpt') || lowered.includes('kimi')) {
     return { key: 'gpt', title: 'GPT Models (KookAI)' };
   }
-  return { key: 'claude', title: 'Claude Models (Claude Pro)' };
+  if (getModelOption(modelName)?.provider === 'agy') {
+    return {
+      key: 'claude',
+      title: `Claude Models (Antigravity${planName ? ` · ${planName}` : ''})`,
+      note: 'Claude models served through Antigravity use your Antigravity quota.',
+      rateLimitsField: 'antigravityClaudeRateLimits',
+    };
+  }
+  return {
+    key: 'claude',
+    title: 'Claude Models (Claude Code)',
+    note: "Claude account limits as reported by Claude Code on KookAI's most recent Claude run.",
+    rateLimitsField: 'claudeRateLimits',
+  };
 };
 
 const targetsList = [
@@ -2969,8 +2985,10 @@ allowQueue: false,
         ? Number(hourly.usedPercent ?? 0)
         : Number(hourly.remainingPercent ?? Math.max(0, 100 - (hourly.usedPercent ?? 0)));
     }
-    if (bucket.key === 'claude' && usageLimitData.claudeRateLimits) {
-      const hourly = usageLimitData.claudeRateLimits.hourly || usageLimitData.claudeRateLimits;
+    if (bucket.key === 'claude' && bucket.rateLimitsField) {
+      const claudeLimits = usageLimitData[bucket.rateLimitsField];
+      if (claudeLimits?.available !== true) return 0;
+      const hourly = claudeLimits.hourly || claudeLimits;
       return usageMode === 'usage'
         ? Number(hourly.usedPercent ?? 0)
         : Number(hourly.remainingPercent ?? Math.max(0, 100 - (hourly.usedPercent ?? 0)));
@@ -3042,11 +3060,12 @@ allowQueue: false,
     bucket: UsageBucketKey,
     period: UsagePeriodKey,
     label: string,
+    rateLimitsField?: ClaudeRateLimitsField,
   ) => {
     const rateLimits = bucket === 'gemini'
       ? usageLimitData?.geminiRateLimits
       : bucket === 'claude'
-        ? usageLimitData?.claudeRateLimits
+        ? usageLimitData?.[rateLimitsField || 'claudeRateLimits']
         : null;
 
     const reportedWindow = period === 'Weekly' ? rateLimits?.weekly : rateLimits?.hourly;
@@ -3057,7 +3076,8 @@ allowQueue: false,
           <View style={styles.usageRowLabel}>
             <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>{label}</Text>
             <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
-              Quota unavailable. Check Antigravity for account limits.
+              {(rateLimits?.available !== true && rateLimits?.description) ||
+                'Quota unavailable. Check Antigravity for account limits.'}
             </Text>
           </View>
           <Text style={{ color: theme.textSecondary }}>—</Text>
@@ -4744,7 +4764,7 @@ allowQueue: false,
               <ScrollView style={styles.popupScroll}>
                 <View style={styles.usageSection}>
                   <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>
-                    {getUsageBucketForModel(selectedModel, (usageLimitData?.geminiRateLimits?.source ? usageLimitData?.antigravityPlan : undefined)).title}
+                    {getUsageBucketForModel(selectedModel, ((usageLimitData?.geminiRateLimits?.source || usageLimitData?.antigravityClaudeRateLimits?.source) ? usageLimitData?.antigravityPlan : undefined)).title}
                   </Text>
                   {getUsageBucketForModel(selectedModel).note ? (
                     <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textMuted }]}>
@@ -4767,8 +4787,8 @@ allowQueue: false,
                     </>
                   ) : (isXaiModel(selectedModel) || isMuseModel(selectedModel)) ? null : (
                     <>
-                      {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Weekly', 'Weekly Limit')}
-                      {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Hourly', 'Five Hour Limit')}
+                      {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Weekly', 'Weekly Limit', getUsageBucketForModel(selectedModel).rateLimitsField)}
+                      {renderUsageLimitRow(getUsageBucketForModel(selectedModel).key, 'Hourly', 'Five Hour Limit', getUsageBucketForModel(selectedModel).rateLimitsField)}
                     </>
                   )}
                 </View>

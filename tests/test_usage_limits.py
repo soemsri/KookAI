@@ -10,7 +10,10 @@ from main import app
 class TestUsageLimitsAPI(unittest.TestCase):
 
     def setUp(self):
+        import main
         self.client = TestClient(app)
+        main._claude_rate_limits_by_profile.clear()
+        self.addCleanup(main._claude_rate_limits_by_profile.clear)
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
@@ -81,8 +84,12 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertIsNone(data["geminiWeeklyPercent"])
         self.assertIsNone(data["geminiHourlyUsed"])
         self.assertIsNone(data["geminiHourlyPercent"])
-        self.assertEqual(data["claudeWeeklyUsed"], 0)
-        self.assertEqual(data["claudeWeeklyPercent"], 0.0)
+        # Without a Claude CLI rate_limit_event the account quota is unknown.
+        self.assertIsNone(data["claudeWeeklyUsed"])
+        self.assertIsNone(data["claudeWeeklyPercent"])
+        self.assertIsNone(data["claudeHourlyPercent"])
+        self.assertFalse(data["claudeRateLimits"]["available"])
+        self.assertEqual(data["claudeRateLimits"]["source"], "claude_cli")
 
     @patch("main.verify_authorization", return_value=True)
     @patch("main.fetch_codex_rate_limits", return_value=None)
@@ -205,11 +212,50 @@ class TestUsageLimitsAPI(unittest.TestCase):
         self.assertEqual(data["geminiRateLimits"]["hourly"]["remainingPercent"], 97.0)
         self.assertEqual(data["geminiRateLimits"]["weekly"]["description"], "You have used some of your weekly limit, it will fully refresh in 4 days, 3 hours.")
 
-        self.assertIsNotNone(data.get("claudeRateLimits"))
-        self.assertEqual(data["claudeWeeklyPercent"], 0.0)
-        self.assertEqual(data["claudeHourlyPercent"], 0.0)
-        self.assertEqual(data["claudeRateLimits"]["weekly"]["remainingPercent"], 100.0)
-        self.assertEqual(data["claudeRateLimits"]["hourly"]["remainingPercent"], 100.0)
+        # Antigravity's "Claude and GPT models" group meters Antigravity-served
+        # models; it must not be reported as the Claude Code account quota.
+        agy_claude = data["antigravityClaudeRateLimits"]
+        self.assertEqual(agy_claude["source"], "antigravity")
+        self.assertEqual(agy_claude["weekly"]["remainingPercent"], 100.0)
+        self.assertEqual(agy_claude["hourly"]["remainingPercent"], 100.0)
+        self.assertFalse(data["claudeRateLimits"]["available"])
+        self.assertIsNone(data["claudeWeeklyPercent"])
+        self.assertIsNone(data["claudeHourlyPercent"])
+
+    @patch("main.verify_authorization", return_value=True)
+    @patch("main.fetch_codex_rate_limits", return_value=None)
+    @patch("main.fetch_antigravity_language_server_quota", return_value=None)
+    @patch("main.get_default_profile", return_value=None)
+    @patch("subprocess.run")
+    def test_get_usage_limits_reports_claude_cli_account_windows(self, mock_subprocess, mock_default, mock_ls, mock_codex, mock_auth):
+        import main
+        import time
+        proc_mock = MagicMock()
+        proc_mock.returncode = 0
+        proc_mock.stdout = json.dumps({"daily": [], "session": []})
+        mock_subprocess.return_value = proc_mock
+        now = time.time()
+        main.record_claude_rate_limits(None, {
+            "status": "allowed",
+            "observedAt": now,
+            "hourly": {"utilization": 0.12, "resetsAt": int(now) + 3600},
+            "weekly": {"utilization": 0.07, "resetsAt": int(now) + 86400},
+        })
+        main.record_claude_rate_limits("prof_other", {
+            "status": "allowed",
+            "observedAt": now,
+            "hourly": {"utilization": 0.9, "resetsAt": int(now) + 3600},
+            "weekly": None,
+        })
+
+        data = self.client.get("/api/usage-limits").json()
+
+        self.assertTrue(data["claudeRateLimits"]["available"])
+        self.assertEqual(data["claudeRateLimits"]["hourly"]["usedPercent"], 12.0)
+        self.assertEqual(data["claudeRateLimits"]["weekly"]["usedPercent"], 7.0)
+        self.assertEqual(data["claudeHourlyPercent"], 12.0)
+        self.assertEqual(data["claudeWeeklyPercent"], 7.0)
+        self.assertIsNone(data["antigravityClaudeRateLimits"])
 
     @unittest.skipIf(os.name == "nt", "os.killpg only available on POSIX")
     @patch("main.subprocess.Popen")

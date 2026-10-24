@@ -66,6 +66,7 @@ from claude_backend import (
     CLAUDE_CONVERSATION_PREFIX,
     build_claude_command,
     build_claude_environment,
+    build_claude_rate_limits,
     classify_claude_progress_line,
     claude_session_id,
     configure_claude_catalog,
@@ -3228,6 +3229,23 @@ def run_codex_cli(
         )
 
 
+# Latest Claude account windows seen in CLI ``rate_limit_event`` output, keyed
+# by profile id ("" for the CLI's own ~/.claude login). In-memory only, so the
+# usage panel is empty until the first Claude run after a server start.
+_claude_rate_limits_by_profile: dict[str, dict[str, Any]] = {}
+_claude_rate_limits_lock = threading.Lock()
+
+
+def record_claude_rate_limits(profile_id: Optional[str], snapshot: dict[str, Any]) -> None:
+    with _claude_rate_limits_lock:
+        _claude_rate_limits_by_profile[profile_id or ""] = snapshot
+
+
+def get_claude_rate_limits_snapshot(profile_id: Optional[str]) -> Optional[dict[str, Any]]:
+    with _claude_rate_limits_lock:
+        return _claude_rate_limits_by_profile.get(profile_id or "")
+
+
 def run_claude_cli(
     message: str,
     model_ui_name: str,
@@ -3263,6 +3281,8 @@ def run_claude_cli(
                 stream_result["final_message"] = parsed_line["final_message"]
             if parsed_line["errors"]:
                 stream_result["errors"].extend(parsed_line["errors"])
+            if parsed_line["rate_limits"]:
+                record_claude_rate_limits(profile_id, parsed_line["rate_limits"])
 
         cmd = build_claude_command(
             claude_path=resolve_claude_executable(),
@@ -6121,9 +6141,11 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
         "xaiHourlyLimit": 0,
         "geminiRateLimits": None,
         "claudeRateLimits": None,
+        "antigravityClaudeRateLimits": None,
         "codexRateLimits": None,
         "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop.",
         "geminiUsageNote": "Account quota is shown only when reported by Antigravity. Local transcript sizes are not account quota.",
+        "claudeUsageNote": "Claude account limits as reported by Claude Code on KookAI's most recent Claude run. Usage from other Claude apps since then is not included.",
         "xaiUsageNote": "Grok usage and billing are managed by your xAI account. Grok Build does not currently expose an account-wide quota percentage here.",
         "antigravityPlan": default_plan,
     }
@@ -6279,12 +6301,8 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
                         }
                         if "weekly" in bid or "weekly" in b_window:
                             claude_weekly_bucket = b_data
-                            result_data["claudeWeeklyPercent"] = used_pct
-                            result_data["claudeWeeklyUsed"] = int(used_pct * 1000000)
                         elif "5h" in bid or "5h" in b_window or "hourly" in bid:
                             claude_hourly_bucket = b_data
-                            result_data["claudeHourlyPercent"] = used_pct
-                            result_data["claudeHourlyUsed"] = int(used_pct * 100000)
 
         # Model-specific quotaInfo has no weekly/5-hour window contract; do not
         # duplicate it into account quota buckets when the summary is missing.
@@ -6304,11 +6322,14 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
                 "description": primary_gemini.get("description"),
             }
 
+        # This Antigravity group meters Claude models served through
+        # Antigravity, not the Anthropic account behind the Claude Code CLI.
         if claude_weekly_bucket or claude_hourly_bucket:
             primary_claude = claude_hourly_bucket or claude_weekly_bucket
             weekly_claude = claude_weekly_bucket
-            result_data["claudeRateLimits"] = {
+            result_data["antigravityClaudeRateLimits"] = {
                 "available": True,
+                "source": "antigravity",
                 "planName": plan_name,
                 "weekly": weekly_claude,
                 "hourly": claude_hourly_bucket,
@@ -6469,11 +6490,25 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
             "description": "Quota unavailable. Open Antigravity to check your account limits.",
         }
 
-    if not result_data.get("claudeRateLimits"):
-        result_data["claudeWeeklyUsed"] = claude_weekly
-        result_data["claudeWeeklyPercent"] = min(100.0, round((claude_weekly / cw_limit) * 100, 1))
-        result_data["claudeHourlyUsed"] = claude_hourly
-        result_data["claudeHourlyPercent"] = min(100.0, round((claude_hourly / ch_limit) * 100, 1))
+    # Local transcript token counts have no relation to the Claude account's
+    # limits, so only the windows reported by the Claude CLI are exposed.
+    if target_profile and target_profile.get("cli_id") == "claude":
+        claude_profile_id = target_profile.get("id")
+    else:
+        try:
+            default_claude_profile = get_default_profile("claude")
+        except Exception:
+            default_claude_profile = None
+        claude_profile_id = default_claude_profile.get("id") if default_claude_profile else None
+    claude_rate_limits = build_claude_rate_limits(
+        get_claude_rate_limits_snapshot(claude_profile_id), time.time()
+    )
+    result_data["claudeRateLimits"] = claude_rate_limits
+    for period, window in (("Weekly", claude_rate_limits["weekly"]), ("Hourly", claude_rate_limits["hourly"])):
+        used_pct = window["usedPercent"] if window else None
+        result_data[f"claude{period}Percent"] = used_pct
+        result_data[f"claude{period}Used"] = used_pct
+        result_data[f"claude{period}Limit"] = 100 if window else None
 
     if not result_data.get("codexRateLimits"):
         result_data["gptWeeklyUsed"] = gpt_weekly

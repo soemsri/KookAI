@@ -2723,11 +2723,22 @@ document.addEventListener("DOMContentLoaded", () => {
         note: ""
       };
     }
+    if (getCatalogModel(currentModel)?.provider === "agy") {
+      const plan = (usageData?.antigravityClaudeRateLimits?.source ? usageData?.antigravityPlan : null) || "Plan unavailable";
+      return {
+        key: "claude",
+        rateLimitsField: "antigravityClaudeRateLimits",
+        title: "Claude Models (Antigravity)",
+        badge: `Your Plan: ${plan}`,
+        note: "Claude models served through Antigravity use your Antigravity quota."
+      };
+    }
     return {
       key: "claude",
-      title: "Claude Models",
-      badge: "Your Plan: Claude Pro",
-      note: ""
+      rateLimitsField: "claudeRateLimits",
+      title: "Claude Models (Claude Code)",
+      badge: "Claude account usage",
+      note: usageData.claudeUsageNote || ""
     };
   }
 
@@ -2760,12 +2771,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Update main button chart based on selected model
     const codexPrimary = isCodexModel(currentModel) ? usageData.codexRateLimits?.primary : null;
+    const claudeLimits = activeBucket.rateLimitsField ? usageData[activeBucket.rateLimitsField] : null;
     const activeHourlyPercent = codexPrimary
       ? Number(codexPrimary.usedPercent || 0)
-      : Number(usageData[`${activeBucket.key}HourlyPercent`] || 0);
-    const quotaUnavailable = activeBucket.key === "gemini" &&
+      : activeBucket.rateLimitsField
+        ? Number(claudeLimits?.usedPercent || 0)
+        : Number(usageData[`${activeBucket.key}HourlyPercent`] || 0);
+    const quotaUnavailable = (activeBucket.key === "gemini" &&
       (usageData.geminiRateLimits?.source !== "antigravity" || usageData.geminiRateLimits?.available !== true ||
-       !Number.isFinite(usageData.geminiRateLimits?.hourly?.usedPercent));
+       !Number.isFinite(usageData.geminiRateLimits?.hourly?.usedPercent))) ||
+      (activeBucket.rateLimitsField && claudeLimits?.available !== true);
     const mainVal = quotaUnavailable ? 0 : (isUsage ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent));
 
     const mainCircle = document.getElementById("mainUsageBtnChartCircle");
@@ -2793,10 +2808,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function updateSection(dataPrefix, limitName, elementPrefix = dataPrefix) {
       const isGemini = dataPrefix.startsWith("gemini") && usageData.geminiRateLimits;
-      const isClaudeRateLimit = dataPrefix.startsWith("claude") && usageData.claudeRateLimits;
-      
+      const isClaudeRateLimit = dataPrefix.startsWith("claude") && claudeLimits;
+
       const limits = dataPrefix.startsWith("gemini") ? usageData.geminiRateLimits :
-        dataPrefix.startsWith("claude") ? usageData.claudeRateLimits : null;
+        dataPrefix.startsWith("claude") ? claudeLimits : null;
       const windowData = dataPrefix.toLowerCase().includes("weekly") ? limits?.weekly : limits?.hourly;
       if ((dataPrefix.startsWith("gemini") || limits) &&
           ((dataPrefix.startsWith("gemini") && limits?.source !== "antigravity") || limits?.available !== true || !Number.isFinite(windowData?.usedPercent))) {
@@ -2805,12 +2820,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const descEl = document.getElementById(`${elementPrefix}Desc`);
         if (percentEl) percentEl.textContent = "—";
         if (chartEl) chartEl.setAttribute("stroke-dasharray", "0, 100");
-        if (descEl) descEl.textContent = "Quota unavailable. Check Antigravity for account limits.";
+        if (descEl) descEl.textContent = (limits?.available !== true && limits?.description) ||
+          "Quota unavailable. Check Antigravity for account limits.";
         return;
       }
 
       if (isGemini || isClaudeRateLimit) {
-        const rateLimits = isGemini ? usageData.geminiRateLimits : usageData.claudeRateLimits;
+        const rateLimits = isGemini ? usageData.geminiRateLimits : claudeLimits;
         const isWeekly = dataPrefix.toLowerCase().includes("weekly");
         const bucketData = windowData;
         const usedPercent = Number(bucketData.usedPercent !== undefined ? bucketData.usedPercent : (rateLimits.usedPercent || 0));
