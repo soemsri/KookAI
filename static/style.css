@@ -2329,6 +2329,129 @@ body {
   text-align: right;
 }
 
+.usage-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.usage-meta {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.usage-row-item.status-row .usage-percent-text {
+  color: var(--text-muted);
+}
+
+.usage-row-item .usage-desc.hint {
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.usage-plan-badge.status-ok {
+  color: #15803d;
+  background: #ecfdf5;
+  border-color: rgba(21, 128, 61, 0.15);
+}
+
+.usage-plan-badge.status-stale {
+  color: #d97706;
+  background: #fef3c7;
+  border-color: rgba(217, 119, 6, 0.15);
+}
+
+.usage-plan-badge.status-not_logged_in,
+.usage-plan-badge.status-token_expired,
+.usage-plan-badge.status-auth_rejected {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: rgba(185, 28, 28, 0.15);
+}
+
+.usage-plan-badge.status-unsupported,
+.usage-plan-badge.status-unavailable,
+.usage-plan-badge.status-loading {
+  color: var(--text-secondary);
+  background: rgba(128, 128, 128, 0.12);
+  border-color: rgba(128, 128, 128, 0.2);
+}
+
+.usage-other-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.usage-other-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: background-color var(--transition-fast);
+}
+
+.usage-other-row:hover,
+.usage-other-row:focus-visible {
+  background-color: rgba(128, 128, 128, 0.1);
+  outline: none;
+}
+
+.usage-other-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-other-summary {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.usage-status-pill {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: rgba(128, 128, 128, 0.12);
+}
+
+.usage-status-pill.status-ok {
+  color: #15803d;
+  background: #ecfdf5;
+}
+
+.usage-status-pill.status-stale {
+  color: #d97706;
+  background: #fef3c7;
+}
+
+.usage-status-pill.status-not_logged_in,
+.usage-status-pill.status-token_expired,
+.usage-status-pill.status-auth_rejected {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
 /* Local access status UI */
 .user-auth-widget {
   margin-bottom: 10px;

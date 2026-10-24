@@ -52,6 +52,7 @@ from codex_backend import (
     classify_codex_progress_line,
     codex_session_id,
     configure_codex_catalog,
+    fetch_codex_account_status,
     fetch_codex_rate_limits,
     hidden_subprocess_kwargs,
     is_codex_model,
@@ -126,6 +127,22 @@ from zai_backend import (
     parse_zai_stream_json,
     resolve_zai_executable,
     zai_session_id,
+)
+from provider_usage import (
+    PROVIDER_NAMES,
+    PROVIDER_ORDER,
+    STATUS_UNAVAILABLE,
+    antigravity_signed_in,
+    build_antigravity_providers,
+    build_codex_provider,
+    build_provider,
+    fetch_claude_account_usage,
+    fetch_deepseek_account_usage,
+    fetch_grok_account_usage,
+    fetch_kimi_account_usage,
+    fetch_muse_account_status,
+    fetch_zai_account_usage,
+    provider_from_claude_cli_snapshot,
 )
 from cli_manager import (
     auto_install_missing,
@@ -5961,134 +5978,117 @@ def get_profile_oauth_email(profile: Optional[dict]) -> Optional[str]:
     return None
 
 
-def fetch_antigravity_token_usage(now_epoch: float, profile_root: Optional[str] = None) -> tuple[int, int]:
-    """Calculate token usage for Antigravity / Gemini from local transcripts."""
-    brain_paths = []
-    if profile_root and os.path.isdir(profile_root):
-        candidate_dirs = [
-            os.path.join(profile_root, ".gemini", "antigravity-cli", "brain", "*"),
-            os.path.join(profile_root, ".gemini", "antigravity", "brain", "*"),
-        ]
-        brain_paths = [p for p in candidate_dirs if glob.glob(p)]
+PROVIDER_FETCH_TIMEOUT_SECONDS = 8.0
+PROVIDER_USAGE_CACHE_TTL_SECONDS = 30.0
 
-    if not brain_paths:
-        brain_paths = [os.path.join(d, "brain/*") for d in ALL_ANTIGRAVITY_CLI_DIRS]
-        brain_paths.append(os.path.expanduser("~/.gemini/antigravity/brain/*"))
-
-    weekly_tokens = 0
-    hourly_tokens = 0
-    scanned_folders = set()
-    
-    for pattern in brain_paths:
-        for folder in glob.glob(pattern):
-            norm_folder = os.path.normcase(os.path.abspath(folder))
-            if norm_folder in scanned_folders:
-                continue
-            scanned_folders.add(norm_folder)
-            
-            transcript_path = os.path.join(folder, ".system_generated", "logs", "transcript_full.jsonl")
-            if not os.path.exists(transcript_path):
-                transcript_path = os.path.join(folder, ".system_generated", "logs", "transcript.jsonl")
-            if not os.path.exists(transcript_path):
-                continue
-            try:
-                mtime = os.path.getmtime(transcript_path)
-                age_hours = (now_epoch - mtime) / 3600.0
-                if age_hours > 168:
-                    continue
-                folder_tokens = 0
-                with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        line_str = line.strip()
-                        if not line_str:
-                            continue
-                        try:
-                            step = json.loads(line_str)
-                            scontent = step.get("content", "")
-                            if scontent and isinstance(scontent, str):
-                                folder_tokens += max(1, len(scontent) // 4)
-                        except Exception:
-                            pass
-                weekly_tokens += folder_tokens
-                if age_hours <= 5:
-                    hourly_tokens += folder_tokens
-            except Exception:
-                pass
-                
-    return weekly_tokens, hourly_tokens
-
-
-_ccusage_cache = {
+# Raw per-provider lookups are cached briefly so the web and mobile panels can
+# poll without hammering provider APIs; the cache is keyed by the selected
+# harness profile because that changes which sign-in each provider reads.
+_provider_usage_cache: dict[str, Any] = {
     "timestamp": 0.0,
-    "gemini_weekly": 0,
-    "gemini_hourly": 0,
-    "claude_weekly": 0,
-    "claude_hourly": 0,
-    "gpt_weekly": 0,
-    "gpt_hourly": 0,
+    "key": None,
+    "raw": None,
+    "paths": None,
 }
-_ccusage_lock = asyncio.Lock()
+_provider_usage_lock = asyncio.Lock()
 
-_provider_rate_limits_cache: dict[str, Any] = {
-    "timestamp": 0.0,
-    "target_profile_root": None,
-    "codex_rate_limits": None,
-    "antigravity_status": None,
-}
-_provider_rate_limits_lock = asyncio.Lock()
+USAGE_PROVIDER_CLIS = ("claude", "codex", "agy", "kimi", "grok", "muse", "deepseek", "zai")
 
 
-def run_ccusage_safely():
-    """Execute ccusage safely, ensuring process group termination on timeout to avoid runaway orphans."""
-    if hasattr(subprocess.run, "mock_calls"):
-        return subprocess.run(
-            ["npx", "ccusage", "--sections", "daily,session", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            shell=(os.name == 'nt'),
-            **hidden_subprocess_kwargs(),
-        )
+def resolve_provider_account_paths(cli_id: str, target_profile: Optional[dict]) -> dict[str, Any]:
+    """Pick which sign-in a provider's usage is read from.
 
-    cmd = ["npx", "ccusage", "--sections", "daily,session", "--json", "--offline", "--no-cost"]
-    kwargs = hidden_subprocess_kwargs()
-    if os.name != "nt":
-        kwargs["start_new_session"] = True
-
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        shell=(os.name == "nt"),
-        **kwargs,
-    )
-    try:
-        stdout, stderr = proc.communicate(timeout=2)
-        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
-    except subprocess.TimeoutExpired as exc:
-        if os.name != "nt":
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except Exception:
-                pass
-        else:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+    The explicitly selected harness profile wins when it belongs to this CLI;
+    otherwise the CLI's default harness profile is used, and failing that the
+    CLI's own login under the server user's HOME.
+    """
+    profile = None
+    if target_profile and target_profile.get("cli_id") == cli_id:
+        profile = target_profile
+    else:
         try:
-            proc.communicate(timeout=0.5)
+            profile = get_default_profile(cli_id)
         except Exception:
-            pass
-        raise exc
+            profile = None
+    if profile:
+        return {
+            "profile": profile,
+            "profile_id": profile.get("id"),
+            "home": profile.get("profile_root"),
+            "config_dir": profile.get("config_dir"),
+        }
+    return {"profile": None, "profile_id": None, "home": None, "config_dir": None}
+
+
+async def _fetch_provider_usage_raw(target_profile: Optional[dict]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Query every provider concurrently; each result is a dict or the exception it raised."""
+    paths = {cli: resolve_provider_account_paths(cli, target_profile) for cli in USAGE_PROVIDER_CLIS}
+    codex_env = None
+    if paths["codex"]["config_dir"]:
+        codex_env = {**os.environ, "CODEX_HOME": paths["codex"]["config_dir"]}
+
+    jobs: dict[str, Any] = {
+        "claude": lambda: fetch_claude_account_usage(home=paths["claude"]["home"], config_dir=paths["claude"]["config_dir"]),
+        "codex": lambda: fetch_codex_account_status(timeout_seconds=6, env=codex_env),
+        "antigravity": lambda: fetch_antigravity_language_server_quota(profile_root=paths["agy"]["home"]),
+        "kimi": lambda: fetch_kimi_account_usage(home=paths["kimi"]["home"]),
+        "grok": lambda: fetch_grok_account_usage(home=paths["grok"]["home"]),
+        "muse": lambda: fetch_muse_account_status(home=paths["muse"]["home"]),
+        "deepseek": lambda: fetch_deepseek_account_usage(home=paths["deepseek"]["home"]),
+        "zai": lambda: fetch_zai_account_usage(home=paths["zai"]["home"]),
+    }
+
+    async def run(name: str, job: Any) -> Any:
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(job), timeout=PROVIDER_FETCH_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError as exc:
+            # asyncio.TimeoutError is the builtin TimeoutError on 3.11+, so a
+            # provider's own timeout message (non-empty) is kept as-is.
+            return TimeoutError(str(exc) or f"{name} usage lookup timed out after {PROVIDER_FETCH_TIMEOUT_SECONDS:.0f}s")
+        except Exception as exc:  # reported per provider, never fatal for the panel
+            return exc
+
+    results = await asyncio.gather(*(run(name, job) for name, job in jobs.items()))
+    return dict(zip(jobs.keys(), results)), paths
+
+
+def _antigravity_user_status(antigravity_status: dict[str, Any]) -> dict[str, Any]:
+    user_status = antigravity_status.get("userStatus")
+    return user_status if isinstance(user_status, dict) else antigravity_status
+
+
+def _antigravity_email(user_status: dict[str, Any]) -> Optional[str]:
+    if not isinstance(user_status, dict):
+        return None
+    nested = user_status.get("user") if isinstance(user_status.get("user"), dict) else {}
+    email = user_status.get("email") or user_status.get("userEmail") or nested.get("email")
+    return str(email) if email else None
+
+
+def _antigravity_plan_name(user_status: dict[str, Any]) -> Optional[str]:
+    user_tier = user_status.get("userTier", {}) if isinstance(user_status, dict) else {}
+    if not isinstance(user_tier, dict):
+        return None
+    tier_name = user_tier.get("name")
+    if not tier_name and user_tier.get("id"):
+        tier_id = str(user_tier.get("id")).lower()
+        if "pro" in tier_id:
+            tier_name = "Google AI Pro"
+        elif "ultra" in tier_id:
+            tier_name = "Google AI Ultra"
+    return tier_name or None
 
 
 @app.get("/api/usage-limits")
 async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
+    """Live account usage for every model provider KookAI can route to.
+
+    Each provider is read from the sign-in its own CLI stored (or from the
+    selected harness profile). Nothing is estimated from local transcripts:
+    a provider that is signed out or has no usage API reports that status.
+    """
     verify_authorization(request)
-    
-    # Resolve target profile if specified
+
     raw_prof_id = profile_id or request.query_params.get("profile_id")
     target_prof_id = raw_prof_id.strip() if isinstance(raw_prof_id, str) else None
     if target_prof_id and target_prof_id.lower() in ("null", "undefined", "none", "", "default"):
@@ -6099,110 +6099,246 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
         target_profile = get_profile(target_prof_id)
         if not target_profile:
             raise HTTPException(status_code=404, detail="Usage profile not found")
-    if not target_profile:
-        try:
-            target_profile = get_default_profile("agy")
-        except Exception:
-            target_profile = None
 
-    target_profile_root = target_profile.get("profile_root") if target_profile else None
-    target_profile_email = get_profile_oauth_email(target_profile)
-    # Profile labels and local transcripts do not establish account entitlements.
-    default_plan = None
-    gw_limit = None
-    gh_limit = None
-    cw_limit = 100000000
-    ch_limit = 10000000
-
-    result_data = {
-        "geminiWeeklyPercent": None,
-        "geminiHourlyPercent": None,
-        "claudeWeeklyPercent": 0.0,
-        "claudeHourlyPercent": 0.0,
-        "gptWeeklyPercent": 0.0,
-        "gptHourlyPercent": 0.0,
-        "xaiWeeklyPercent": 0.0,
-        "xaiHourlyPercent": 0.0,
-        "geminiWeeklyUsed": None,
-        "geminiWeeklyLimit": gw_limit,
-        "geminiHourlyUsed": None,
-        "geminiHourlyLimit": gh_limit,
-        "claudeWeeklyUsed": 0,
-        "claudeWeeklyLimit": cw_limit,
-        "claudeHourlyUsed": 0,
-        "claudeHourlyLimit": ch_limit,
-        "gptWeeklyUsed": 0,
-        "gptWeeklyLimit": cw_limit,
-        "gptHourlyUsed": 0,
-        "gptHourlyLimit": ch_limit,
-        "xaiWeeklyUsed": 0,
-        "xaiWeeklyLimit": 0,
-        "xaiHourlyUsed": 0,
-        "xaiHourlyLimit": 0,
-        "geminiRateLimits": None,
-        "claudeRateLimits": None,
-        "antigravityClaudeRateLimits": None,
-        "codexRateLimits": None,
-        "codexUsageNote": "Codex GPT models use your ChatGPT/Codex account rate limit. When available, this endpoint reports the same Codex app-server rate-limit percentage shown by Codex Desktop.",
-        "geminiUsageNote": "Account quota is shown only when reported by Antigravity. Local transcript sizes are not account quota.",
-        "claudeUsageNote": "Claude account limits as reported by Claude Code on KookAI's most recent Claude run. Usage from other Claude apps since then is not included.",
-        "xaiUsageNote": "Grok usage and billing are managed by your xAI account. Grok Build does not currently expose an account-wide quota percentage here.",
-        "antigravityPlan": default_plan,
-    }
-
-    # Fetch provider rate limits and Language Server status concurrently with short TTL cache
     force_refresh = (
         request.query_params.get("refresh", "").lower() in ("true", "1")
         or request.query_params.get("force_refresh", "").lower() in ("true", "1")
     )
     is_testing = hasattr(subprocess.run, "mock_calls") or ("pytest" in sys.modules)
-    now_ts = time.time()
+    cache_key = target_profile.get("id") if target_profile else None
 
-    cached_valid = (
-        not is_testing
-        and not force_refresh
-        and (now_ts - _provider_rate_limits_cache["timestamp"] < 30.0)
-        and (_provider_rate_limits_cache["target_profile_root"] == target_profile_root)
+    def cache_is_valid() -> bool:
+        return (
+            not is_testing
+            and not force_refresh
+            and _provider_usage_cache["raw"] is not None
+            and _provider_usage_cache["key"] == cache_key
+            and (time.time() - _provider_usage_cache["timestamp"] < PROVIDER_USAGE_CACHE_TTL_SECONDS)
+        )
+
+    if cache_is_valid():
+        raw, paths = _provider_usage_cache["raw"], _provider_usage_cache["paths"]
+    else:
+        async with _provider_usage_lock:
+            if cache_is_valid():
+                raw, paths = _provider_usage_cache["raw"], _provider_usage_cache["paths"]
+            else:
+                raw, paths = await _fetch_provider_usage_raw(target_profile)
+                if not is_testing:
+                    _provider_usage_cache["timestamp"] = time.time()
+                    _provider_usage_cache["key"] = cache_key
+                    _provider_usage_cache["raw"] = raw
+                    _provider_usage_cache["paths"] = paths
+
+    now_ts = time.time()
+    providers: dict[str, dict[str, Any]] = {}
+
+    # --- Claude Code: live Anthropic account usage, else the CLI's last report.
+    claude_raw = raw.get("claude")
+    if isinstance(claude_raw, dict):
+        claude_provider = claude_raw
+    else:
+        logging.error("Claude account usage lookup failed: %s", claude_raw)
+        claude_provider = build_provider(
+            "claude", STATUS_UNAVAILABLE, "anthropic_oauth_usage",
+            description=f"Claude usage lookup failed: {claude_raw}",
+        )
+    claude_snapshot = get_claude_rate_limits_snapshot(paths["claude"]["profile_id"])
+    if claude_provider.get("status") != "ok" and claude_snapshot:
+        cli_view = build_claude_rate_limits(claude_snapshot, now_ts)
+        if cli_view.get("available"):
+            claude_provider = provider_from_claude_cli_snapshot(
+                cli_view,
+                reason=claude_provider.get("description"),
+                account=claude_provider.get("account"),
+            )
+    providers["claude"] = claude_provider
+
+    # --- Codex: signed-in ChatGPT account + rate limits from the local app-server.
+    codex_raw = raw.get("codex")
+    if not isinstance(codex_raw, dict):
+        logging.error("Codex account status lookup failed: %s", codex_raw)
+    providers["codex"] = build_codex_provider(
+        codex_raw if isinstance(codex_raw, dict) else None,
+        error=None if isinstance(codex_raw, dict) else str(codex_raw),
     )
 
-    if cached_valid:
-        codex_rate_limits = _provider_rate_limits_cache["codex_rate_limits"]
-        antigravity_status = _provider_rate_limits_cache["antigravity_status"]
-    else:
-        async with _provider_rate_limits_lock:
-            now_ts = time.time()
-            cached_valid = (
-                not is_testing
-                and not force_refresh
-                and (now_ts - _provider_rate_limits_cache["timestamp"] < 30.0)
-                and (_provider_rate_limits_cache["target_profile_root"] == target_profile_root)
+    # --- Antigravity: Google Cloud Code quota for the Antigravity sign-in.
+    agy_raw = raw.get("antigravity")
+    agy_error: Optional[str] = None
+    antigravity_status: Optional[dict[str, Any]] = None
+    if isinstance(agy_raw, dict):
+        antigravity_status = agy_raw
+    elif agy_raw is not None:
+        agy_error = str(agy_raw)
+        logging.debug("Antigravity quota lookup failed: %s", agy_raw)
+
+    agy_profile = paths["agy"]["profile"]
+    agy_profile_email = get_profile_oauth_email(agy_profile) if agy_profile else None
+    agy_email: Optional[str] = None
+    plan_name: Optional[str] = None
+    if antigravity_status:
+        user_status = _antigravity_user_status(antigravity_status)
+        agy_email = _antigravity_email(user_status)
+        if agy_profile_email and agy_profile_email.lower() != str(agy_email or "").lower():
+            logging.info(
+                "Antigravity language server email (%s) does not match profile email (%s); ignoring language server quota.",
+                agy_email, agy_profile_email,
             )
-            if cached_valid:
-                codex_rate_limits = _provider_rate_limits_cache["codex_rate_limits"]
-                antigravity_status = _provider_rate_limits_cache["antigravity_status"]
-            else:
-                codex_task = asyncio.to_thread(fetch_codex_rate_limits, timeout_seconds=3)
-                agy_task = asyncio.to_thread(fetch_antigravity_language_server_quota, profile_root=target_profile_root)
+            antigravity_status = None
+            agy_email = None
+            agy_error = "the Antigravity sign-in on this host belongs to a different account than the selected profile"
+        else:
+            plan_name = _antigravity_plan_name(user_status)
 
-                codex_rate_limits, antigravity_status = await asyncio.gather(
-                    codex_task, agy_task, return_exceptions=True
-                )
+    gemini_provider, agy_claude_provider, agy_buckets = build_antigravity_providers(
+        antigravity_status,
+        signed_in=antigravity_signed_in(paths["agy"]["home"]),
+        plan_name=plan_name,
+        email=agy_email,
+        error=agy_error,
+    )
+    providers["antigravity"] = gemini_provider
+    providers["antigravity_claude"] = agy_claude_provider
 
-                if isinstance(codex_rate_limits, Exception):
-                    logging.error(f"Failed to fetch Codex account rate limits: {codex_rate_limits}")
-                    codex_rate_limits = None
+    # --- Kimi, Grok, Muse, DeepSeek, Z.ai: their fetchers already return provider entries.
+    for key in ("kimi", "grok", "muse", "deepseek", "zai"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            providers[key] = value
+        else:
+            logging.error("%s usage lookup failed: %s", PROVIDER_NAMES.get(key, key), value)
+            providers[key] = build_provider(
+                key, STATUS_UNAVAILABLE, "lookup_failed",
+                description=f"{PROVIDER_NAMES.get(key, key)} usage lookup failed: {value}",
+            )
 
-                if isinstance(antigravity_status, Exception):
-                    logging.debug(f"Failed to fetch Antigravity language server status: {antigravity_status}")
-                    antigravity_status = None
+    # ------------------------------------------------------------------
+    # Legacy top-level fields (older mobile builds read these directly).
+    # ------------------------------------------------------------------
+    gemini_weekly_bucket = agy_buckets["gemini"]["weekly"]
+    gemini_hourly_bucket = agy_buckets["gemini"]["hourly"]
+    claude_weekly_bucket = agy_buckets["claude"]["weekly"]
+    claude_hourly_bucket = agy_buckets["claude"]["hourly"]
 
-                if not is_testing:
-                    _provider_rate_limits_cache["timestamp"] = time.time()
-                    _provider_rate_limits_cache["target_profile_root"] = target_profile_root
-                    _provider_rate_limits_cache["codex_rate_limits"] = codex_rate_limits
-                    _provider_rate_limits_cache["antigravity_status"] = antigravity_status
+    result_data: dict[str, Any] = {
+        "geminiWeeklyPercent": gemini_weekly_bucket["usedPercent"] if gemini_weekly_bucket else None,
+        "geminiHourlyPercent": gemini_hourly_bucket["usedPercent"] if gemini_hourly_bucket else None,
+        "claudeWeeklyPercent": None,
+        "claudeHourlyPercent": None,
+        "gptWeeklyPercent": None,
+        "gptHourlyPercent": None,
+        "xaiWeeklyPercent": None,
+        "xaiHourlyPercent": None,
+        "geminiWeeklyUsed": None,
+        "geminiWeeklyLimit": None,
+        "geminiHourlyUsed": None,
+        "geminiHourlyLimit": None,
+        "claudeWeeklyUsed": None,
+        "claudeWeeklyLimit": None,
+        "claudeHourlyUsed": None,
+        "claudeHourlyLimit": None,
+        "gptWeeklyUsed": None,
+        "gptWeeklyLimit": None,
+        "gptHourlyUsed": None,
+        "gptHourlyLimit": None,
+        "xaiWeeklyUsed": None,
+        "xaiWeeklyLimit": None,
+        "xaiHourlyUsed": None,
+        "xaiHourlyLimit": None,
+        "geminiRateLimits": None,
+        "claudeRateLimits": None,
+        "antigravityClaudeRateLimits": None,
+        "codexRateLimits": None,
+        "codexUsageNote": (
+            "Codex GPT models use your ChatGPT/Codex account rate limit, read live from the local "
+            "Codex app-server (the same numbers Codex itself shows)."
+        ),
+        "geminiUsageNote": (
+            "Gemini quota is read live from Google's Cloud Code quota API for the Antigravity sign-in on this host."
+        ),
+        "claudeUsageNote": (
+            "Claude account limits are read live from Anthropic's usage API for the Claude Code sign-in on this host "
+            "(the same numbers as /usage in Claude Code)."
+        ),
+        "xaiUsageNote": providers["grok"].get("description")
+        or "Grok Build does not expose account usage outside its own TUI.",
+        "antigravityPlan": plan_name,
+        "providers": providers,
+        "providerOrder": list(PROVIDER_ORDER),
+        "generatedAt": datetime.datetime.fromtimestamp(now_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "targetProfileId": cache_key,
+    }
 
+    if gemini_weekly_bucket or gemini_hourly_bucket:
+        primary_gemini = gemini_hourly_bucket or gemini_weekly_bucket
+        result_data["geminiRateLimits"] = {
+            "available": True,
+            "source": "antigravity",
+            "planName": plan_name,
+            "weekly": gemini_weekly_bucket,
+            "hourly": gemini_hourly_bucket,
+            "usedPercent": primary_gemini.get("usedPercent", 0.0),
+            "remainingPercent": primary_gemini.get("remainingPercent", 100.0),
+            "resetTime": primary_gemini.get("resetTime"),
+            "description": primary_gemini.get("description"),
+        }
+    else:
+        result_data["geminiRateLimits"] = {
+            "available": False,
+            "source": "unavailable",
+            "status": gemini_provider.get("status"),
+            "planName": plan_name,
+            "weekly": None,
+            "hourly": None,
+            "usedPercent": None,
+            "remainingPercent": None,
+            "description": gemini_provider.get("description")
+            or "Quota unavailable. Open Antigravity to check your account limits.",
+        }
+
+    # This Antigravity group meters Claude/GPT models served through Antigravity,
+    # not the Anthropic account behind the Claude Code CLI.
+    if claude_weekly_bucket or claude_hourly_bucket:
+        primary_claude = claude_hourly_bucket or claude_weekly_bucket
+        result_data["antigravityClaudeRateLimits"] = {
+            "available": True,
+            "source": "antigravity",
+            "planName": plan_name,
+            "weekly": claude_weekly_bucket,
+            "hourly": claude_hourly_bucket,
+            "usedPercent": primary_claude.get("usedPercent", 0.0),
+            "remainingPercent": primary_claude.get("remainingPercent", 100.0),
+            "resetTime": primary_claude.get("resetTime"),
+            "description": primary_claude.get("description"),
+        }
+
+    result_data["claudeRateLimits"] = {
+        "available": claude_provider.get("available", False),
+        "source": claude_provider.get("source"),
+        "status": claude_provider.get("status"),
+        "limitStatus": claude_provider.get("limitStatus"),
+        "weekly": claude_provider.get("weekly"),
+        "hourly": claude_provider.get("hourly"),
+        "usedPercent": claude_provider.get("usedPercent"),
+        "remainingPercent": claude_provider.get("remainingPercent"),
+        "resetTime": claude_provider.get("resetTime"),
+        "observedAt": claude_provider.get("observedAt") or claude_provider.get("fetchedAt"),
+        "description": claude_provider.get("description"),
+        "account": claude_provider.get("account"),
+        "windows": claude_provider.get("windows", []),
+    }
+    for period, window in (("Weekly", claude_provider.get("weekly")), ("Hourly", claude_provider.get("hourly"))):
+        used_pct = window["usedPercent"] if window else None
+        result_data[f"claude{period}Percent"] = used_pct
+        result_data[f"claude{period}Used"] = used_pct
+        result_data[f"claude{period}Limit"] = 100 if window else None
+
+    codex_rate_limits = None
+    if providers["codex"].get("status") == "ok" and isinstance(codex_raw, dict):
+        codex_rate_limits = codex_raw.get("rateLimits") if isinstance(codex_raw.get("rateLimits"), dict) else None
     if codex_rate_limits:
+        codex_rate_limits = {**codex_rate_limits, "account": providers["codex"].get("account")}
         result_data["codexRateLimits"] = codex_rate_limits
         primary = codex_rate_limits.get("primary") or {}
         secondary = codex_rate_limits.get("secondary") or {}
@@ -6214,307 +6350,6 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
             result_data["gptHourlyPercent"] = float(secondary["usedPercent"])
             result_data["gptHourlyUsed"] = secondary["usedPercent"]
             result_data["gptHourlyLimit"] = 100
-
-    # If language server returned a status, verify email match and tier compatibility
-    if antigravity_status:
-        user_status = antigravity_status.get("userStatus") if isinstance(antigravity_status.get("userStatus"), dict) else antigravity_status
-        ls_email = None
-        if isinstance(user_status, dict):
-            ls_email = user_status.get("email") or user_status.get("userEmail") or (user_status.get("user", {}) if isinstance(user_status.get("user"), dict) else {}).get("email")
-        if target_profile_email and target_profile_email.lower() != str(ls_email or "").lower():
-            logging.info("Antigravity language server email (%s) does not match profile email (%s); ignoring language server quota.", ls_email, target_profile_email)
-            antigravity_status = None
-
-    if antigravity_status:
-        user_status = antigravity_status.get("userStatus") if isinstance(antigravity_status.get("userStatus"), dict) else antigravity_status
-        quota_summary = antigravity_status.get("quotaSummary") if isinstance(antigravity_status.get("quotaSummary"), dict) else None
-
-        user_tier = user_status.get("userTier", {}) if isinstance(user_status, dict) else {}
-        tier_name = user_tier.get("name")
-        if not tier_name and user_tier.get("id"):
-            tier_id = str(user_tier.get("id")).lower()
-            if "pro" in tier_id:
-                tier_name = "Google AI Pro"
-            elif "ultra" in tier_id:
-                tier_name = "Google AI Ultra"
-        plan_name = tier_name or result_data.get("antigravityPlan") or default_plan
-        result_data["antigravityPlan"] = plan_name
-
-        gemini_weekly_bucket = None
-        gemini_hourly_bucket = None
-        claude_weekly_bucket = None
-        claude_hourly_bucket = None
-
-        if quota_summary and isinstance(quota_summary.get("groups"), list):
-            for group in quota_summary["groups"]:
-                gname = (group.get("displayName") or "").lower()
-                buckets = group.get("buckets", [])
-                if "gemini" in gname:
-                    for b in buckets:
-                        bid = (b.get("bucketId") or "").lower()
-                        b_window = (b.get("window") or "").lower()
-                        raw_fraction = b.get("remainingFraction")
-                        if isinstance(raw_fraction, bool):
-                            continue
-                        try:
-                            rem_fraction = float(raw_fraction)
-                        except (TypeError, ValueError):
-                            continue
-                        if not 0.0 <= rem_fraction <= 1.0:
-                            continue
-                        used_pct = round(max(0.0, (1.0 - rem_fraction) * 100.0), 1)
-                        rem_pct = round(min(100.0, rem_fraction * 100.0), 1)
-                        b_data = {
-                            "usedPercent": used_pct,
-                            "remainingPercent": rem_pct,
-                            "resetTime": b.get("resetTime"),
-                            "description": b.get("description"),
-                        }
-                        if "weekly" in bid or "weekly" in b_window:
-                            gemini_weekly_bucket = b_data
-                            result_data["geminiWeeklyPercent"] = used_pct
-
-                        elif "5h" in bid or "5h" in b_window or "hourly" in bid:
-                            gemini_hourly_bucket = b_data
-                            result_data["geminiHourlyPercent"] = used_pct
-
-                elif "claude" in gname or "3p" in gname or "gpt" in gname:
-                    for b in buckets:
-                        bid = (b.get("bucketId") or "").lower()
-                        b_window = (b.get("window") or "").lower()
-                        raw_fraction = b.get("remainingFraction")
-                        if isinstance(raw_fraction, bool):
-                            continue
-                        try:
-                            rem_fraction = float(raw_fraction)
-                        except (TypeError, ValueError):
-                            continue
-                        if not 0.0 <= rem_fraction <= 1.0:
-                            continue
-                        used_pct = round(max(0.0, (1.0 - rem_fraction) * 100.0), 1)
-                        rem_pct = round(min(100.0, rem_fraction * 100.0), 1)
-                        b_data = {
-                            "usedPercent": used_pct,
-                            "remainingPercent": rem_pct,
-                            "resetTime": b.get("resetTime"),
-                            "description": b.get("description"),
-                        }
-                        if "weekly" in bid or "weekly" in b_window:
-                            claude_weekly_bucket = b_data
-                        elif "5h" in bid or "5h" in b_window or "hourly" in bid:
-                            claude_hourly_bucket = b_data
-
-        # Model-specific quotaInfo has no weekly/5-hour window contract; do not
-        # duplicate it into account quota buckets when the summary is missing.
-
-        if gemini_weekly_bucket or gemini_hourly_bucket:
-            primary_gemini = gemini_hourly_bucket or gemini_weekly_bucket
-            weekly_gemini = gemini_weekly_bucket
-            result_data["geminiRateLimits"] = {
-                "available": True,
-                "source": "antigravity",
-                "planName": plan_name,
-                "weekly": weekly_gemini,
-                "hourly": gemini_hourly_bucket,
-                "usedPercent": primary_gemini.get("usedPercent", 0.0),
-                "remainingPercent": primary_gemini.get("remainingPercent", 100.0),
-                "resetTime": primary_gemini.get("resetTime"),
-                "description": primary_gemini.get("description"),
-            }
-
-        # This Antigravity group meters Claude models served through
-        # Antigravity, not the Anthropic account behind the Claude Code CLI.
-        if claude_weekly_bucket or claude_hourly_bucket:
-            primary_claude = claude_hourly_bucket or claude_weekly_bucket
-            weekly_claude = claude_weekly_bucket
-            result_data["antigravityClaudeRateLimits"] = {
-                "available": True,
-                "source": "antigravity",
-                "planName": plan_name,
-                "weekly": weekly_claude,
-                "hourly": claude_hourly_bucket,
-                "usedPercent": primary_claude.get("usedPercent", 0.0),
-                "remainingPercent": primary_claude.get("remainingPercent", 100.0),
-                "resetTime": primary_claude.get("resetTime"),
-                "description": primary_claude.get("description"),
-            }
-    
-    gemini_weekly = 0
-    gemini_hourly = 0
-    claude_weekly = 0
-    claude_hourly = 0
-    gpt_weekly = 0
-    gpt_hourly = 0
-
-    now_ts = time.time()
-    is_testing = hasattr(subprocess.run, "mock_calls") or ("pytest" in sys.modules)
-
-    if not is_testing and (now_ts - _ccusage_cache["timestamp"] < 300):
-        gemini_weekly = _ccusage_cache["gemini_weekly"]
-        gemini_hourly = _ccusage_cache["gemini_hourly"]
-        claude_weekly = _ccusage_cache["claude_weekly"]
-        claude_hourly = _ccusage_cache["claude_hourly"]
-        gpt_weekly = _ccusage_cache["gpt_weekly"]
-        gpt_hourly = _ccusage_cache["gpt_hourly"]
-    else:
-        async with _ccusage_lock:
-            now_ts = time.time()
-            if not is_testing and (now_ts - _ccusage_cache["timestamp"] < 300):
-                gemini_weekly = _ccusage_cache["gemini_weekly"]
-                gemini_hourly = _ccusage_cache["gemini_hourly"]
-                claude_weekly = _ccusage_cache["claude_weekly"]
-                claude_hourly = _ccusage_cache["claude_hourly"]
-                gpt_weekly = _ccusage_cache["gpt_weekly"]
-                gpt_hourly = _ccusage_cache["gpt_hourly"]
-            else:
-                try:
-                    res = await asyncio.to_thread(run_ccusage_safely)
-                    if res.returncode == 0:
-                        data = json.loads(res.stdout)
-                        now = datetime.datetime.now(datetime.timezone.utc)
-                        
-                        def parse_timestamp(la_str, period_str, date_str=None):
-                            if la_str:
-                                try:
-                                    return datetime.datetime.fromisoformat(str(la_str).replace('Z', '+00:00'))
-                                except Exception:
-                                    pass
-                            for candidate in [date_str, period_str]:
-                                if not candidate:
-                                    continue
-                                match = re.search(r'(\d{4})[/-](\d{2})[/-](\d{2})T(\d{2})[:.-](\d{2})[:.-](\d{2})', str(candidate))
-                                if match:
-                                    try:
-                                        parts = [int(p) for p in match.groups()]
-                                        return datetime.datetime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], tzinfo=datetime.timezone.utc)
-                                    except Exception:
-                                        pass
-                                match_date = re.search(r'(\d{4})[/-](\d{2})[/-](\d{2})', str(candidate))
-                                if match_date:
-                                    try:
-                                        parts = [int(p) for p in match_date.groups()]
-                                        return datetime.datetime(parts[0], parts[1], parts[2], tzinfo=datetime.timezone.utc)
-                                    except Exception:
-                                        pass
-                            return None
-
-                        def matches_provider(item, provider):
-                            models = item.get('modelsUsed', [])
-                            model_breakdowns = item.get('modelBreakdowns', [])
-                            all_names = [str(m).lower() for m in models]
-                            for mb in model_breakdowns:
-                                if isinstance(mb, dict) and mb.get('modelName'):
-                                    all_names.append(str(mb['modelName']).lower())
-                            agent_name = str(item.get('agent', '')).lower()
-                            
-                            if provider == 'gemini':
-                                return any(('gemini' in name or 'agy' in name) for name in all_names) or 'gemini' in agent_name or 'agy' in agent_name
-                            elif provider == 'claude':
-                                return any('claude' in name for name in all_names) or 'claude' in agent_name
-                            elif provider == 'gpt':
-                                return any(('gpt' in name or 'openai' in name or 'codex' in name) for name in all_names) or 'codex' in agent_name or 'openai' in agent_name
-                            return False
-
-                        daily_items = data.get('daily', [])
-                        if not daily_items and isinstance(data, list):
-                            daily_items = data
-
-                        for item in daily_items:
-                            if not isinstance(item, dict):
-                                continue
-                            la = item.get('metadata', {}).get('lastActivity') if isinstance(item.get('metadata'), dict) else None
-                            period = item.get('period', '')
-                            date_val = item.get('date', '')
-                            dt = parse_timestamp(la, period, date_val)
-                            if not dt:
-                                continue
-                            hours_ago = (now - dt).total_seconds() / 3600.0
-                            tokens = max(0, item.get('totalTokens', 0) - item.get('cacheReadTokens', 0))
-                            if hours_ago <= 168:
-                                if matches_provider(item, 'gemini'):
-                                    gemini_weekly += tokens
-                                if matches_provider(item, 'claude'):
-                                    claude_weekly += tokens
-                                if matches_provider(item, 'gpt'):
-                                    gpt_weekly += tokens
-
-                        session_items = data.get('session', []) or daily_items
-                        for item in session_items:
-                            if not isinstance(item, dict):
-                                continue
-                            la = item.get('metadata', {}).get('lastActivity') if isinstance(item.get('metadata'), dict) else None
-                            period = item.get('period', '')
-                            date_val = item.get('date', '')
-                            dt = parse_timestamp(la, period, date_val)
-                            if not dt:
-                                continue
-                            hours_ago = (now - dt).total_seconds() / 3600.0
-                            tokens = max(0, item.get('totalTokens', 0) - item.get('cacheReadTokens', 0))
-                            if hours_ago <= 5:
-                                if matches_provider(item, 'gemini'):
-                                    gemini_hourly += tokens
-                                if matches_provider(item, 'claude'):
-                                    claude_hourly += tokens
-                                if matches_provider(item, 'gpt'):
-                                    gpt_hourly += tokens
-
-                        if not is_testing:
-                            _ccusage_cache["timestamp"] = now_ts
-                            _ccusage_cache["gemini_weekly"] = gemini_weekly
-                            _ccusage_cache["gemini_hourly"] = gemini_hourly
-                            _ccusage_cache["claude_weekly"] = claude_weekly
-                            _ccusage_cache["claude_hourly"] = claude_hourly
-                            _ccusage_cache["gpt_weekly"] = gpt_weekly
-                            _ccusage_cache["gpt_hourly"] = gpt_hourly
-                    else:
-                        if not is_testing:
-                            _ccusage_cache["timestamp"] = now_ts
-                except Exception as e:
-                    logging.debug(f"Failed to fetch usage limits from ccusage: {e}")
-                    if not is_testing:
-                        _ccusage_cache["timestamp"] = now_ts
-
-    # cw_limit and ch_limit
-    cw_limit = 100000000
-    ch_limit = 10000000
-
-    if not result_data.get("geminiRateLimits"):
-        result_data["geminiRateLimits"] = {
-            "available": False,
-            "source": "unavailable",
-            "planName": result_data["antigravityPlan"],
-            "weekly": None,
-            "hourly": None,
-            "usedPercent": None,
-            "remainingPercent": None,
-            "description": "Quota unavailable. Open Antigravity to check your account limits.",
-        }
-
-    # Local transcript token counts have no relation to the Claude account's
-    # limits, so only the windows reported by the Claude CLI are exposed.
-    if target_profile and target_profile.get("cli_id") == "claude":
-        claude_profile_id = target_profile.get("id")
-    else:
-        try:
-            default_claude_profile = get_default_profile("claude")
-        except Exception:
-            default_claude_profile = None
-        claude_profile_id = default_claude_profile.get("id") if default_claude_profile else None
-    claude_rate_limits = build_claude_rate_limits(
-        get_claude_rate_limits_snapshot(claude_profile_id), time.time()
-    )
-    result_data["claudeRateLimits"] = claude_rate_limits
-    for period, window in (("Weekly", claude_rate_limits["weekly"]), ("Hourly", claude_rate_limits["hourly"])):
-        used_pct = window["usedPercent"] if window else None
-        result_data[f"claude{period}Percent"] = used_pct
-        result_data[f"claude{period}Used"] = used_pct
-        result_data[f"claude{period}Limit"] = 100 if window else None
-
-    if not result_data.get("codexRateLimits"):
-        result_data["gptWeeklyUsed"] = gpt_weekly
-        result_data["gptWeeklyPercent"] = min(100.0, round((gpt_weekly / cw_limit) * 100, 1))
-        result_data["gptHourlyUsed"] = gpt_hourly
-        result_data["gptHourlyPercent"] = min(100.0, round((gpt_hourly / ch_limit) * 100, 1))
 
     return JSONResponse(content=result_data)
 

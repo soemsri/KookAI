@@ -2592,62 +2592,78 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // --- Resource Usage limits panel logic ---
+  // Everything in this panel comes from /api/usage-limits, which reads each
+  // provider's live account usage for the sign-in its own CLI stored on the
+  // host. Nothing is estimated client-side: a provider without data says why.
   const usageBtn = document.getElementById("usageBtn");
   const usagePopup = document.getElementById("usagePopup");
   const usageToggleSwitch = document.getElementById("usageToggleSwitch");
+  const usagePrimaryTitle = document.getElementById("usagePrimaryTitle");
+  const usagePrimaryBadge = document.getElementById("usagePrimaryBadge");
+  const usagePrimaryNote = document.getElementById("usagePrimaryNote");
+  const usagePrimaryRows = document.getElementById("usagePrimaryRows");
+  const usageOtherRows = document.getElementById("usageOtherRows");
+  const usageFetchedAt = document.getElementById("usageFetchedAt");
+  const mainUsageCircle = document.getElementById("mainUsageBtnChartCircle");
 
-  // Data structure for limits
-  let usageData = {
-    geminiWeeklyPercent: 0,
-    geminiHourlyPercent: 0,
-    claudeWeeklyPercent: 0,
-    claudeHourlyPercent: 0,
-    gptWeeklyPercent: 0,
-    gptHourlyPercent: 0,
-
-    geminiWeeklyUsed: 0,
-    geminiWeeklyLimit: 10000000,
-    geminiHourlyUsed: 0,
-    geminiHourlyLimit: 1000000,
-
-    claudeWeeklyUsed: 0,
-    claudeWeeklyLimit: 100000000,
-    claudeHourlyUsed: 0,
-    claudeHourlyLimit: 10000000,
-
-    gptWeeklyUsed: 0,
-    gptWeeklyLimit: 100000000,
-    gptHourlyUsed: 0,
-    gptHourlyLimit: 10000000,
-    codexRateLimits: null,
-    codexUsageNote: "Codex GPT models use your ChatGPT/Codex account rate limit."
+  const USAGE_PROVIDER_ORDER = ["claude", "codex", "antigravity", "antigravity_claude", "kimi", "grok", "muse", "deepseek", "zai"];
+  const USAGE_PROVIDER_NAMES = {
+    claude: "Claude Code",
+    codex: "Codex (ChatGPT)",
+    antigravity: "Gemini (Antigravity)",
+    antigravity_claude: "Claude & GPT via Antigravity",
+    kimi: "Kimi Code",
+    grok: "Grok Build (xAI)",
+    muse: "Muse Code (Meta)",
+    deepseek: "DeepSeek",
+    zai: "GLM (Z.ai Coding Plan)"
+  };
+  const USAGE_STATUS_LABELS = {
+    ok: "Live",
+    stale: "Last run",
+    not_logged_in: "Not signed in",
+    token_expired: "Sign-in expired",
+    auth_rejected: "Key rejected",
+    unsupported: "No usage API",
+    unavailable: "Unavailable",
+    loading: "Loading"
   };
 
-  async function fetchUsageLimits() {
+  let usageData = null;             // last successful /api/usage-limits payload
+  let usageLoadError = "";          // last fetch failure, shown in the panel footer
+  let usageFocusProviderId = null;  // provider pinned from the "Other providers" list
+  let usageFocusModel = null;       // the model that pin was made for
+
+  async function fetchUsageLimits(forceRefresh = false) {
     if (!canUseProtectedWorkspaceApis()) {
       handleProtectedApiUnauthorized();
       return;
     }
     try {
-      const response = await fetch("/api/usage-limits");
+      const response = await fetch(`/api/usage-limits${forceRefresh ? "?refresh=true" : ""}`);
       if (response.status === 401) {
         handleProtectedApiUnauthorized();
         return;
       }
-      if (response.ok) {
+      if (!response.ok) {
+        usageLoadError = `Usage request failed (HTTP ${response.status}).`;
+      } else {
         usageData = await response.json();
-        refreshUsageDisplay();
+        usageLoadError = "";
       }
     } catch (err) {
       console.error("Error loading usage limits:", err);
+      usageLoadError = "Could not load usage from the KookAI server.";
     }
+    refreshUsageDisplay();
   }
 
   usageBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     usagePopup.classList.toggle("hidden");
     if (!usagePopup.classList.contains("hidden")) {
-      fetchUsageLimits();
+      // Opening the panel is an explicit request for fresh numbers.
+      fetchUsageLimits(true);
     }
   });
 
@@ -2657,9 +2673,7 @@ document.addEventListener("DOMContentLoaded", () => {
       e.stopPropagation();
       usageToggleSwitch.querySelectorAll(".toggle-mode-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
-
-      const mode = btn.getAttribute("data-mode");
-      updateUsageDataDisplay(mode);
+      updateUsageDataDisplay(btn.getAttribute("data-mode"));
     });
   });
 
@@ -2669,293 +2683,308 @@ document.addEventListener("DOMContentLoaded", () => {
     updateUsageDataDisplay(mode);
   }
 
-  function getUsageBucketForCurrentModel() {
-    if (isCodexModel(currentModel)) {
-      return {
-        key: "gpt",
-        title: "GPT Models (Codex / ChatGPT)",
-        badge: "Codex GPT usage",
-        note: "Codex models draw from your ChatGPT/Codex GPT usage budget."
-      };
+  // Map the selected model to the provider whose account actually meters it.
+  function usageProviderIdForModel(model) {
+    const catalog = getCatalogModel(model);
+    const provider = catalog?.provider;
+    if (provider === "codex" || isCodexModel(model)) return "codex";
+    if (provider === "xai" || isXaiModel(model)) return "grok";
+    if (provider === "muse" || isMuseModel(model)) return "muse";
+    if (provider === "kimi") return "kimi";
+    if (provider === "deepseek") return "deepseek";
+    if (provider === "zai") return "zai";
+    if (provider === "agy") {
+      // Antigravity meters Gemini separately from the Claude/GPT models it serves.
+      return (catalog?.usage_bucket === "claude" || catalog?.usage_bucket === "gpt") ? "antigravity_claude" : "antigravity";
     }
-    if (isXaiModel(currentModel)) {
-      return {
-        key: "xai",
-        title: "Grok Models (xAI)",
-        badge: "xAI account usage",
-        note: usageData.xaiUsageNote
-          || "Grok usage and billing are managed by your xAI account."
-      };
-    }
-    if (isMuseModel(currentModel)) {
-      return {
-        key: "muse",
-        title: "Muse Models (Meta AI)",
-        badge: "Meta AI usage",
-        note: "Muse Code usage is managed by Meta Model API."
-      };
-    }
-
-    const catalogBucket = getCatalogModel(currentModel)?.usage_bucket;
-    const lowerModel = getModelLabel(currentModel).toLowerCase();
-    if (catalogBucket === "gemini" || lowerModel.includes("gemini")) {
-      const plan = (usageData?.geminiRateLimits?.source ? usageData?.antigravityPlan : null) || "Plan unavailable";
-      return {
-        key: "gemini",
-        title: "Gemini Models",
-        badge: `Your Plan: ${plan}`,
-        note: ""
-      };
-    }
-    if (catalogBucket === "gpt" || lowerModel.includes("gpt") || lowerModel.includes("kimi")) {
-      if (lowerModel.includes("kimi")) {
-        return {
-          key: "gpt",
-          title: "Kimi Models",
-          badge: "KookAI Kimi usage",
-          note: "Kimi usage is grouped in the KookAI model usage budget."
-        };
-      }
-      return {
-        key: "gpt",
-        title: "GPT Models",
-        badge: "OpenAI GPT usage",
-        note: ""
-      };
-    }
-    if (getCatalogModel(currentModel)?.provider === "agy") {
-      const plan = (usageData?.antigravityClaudeRateLimits?.source ? usageData?.antigravityPlan : null) || "Plan unavailable";
-      return {
-        key: "claude",
-        rateLimitsField: "antigravityClaudeRateLimits",
-        title: "Claude Models (Antigravity)",
-        badge: `Your Plan: ${plan}`,
-        note: "Claude models served through Antigravity use your Antigravity quota."
-      };
-    }
-    return {
-      key: "claude",
-      rateLimitsField: "claudeRateLimits",
-      title: "Claude Models (Claude Code)",
-      badge: "Claude account usage",
-      note: usageData.claudeUsageNote || ""
-    };
+    if (provider === "claude" || isClaudeModel(model)) return "claude";
+    const lower = getModelLabel(model).toLowerCase();
+    if (lower.includes("gemini")) return "antigravity";
+    if (lower.includes("kimi")) return "kimi";
+    if (lower.includes("glm")) return "zai";
+    if (lower.includes("deepseek")) return "deepseek";
+    if (lower.includes("grok")) return "grok";
+    if (lower.includes("muse")) return "muse";
+    if (lower.includes("gpt")) return "codex";
+    return "claude";
   }
 
-  function formatCodexResetDate(timestampSeconds) {
-    if (!timestampSeconds) return "";
+  function formatResetDuration(resetIso) {
+    if (!resetIso) return '';
     try {
-      return new Date(timestampSeconds * 1000).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric"
-      });
-    } catch (_) {
+      const resetMs = new Date(resetIso).getTime();
+      if (!Number.isFinite(resetMs)) return '';
+      const diffMs = resetMs - Date.now();
+      if (diffMs <= 0) return 'shortly';
+      const diffMins = Math.round(diffMs / 60000);
+      if (diffMins < 60) return `in ${diffMins} minutes`;
+      const diffHours = Math.floor(diffMins / 60);
+      const remainingMins = diffMins % 60;
+      if (diffHours < 24) return remainingMins > 0 ? `in ${diffHours}h ${remainingMins}m` : `in ${diffHours} hours`;
+      const diffDays = Math.floor(diffHours / 24);
+      const remHours = diffHours % 24;
+      return remHours > 0 ? `in ${diffDays}d ${remHours}h` : `in ${diffDays} days`;
+    } catch {
+      return '';
+    }
+  }
+
+  function formatClock(iso) {
+    if (!iso) return "";
+    try {
+      const date = new Date(iso);
+      if (!Number.isFinite(date.getTime())) return "";
+      return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    } catch {
       return "";
     }
   }
 
-  function formatCodexWindowLabel(windowDurationMins) {
-    if (windowDurationMins === 10080) return "Weekly Limit";
-    if (windowDurationMins === 300) return "Five Hour Limit";
-    if (windowDurationMins && windowDurationMins >= 60) {
-      const hours = windowDurationMins / 60;
-      return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} Hour Limit`;
+  function windowDisplayPercent(win, isUsage) {
+    const used = Number(win.usedPercent || 0);
+    const remaining = Number(win.remainingPercent ?? Math.max(0, 100 - used));
+    return isUsage ? used : remaining;
+  }
+
+  function windowDescription(win, isUsage) {
+    const used = Number(win.usedPercent || 0);
+    const remaining = Number(win.remainingPercent ?? Math.max(0, 100 - used));
+    const resetText = formatResetDuration(win.resetTime);
+    const resetSuffix = resetText ? `, resets ${resetText}` : "";
+    const detail = (win.description || "").trim();
+    const detailIsSentence = /[.!]$/.test(detail);
+    if (isUsage) {
+      return `Used ${used.toFixed(0)}% of this limit${resetSuffix}.${detail && !detailIsSentence ? ` (${detail})` : ""}`;
     }
-    return "Usage Limit";
+    if (detailIsSentence) return detail;
+    return `${remaining.toFixed(0)}% remaining${resetSuffix}.${detail ? ` (${detail})` : ""}`;
+  }
+
+  function makeUsageRing(percent) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 36 36");
+    svg.setAttribute("class", "chart-small green-chart");
+    const arc = "M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831";
+    const bg = document.createElementNS(ns, "path");
+    bg.setAttribute("class", "circle-bg");
+    bg.setAttribute("d", arc);
+    const fg = document.createElementNS(ns, "path");
+    fg.setAttribute("class", "circle");
+    fg.setAttribute("stroke-dasharray", `${Math.max(0, Math.min(100, Number(percent) || 0))}, 100`);
+    fg.setAttribute("d", arc);
+    svg.append(bg, fg);
+    return svg;
+  }
+
+  function buildUsageRow({ label, desc, hint, percentText, ringPercent, statusRow }) {
+    const row = document.createElement("div");
+    row.className = "usage-row-item" + (statusRow ? " status-row" : "");
+    const left = document.createElement("div");
+    left.className = "usage-row-left";
+    const labelEl = document.createElement("div");
+    labelEl.className = "usage-label";
+    labelEl.textContent = label;
+    const descEl = document.createElement("div");
+    descEl.className = "usage-desc";
+    descEl.textContent = desc || "";
+    left.append(labelEl, descEl);
+    if (hint) {
+      const hintEl = document.createElement("div");
+      hintEl.className = "usage-desc hint";
+      hintEl.textContent = hint;
+      left.appendChild(hintEl);
+    }
+    const right = document.createElement("div");
+    right.className = "usage-row-right";
+    const pctEl = document.createElement("span");
+    pctEl.className = "usage-percent-text";
+    pctEl.textContent = percentText;
+    right.appendChild(pctEl);
+    if (ringPercent !== null && ringPercent !== undefined) right.appendChild(makeUsageRing(ringPercent));
+    row.append(left, right);
+    return row;
+  }
+
+  function formatBalance(balance) {
+    const total = Number(balance?.total);
+    const amount = Number.isFinite(total)
+      ? total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : "—";
+    return `${amount} ${balance?.currency || ""}`.trim();
+  }
+
+  function shortWindowLabel(win) {
+    if (win.kind === "five_hour") return "5h";
+    if (win.kind === "weekly") return "Weekly";
+    if (win.kind === "monthly") return "Monthly";
+    return win.label || win.id || "Window";
+  }
+
+  function providerSummary(provider, isUsage) {
+    if (!provider) return "No data";
+    if (provider.available) {
+      const parts = (provider.windows || []).map(win => `${shortWindowLabel(win)} ${windowDisplayPercent(win, isUsage).toFixed(0)}%${isUsage ? "" : " left"}`);
+      (provider.balances || []).forEach(balance => parts.push(`Balance ${formatBalance(balance)}`));
+      const suffix = provider.status === "stale" ? " (from KookAI's last Claude run)" : "";
+      return (parts.join(" · ") || "No windows reported") + suffix;
+    }
+    return provider.description || USAGE_STATUS_LABELS[provider.status] || "Unavailable";
+  }
+
+  function providerBadgeText(provider) {
+    const account = provider?.account || {};
+    if (provider?.available) {
+      return account.plan || account.label || account.email || USAGE_STATUS_LABELS[provider.status] || "Live";
+    }
+    return USAGE_STATUS_LABELS[provider?.status] || "Unavailable";
+  }
+
+  function placeholderProvider(id) {
+    return {
+      id,
+      name: USAGE_PROVIDER_NAMES[id] || id,
+      status: usageData ? "unavailable" : "loading",
+      available: false,
+      windows: [],
+      balances: [],
+      account: null,
+      signInHint: null,
+      description: usageData
+        ? "The KookAI server did not report this provider."
+        : (usageLoadError || "Loading usage from the KookAI server…")
+    };
+  }
+
+  function currentUsageProviderId() {
+    if (usageFocusProviderId && usageFocusModel === currentModel) return usageFocusProviderId;
+    usageFocusProviderId = null;
+    return usageProviderIdForModel(currentModel);
   }
 
   function updateUsageDataDisplay(mode) {
-    const isUsage = (mode === "usage");
-    const activeBucket = getUsageBucketForCurrentModel();
+    const isUsage = (mode !== "remain");
+    const providers = usageData?.providers || {};
+    const modelProviderId = usageProviderIdForModel(currentModel);
+    const primaryId = currentUsageProviderId();
+    const primary = providers[primaryId] || placeholderProvider(primaryId);
 
-    // Update main button chart based on selected model
-    const codexPrimary = isCodexModel(currentModel) ? usageData.codexRateLimits?.primary : null;
-    const claudeLimits = activeBucket.rateLimitsField ? usageData[activeBucket.rateLimitsField] : null;
-    const activeHourlyPercent = codexPrimary
-      ? Number(codexPrimary.usedPercent || 0)
-      : activeBucket.rateLimitsField
-        ? Number(claudeLimits?.usedPercent || 0)
-        : Number(usageData[`${activeBucket.key}HourlyPercent`] || 0);
-    const quotaUnavailable = (activeBucket.key === "gemini" &&
-      (usageData.geminiRateLimits?.source !== "antigravity" || usageData.geminiRateLimits?.available !== true ||
-       !Number.isFinite(usageData.geminiRateLimits?.hourly?.usedPercent))) ||
-      (activeBucket.rateLimitsField && claudeLimits?.available !== true);
-    const mainVal = quotaUnavailable ? 0 : (isUsage ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent));
-
-    const mainCircle = document.getElementById("mainUsageBtnChartCircle");
-    if (mainCircle) {
-      mainCircle.setAttribute("stroke-dasharray", `${mainVal}, 100`);
+    // The header ring mirrors the selected provider's 5-hour (or first) window.
+    const ringValue = primary.available && Number.isFinite(Number(primary.usedPercent))
+      ? (isUsage ? Number(primary.usedPercent) : Number(primary.remainingPercent ?? (100 - Number(primary.usedPercent))))
+      : 0;
+    if (mainUsageCircle) {
+      mainUsageCircle.setAttribute("stroke-dasharray", `${Math.max(0, Math.min(100, ringValue))}, 100`);
     }
 
-    function formatResetDuration(resetIso) {
-      if (!resetIso) return '';
-      try {
-        const resetMs = new Date(resetIso).getTime();
-        const diffMs = resetMs - Date.now();
-        if (diffMs <= 0) return 'shortly';
-        const diffMins = Math.round(diffMs / 60000);
-        if (diffMins < 60) return `in ${diffMins} minutes`;
-        const diffHours = Math.floor(diffMins / 60);
-        const remainingMins = diffMins % 60;
-        if (diffHours < 24) return remainingMins > 0 ? `in ${diffHours}h ${remainingMins}m` : `in ${diffHours} hours`;
-        const diffDays = Math.floor(diffHours / 24);
-        return `in ${diffDays} days`;
-      } catch {
-        return '';
+    if (!usagePrimaryRows) return;
+
+    if (usagePrimaryTitle) {
+      usagePrimaryTitle.textContent = `${primary.name || USAGE_PROVIDER_NAMES[primaryId] || primaryId}${primaryId !== modelProviderId ? " (pinned)" : ""}`;
+      usagePrimaryTitle.title = primaryId !== modelProviderId ? "Click to return to the selected model's provider" : "";
+    }
+    if (usagePrimaryBadge) {
+      usagePrimaryBadge.textContent = providerBadgeText(primary);
+      usagePrimaryBadge.className = `usage-plan-badge status-${primary.status || "loading"}`;
+    }
+
+    const account = primary.account || {};
+    const noteParts = [];
+    if (account.email) {
+      noteParts.push(`Signed in as ${account.email}${account.organization ? ` · ${account.organization}` : ""}`);
+    } else if (account.label && primary.available) {
+      noteParts.push(account.label);
+    }
+    if (primary.available && primary.description) noteParts.push(primary.description);
+    if (usagePrimaryNote) {
+      usagePrimaryNote.textContent = noteParts.join(" — ");
+      usagePrimaryNote.classList.toggle("hidden", noteParts.length === 0);
+    }
+
+    usagePrimaryRows.replaceChildren();
+    if (primary.available) {
+      (primary.windows || []).forEach(win => {
+        const pct = windowDisplayPercent(win, isUsage);
+        usagePrimaryRows.appendChild(buildUsageRow({
+          label: win.label || win.id || "Usage Limit",
+          desc: windowDescription(win, isUsage),
+          percentText: `${pct.toFixed(0)}%`,
+          ringPercent: pct
+        }));
+      });
+      (primary.balances || []).forEach(balance => {
+        const breakdown = [];
+        if (Number.isFinite(Number(balance.granted))) breakdown.push(`granted ${Number(balance.granted).toFixed(2)}`);
+        if (Number.isFinite(Number(balance.toppedUp))) breakdown.push(`topped up ${Number(balance.toppedUp).toFixed(2)}`);
+        usagePrimaryRows.appendChild(buildUsageRow({
+          label: `Balance (${balance.currency || "credits"})`,
+          desc: breakdown.join(" · ") || "Prepaid balance reported by the provider.",
+          percentText: formatBalance(balance),
+          ringPercent: null
+        }));
+      });
+    } else {
+      usagePrimaryRows.appendChild(buildUsageRow({
+        label: USAGE_STATUS_LABELS[primary.status] || "Unavailable",
+        desc: primary.description || "",
+        hint: primary.signInHint || "",
+        percentText: "—",
+        ringPercent: null,
+        statusRow: true
+      }));
+    }
+
+    if (usageOtherRows) {
+      usageOtherRows.replaceChildren();
+      USAGE_PROVIDER_ORDER.filter(id => id !== primaryId).forEach(id => {
+        const provider = providers[id] || placeholderProvider(id);
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "usage-other-row";
+        row.dataset.providerId = id;
+        row.title = `Show ${provider.name || id}`;
+        const name = document.createElement("span");
+        name.className = "usage-other-name";
+        name.textContent = provider.name || USAGE_PROVIDER_NAMES[id] || id;
+        const pill = document.createElement("span");
+        pill.className = `usage-status-pill status-${provider.status || "loading"}`;
+        pill.textContent = USAGE_STATUS_LABELS[provider.status] || provider.status || "…";
+        const summary = document.createElement("span");
+        summary.className = "usage-other-summary";
+        summary.textContent = providerSummary(provider, isUsage);
+        row.append(name, pill, summary);
+        usageOtherRows.appendChild(row);
+      });
+    }
+
+    if (usageFetchedAt) {
+      if (usageLoadError) {
+        usageFetchedAt.textContent = usageLoadError;
+      } else if (usageData?.generatedAt) {
+        usageFetchedAt.textContent = `Updated ${formatClock(usageData.generatedAt)}`;
+      } else {
+        usageFetchedAt.textContent = "";
       }
     }
+  }
 
-    function updateSection(dataPrefix, limitName, elementPrefix = dataPrefix) {
-      const isGemini = dataPrefix.startsWith("gemini") && usageData.geminiRateLimits;
-      const isClaudeRateLimit = dataPrefix.startsWith("claude") && claudeLimits;
-
-      const limits = dataPrefix.startsWith("gemini") ? usageData.geminiRateLimits :
-        dataPrefix.startsWith("claude") ? claudeLimits : null;
-      const windowData = dataPrefix.toLowerCase().includes("weekly") ? limits?.weekly : limits?.hourly;
-      if ((dataPrefix.startsWith("gemini") || limits) &&
-          ((dataPrefix.startsWith("gemini") && limits?.source !== "antigravity") || limits?.available !== true || !Number.isFinite(windowData?.usedPercent))) {
-        const percentEl = document.getElementById(`${elementPrefix}Percent`);
-        const chartEl = document.getElementById(`${elementPrefix}Chart`);
-        const descEl = document.getElementById(`${elementPrefix}Desc`);
-        if (percentEl) percentEl.textContent = "—";
-        if (chartEl) chartEl.setAttribute("stroke-dasharray", "0, 100");
-        if (descEl) descEl.textContent = (limits?.available !== true && limits?.description) ||
-          "Quota unavailable. Check Antigravity for account limits.";
-        return;
-      }
-
-      if (isGemini || isClaudeRateLimit) {
-        const rateLimits = isGemini ? usageData.geminiRateLimits : claudeLimits;
-        const isWeekly = dataPrefix.toLowerCase().includes("weekly");
-        const bucketData = windowData;
-        const usedPercent = Number(bucketData.usedPercent !== undefined ? bucketData.usedPercent : (rateLimits.usedPercent || 0));
-        const remainingPercent = Number(bucketData.remainingPercent !== undefined ? bucketData.remainingPercent : (rateLimits.remainingPercent || Math.max(0, 100 - usedPercent)));
-        const val = isUsage ? usedPercent : remainingPercent;
-        const percentEl = document.getElementById(`${elementPrefix}Percent`);
-        const chartEl = document.getElementById(`${elementPrefix}Chart`);
-        const descEl = document.getElementById(`${elementPrefix}Desc`);
-
-        if (percentEl) percentEl.textContent = `${val.toFixed(0)}%`;
-        if (chartEl) chartEl.setAttribute("stroke-dasharray", `${val}, 100`);
-
-        if (descEl) {
-          if (isUsage) {
-            descEl.textContent = isWeekly
-              ? `Used ${usedPercent.toFixed(0)}% of your weekly quota`
-              : `Used ${usedPercent.toFixed(0)}% of your 5-hour limit`;
-          } else {
-            if (bucketData.description) {
-              descEl.textContent = bucketData.description;
-            } else if (remainingPercent >= 100) {
-              descEl.textContent = isWeekly
-                ? `You have 100% of your weekly limit remaining.`
-                : `You have 100% of your 5-hour limit remaining.`;
-            } else {
-              const resetText = formatResetDuration(bucketData.resetTime || rateLimits.resetTime);
-              descEl.textContent = isWeekly
-                ? `You have used some of your weekly limit${resetText ? `, it will fully refresh ${resetText}` : ''}.`
-                : `You have used some of your 5-hour limit${resetText ? `, it will fully refresh ${resetText}` : ''}.`;
-            }
-          }
-        }
-        return;
-      }
-
-      const usedPercent = Number(usageData[`${dataPrefix}Percent`] || 0);
-      const usedTokens = Number(usageData[`${dataPrefix}Used`] || 0);
-      const limitTokens = Number(usageData[`${dataPrefix}Limit`] || 0);
-
-      const val = isUsage ? usedPercent : Math.max(0, 100 - usedPercent);
-      const percentEl = document.getElementById(`${elementPrefix}Percent`);
-      const chartEl = document.getElementById(`${elementPrefix}Chart`);
-      const descEl = document.getElementById(`${elementPrefix}Desc`);
-
-      if (percentEl) percentEl.textContent = `${val.toFixed(1)}%`;
-      if (chartEl) chartEl.setAttribute("stroke-dasharray", `${val}, 100`);
-
-      if (descEl) {
-        if (isUsage) {
-          descEl.textContent = `You have used ${usedTokens.toLocaleString()} tokens (${usedPercent.toFixed(1)}%) of your ${limitName} limit.`;
-        } else {
-          const remainingTokens = Math.max(0, limitTokens - usedTokens);
-          const remainingPercent = Math.max(0, 100 - usedPercent);
-          descEl.textContent = `You have ${remainingTokens.toLocaleString()} tokens (${remainingPercent.toFixed(1)}%) remaining of your ${limitName} limit.`;
-        }
-      }
-    }
-
-    const geminiSection = document.getElementById("usageGeminiSection");
-    const secondarySection = document.getElementById("usageSecondarySection");
-    const showGemini = activeBucket.key === "gemini";
-    geminiSection?.classList.toggle("hidden", !showGemini);
-    secondarySection?.classList.toggle("hidden", showGemini);
-
-    if (showGemini) {
-      const geminiBadge = document.getElementById("geminiUsageBadge") || geminiSection?.querySelector(".usage-plan-badge");
-      if (geminiBadge) {
-        geminiBadge.textContent = activeBucket.badge;
-      }
-      updateSection("geminiWeekly", "weekly");
-      updateSection("geminiHourly", "5-hour");
-      return;
-    }
-
-    const secondaryTitle = document.getElementById("secondaryUsageTitle");
-    const secondaryBadge = document.getElementById("secondaryUsageBadge");
-    const secondaryNote = document.getElementById("secondaryUsageNote");
-    if (secondaryTitle) secondaryTitle.textContent = activeBucket.title;
-    if (secondaryBadge) secondaryBadge.textContent = activeBucket.badge;
-    if (secondaryNote) {
-      const note = isCodexModel(currentModel) ? (usageData.codexUsageNote || activeBucket.note) : activeBucket.note;
-      secondaryNote.textContent = note;
-      secondaryNote.classList.toggle("hidden", !note);
-    }
-
-    if (isCodexModel(currentModel) && usageData.codexRateLimits) {
-      const weeklyRow = document.getElementById("secondaryWeeklyRow");
-      const hourlyRow = document.getElementById("secondaryHourlyRow");
-      const renderCodexWindow = (windowData, elementPrefix, fallbackLabel) => {
-        if (!windowData) return false;
-        const usedPercent = Number(windowData.usedPercent || 0);
-        const remainingPercent = Number(windowData.remainingPercent ?? Math.max(0, 100 - usedPercent));
-        const val = isUsage ? usedPercent : remainingPercent;
-        const resetDate = formatCodexResetDate(windowData.resetsAt);
-        const percentEl = document.getElementById(`${elementPrefix}Percent`);
-        const chartEl = document.getElementById(`${elementPrefix}Chart`);
-        const descEl = document.getElementById(`${elementPrefix}Desc`);
-        const rowEl = document.getElementById(elementPrefix === "claudeWeekly" ? "secondaryWeeklyRow" : "secondaryHourlyRow");
-        const labelEl = rowEl?.querySelector(".usage-label");
-        if (rowEl) rowEl.classList.remove("hidden");
-        if (labelEl) labelEl.textContent = formatCodexWindowLabel(windowData.windowDurationMins) || fallbackLabel;
-        if (percentEl) percentEl.textContent = `${val.toFixed(0)}%`;
-        if (chartEl) chartEl.setAttribute("stroke-dasharray", `${val}, 100`);
-        if (descEl) {
-          descEl.textContent = isUsage
-            ? `Used ${usedPercent.toFixed(0)}% of your Codex account limit${resetDate ? `; resets ${resetDate}` : ""}.`
-            : `${remainingPercent.toFixed(0)}% remaining${resetDate ? `; resets ${resetDate}` : ""}.`;
-        }
-        return true;
-      };
-      renderCodexWindow(usageData.codexRateLimits.primary, "claudeWeekly", "Weekly Limit");
-      const hasSecondary = renderCodexWindow(usageData.codexRateLimits.secondary, "claudeHourly", "Five Hour Limit");
-      if (weeklyRow) weeklyRow.classList.remove("hidden");
-      if (hourlyRow) hourlyRow.classList.toggle("hidden", !hasSecondary);
-      if (secondaryNote && typeof usageData.codexRateLimits.availableResets === "number") {
-        secondaryNote.textContent = `${secondaryNote.textContent} ${usageData.codexRateLimits.availableResets} available resets.`;
-      }
-      return;
-    }
-    if (isXaiModel(currentModel) || isMuseModel(currentModel)) {
-      document.getElementById("secondaryWeeklyRow")?.classList.add("hidden");
-      document.getElementById("secondaryHourlyRow")?.classList.add("hidden");
-      return;
-    }
-
-    document.getElementById("secondaryWeeklyRow")?.classList.remove("hidden");
-    document.getElementById("secondaryHourlyRow")?.classList.remove("hidden");
-    updateSection(`${activeBucket.key}Weekly`, "weekly", "claudeWeekly");
-    updateSection(`${activeBucket.key}Hourly`, "5-hour", "claudeHourly");
+  if (usageOtherRows) {
+    usageOtherRows.addEventListener("click", (e) => {
+      const row = e.target.closest(".usage-other-row");
+      if (!row) return;
+      e.stopPropagation();
+      usageFocusProviderId = row.dataset.providerId;
+      usageFocusModel = currentModel;
+      refreshUsageDisplay();
+    });
+  }
+  if (usagePrimaryTitle) {
+    usagePrimaryTitle.addEventListener("click", (e) => {
+      if (!usageFocusProviderId) return;
+      e.stopPropagation();
+      usageFocusProviderId = null;
+      refreshUsageDisplay();
+    });
   }
 
   // Initialize display on load

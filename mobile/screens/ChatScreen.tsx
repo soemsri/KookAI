@@ -372,6 +372,81 @@ const getUsageBucketForModel = (modelName: string, planName?: string): {
   };
 };
 
+type UsageProviderId = 'claude' | 'codex' | 'antigravity' | 'antigravity_claude' | 'kimi' | 'grok' | 'muse' | 'deepseek' | 'zai';
+
+const USAGE_PROVIDER_ORDER: UsageProviderId[] = ['claude', 'codex', 'antigravity', 'antigravity_claude', 'kimi', 'grok', 'muse', 'deepseek', 'zai'];
+const USAGE_PROVIDER_NAMES: Record<UsageProviderId, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex (ChatGPT)',
+  antigravity: 'Gemini (Antigravity)',
+  antigravity_claude: 'Claude & GPT via Antigravity',
+  kimi: 'Kimi Code',
+  grok: 'Grok Build (xAI)',
+  muse: 'Muse Code (Meta)',
+  deepseek: 'DeepSeek',
+  zai: 'GLM (Z.ai Coding Plan)',
+};
+const USAGE_STATUS_LABELS: Record<string, string> = {
+  ok: 'Live',
+  stale: 'Last run',
+  not_logged_in: 'Not signed in',
+  token_expired: 'Sign-in expired',
+  auth_rejected: 'Key rejected',
+  unsupported: 'No usage API',
+  unavailable: 'Unavailable',
+};
+
+// Which provider account meters the selected model (mirrors static/script.js).
+const getUsageProviderIdForModel = (modelName: string): UsageProviderId => {
+  const option = getModelOption(modelName);
+  const provider = option?.provider;
+  if (provider === 'codex') return 'codex';
+  if (provider === 'xai') return 'grok';
+  if (provider === 'muse') return 'muse';
+  if (provider === 'kimi') return 'kimi';
+  if (provider === 'deepseek') return 'deepseek';
+  if (provider === 'zai') return 'zai';
+  if (provider === 'agy') {
+    // Antigravity meters Gemini separately from the Claude/GPT models it serves.
+    return option?.usageBucket === 'claude' || option?.usageBucket === 'gpt' ? 'antigravity_claude' : 'antigravity';
+  }
+  if (provider === 'claude') return 'claude';
+  const lowered = getModelLabel(modelName).toLowerCase();
+  if (lowered.includes('gemini')) return 'antigravity';
+  if (lowered.includes('kimi')) return 'kimi';
+  if (lowered.includes('glm')) return 'zai';
+  if (lowered.includes('deepseek')) return 'deepseek';
+  if (lowered.includes('grok')) return 'grok';
+  if (lowered.includes('muse')) return 'muse';
+  if (lowered.includes('gpt')) return 'codex';
+  return 'claude';
+};
+
+const usageWindowDisplayPercent = (win: any, mode: 'usage' | 'remaining') => {
+  const used = Number(win?.usedPercent ?? 0);
+  const remaining = Number(win?.remainingPercent ?? Math.max(0, 100 - used));
+  return mode === 'usage' ? used : remaining;
+};
+
+const formatUsageBalance = (balance: any) => {
+  const total = Number(balance?.total);
+  const amount = Number.isFinite(total) ? total.toFixed(2) : '—';
+  return `${amount} ${balance?.currency || ''}`.trim();
+};
+
+const summarizeUsageProvider = (provider: any, mode: 'usage' | 'remaining') => {
+  if (!provider) return 'No data';
+  if (provider.available) {
+    const parts: string[] = (provider.windows || []).map((win: any) => {
+      const short = win.kind === 'five_hour' ? '5h' : win.kind === 'weekly' ? 'Weekly' : win.kind === 'monthly' ? 'Monthly' : (win.label || win.id);
+      return `${short} ${usageWindowDisplayPercent(win, mode).toFixed(0)}%${mode === 'usage' ? '' : ' left'}`;
+    });
+    (provider.balances || []).forEach((balance: any) => parts.push(`Balance ${formatUsageBalance(balance)}`));
+    return (parts.join(' · ') || 'No windows reported') + (provider.status === 'stale' ? " (from KookAI's last Claude run)" : '');
+  }
+  return provider.description || USAGE_STATUS_LABELS[provider.status] || 'Unavailable';
+};
+
 const targetsList = [
   { value: "Sandbox", desc: "Execute in a secure local sandbox" },
   { value: "Real", desc: "Execute directly on your host machine (default)" }
@@ -1231,6 +1306,8 @@ const [audioRecording, setAudioRecording] = useState<Audio.Recording | null>(nul
 const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [usageLimitData, setUsageLimitData] = useState<any>(DEFAULT_USAGE_LIMIT_DATA);
   const [usageMode, setUsageMode] = useState<'usage' | 'remaining'>('usage');
+  const [pinnedUsageProvider, setPinnedUsageProvider] = useState<UsageProviderId | null>(null);
+  useEffect(() => { setPinnedUsageProvider(null); }, [selectedModel]);
   const [loadingUsage, setLoadingUsage] = useState(false);
   const [usageLimitError, setUsageLimitError] = useState('');
   const [isConnected, setIsConnected] = useState(true);
@@ -2969,6 +3046,13 @@ allowQueue: false,
 
   const getActiveUsagePercentage = () => {
     if (!usageLimitData) return 0;
+    if (usageLimitData.providers) {
+      const entry = usageLimitData.providers[pinnedUsageProvider || getUsageProviderIdForModel(selectedModel)];
+      if (!entry?.available || !Number.isFinite(Number(entry.usedPercent))) return 0;
+      return usageMode === 'usage'
+        ? Number(entry.usedPercent)
+        : Number(entry.remainingPercent ?? Math.max(0, 100 - Number(entry.usedPercent)));
+    }
     if (isCodexModel(selectedModel)) {
       const primary = usageLimitData.codexRateLimits?.primary;
       if (primary) {
@@ -2995,11 +3079,6 @@ allowQueue: false,
     }
     const activeHourlyPercent = Number(usageLimitData[`${bucket.key}HourlyPercent`] ?? 0);
     return usageMode === 'usage' ? activeHourlyPercent : Math.max(0, 100 - activeHourlyPercent);
-  };
-
-  const getUsageMetric = (bucket: UsageBucketKey, period: UsagePeriodKey, metric: 'Used' | 'Limit' | 'Percent') => {
-    const value = usageLimitData?.[`${bucket}${period}${metric}`];
-    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
   };
 
   const renderCircularChart = (percent: number, color: string) => {
@@ -3126,24 +3205,17 @@ allowQueue: false,
       );
     }
 
-    const used = getUsageMetric(bucket, period, 'Used');
-    const limit = getUsageMetric(bucket, period, 'Limit');
-    const usedPercent = getUsageMetric(bucket, period, 'Percent');
-    const displayPercent = usageMode === 'usage' ? usedPercent : Math.max(0, 100 - usedPercent);
-    const remainingTokens = Math.max(0, limit - used);
-
+    // Older KookAI servers only sent estimated token budgets for this bucket.
+    // Those were never account quota, so show the gap instead of a number.
     return (
       <View style={styles.usageRow}>
         <View style={styles.usageRowLabel}>
           <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>{label}</Text>
           <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>
-            {usageMode === 'usage'
-              ? `Used ${used.toLocaleString()} tokens (${usedPercent.toFixed(1)}%)`
-              : `${remainingTokens.toLocaleString()} tokens (${Math.max(0, 100 - usedPercent).toFixed(1)}%) remaining`
-            }
+            This KookAI server does not report live account usage for this provider. Update the server to see it.
           </Text>
         </View>
-        {renderCircularChart(displayPercent, theme.statusGreen)}
+        <Text style={{ color: theme.textSecondary }}>—</Text>
       </View>
     );
   };
@@ -3193,6 +3265,127 @@ allowQueue: false,
         </View>
         {renderCircularChart(displayPercent, theme.statusGreen)}
       </View>
+    );
+  };
+
+  const renderProviderWindowRow = (win: any) => {
+    const displayPercent = usageWindowDisplayPercent(win, usageMode);
+    const used = Number(win?.usedPercent ?? 0);
+    const remaining = Number(win?.remainingPercent ?? Math.max(0, 100 - used));
+    const resetText = formatResetDuration(win?.resetTime);
+    const resetSuffix = resetText ? `, resets ${resetText}` : '';
+    const detail = String(win?.description || '').trim();
+    const detailIsSentence = /[.!]$/.test(detail);
+    let desc: string;
+    if (usageMode === 'usage') {
+      desc = `Used ${used.toFixed(0)}% of this limit${resetSuffix}.${detail && !detailIsSentence ? ` (${detail})` : ''}`;
+    } else if (detailIsSentence) {
+      desc = detail;
+    } else {
+      desc = `${remaining.toFixed(0)}% remaining${resetSuffix}.${detail ? ` (${detail})` : ''}`;
+    }
+    return (
+      <View key={win?.id || win?.label} style={styles.usageRow}>
+        <View style={styles.usageRowLabel}>
+          <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>{win?.label || win?.id || 'Usage Limit'}</Text>
+          <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>{desc}</Text>
+        </View>
+        {renderCircularChart(displayPercent, theme.statusGreen)}
+      </View>
+    );
+  };
+
+  const renderProviderBalanceRow = (balance: any, index: number) => {
+    const breakdown: string[] = [];
+    if (Number.isFinite(Number(balance?.granted))) breakdown.push(`granted ${Number(balance.granted).toFixed(2)}`);
+    if (Number.isFinite(Number(balance?.toppedUp))) breakdown.push(`topped up ${Number(balance.toppedUp).toFixed(2)}`);
+    return (
+      <View key={`balance-${index}`} style={styles.usageRow}>
+        <View style={styles.usageRowLabel}>
+          <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>{`Balance (${balance?.currency || 'credits'})`}</Text>
+          <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>{breakdown.join(' · ') || 'Prepaid balance reported by the provider.'}</Text>
+        </View>
+        <Text style={[styles.usageRowPercent, { color: theme.textPrimary }]}>{formatUsageBalance(balance)}</Text>
+      </View>
+    );
+  };
+
+  // Rendered when the server reports per-provider live usage (`providers`).
+  const renderProviderUsagePanel = () => {
+    const providers = usageLimitData?.providers || {};
+    const modelProviderId = getUsageProviderIdForModel(selectedModel);
+    const primaryId: UsageProviderId = pinnedUsageProvider || modelProviderId;
+    const primary = providers[primaryId] || {
+      id: primaryId,
+      name: USAGE_PROVIDER_NAMES[primaryId],
+      status: 'unavailable',
+      available: false,
+      windows: [],
+      balances: [],
+      description: 'The KookAI server did not report this provider.',
+    };
+    const account = primary.account || {};
+    const badge = primary.available
+      ? (account.plan || account.label || account.email || USAGE_STATUS_LABELS[primary.status] || 'Live')
+      : (USAGE_STATUS_LABELS[primary.status] || 'Unavailable');
+    const noteParts: string[] = [];
+    if (account.email) {
+      noteParts.push(`Signed in as ${account.email}${account.organization ? ` · ${account.organization}` : ''}`);
+    } else if (account.label && primary.available) {
+      noteParts.push(account.label);
+    }
+    if (primary.available && primary.description) noteParts.push(primary.description);
+    return (
+      <>
+        <View style={styles.usageSection}>
+          <TouchableOpacity activeOpacity={pinnedUsageProvider ? 0.6 : 1} onPress={() => { if (pinnedUsageProvider) setPinnedUsageProvider(null); }}>
+            <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>
+              {`${primary.name || USAGE_PROVIDER_NAMES[primaryId]}${primaryId !== modelProviderId ? ' (pinned)' : ''} · ${badge}`}
+            </Text>
+          </TouchableOpacity>
+          {noteParts.length > 0 ? (
+            <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textMuted }]}>{noteParts.join(' — ')}</Text>
+          ) : null}
+          {primary.available ? (
+            <>
+              {(primary.windows || []).map((win: any) => renderProviderWindowRow(win))}
+              {(primary.balances || []).map((balance: any, index: number) => renderProviderBalanceRow(balance, index))}
+            </>
+          ) : (
+            <View style={styles.usageRow}>
+              <View style={styles.usageRowLabel}>
+                <Text style={[styles.usageRowName, { color: theme.textPrimary }]}>{USAGE_STATUS_LABELS[primary.status] || 'Unavailable'}</Text>
+                <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]}>{primary.description || ''}</Text>
+                {primary.signInHint ? (
+                  <Text style={[styles.usageRowDesc, { color: theme.textMuted }]}>{primary.signInHint}</Text>
+                ) : null}
+              </View>
+              <Text style={{ color: theme.textSecondary }}>—</Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.usageSection}>
+          <Text style={[styles.usageSectionTitle, { color: theme.textSecondary }]}>Other providers</Text>
+          {USAGE_PROVIDER_ORDER.filter((id) => id !== primaryId).map((id) => {
+            const provider = providers[id];
+            const status: string = provider?.status || 'unavailable';
+            return (
+              <TouchableOpacity key={id} style={[styles.usageOtherRow, { borderColor: theme.borderColor }]} onPress={() => setPinnedUsageProvider(id)}>
+                <View style={styles.usageOtherHeader}>
+                  <Text style={[styles.usageOtherName, { color: theme.textPrimary }]} numberOfLines={1}>{provider?.name || USAGE_PROVIDER_NAMES[id]}</Text>
+                  <View style={[styles.usageOtherPill, { backgroundColor: theme.bgSecondary }]}>
+                    <Text style={[styles.usageOtherPillText, { color: status === 'ok' ? theme.statusGreen : theme.textSecondary }]}>{USAGE_STATUS_LABELS[status] || status}</Text>
+                  </View>
+                </View>
+                <Text style={[styles.usageRowDesc, { color: theme.textSecondary }]} numberOfLines={2}>{summarizeUsageProvider(provider, usageMode)}</Text>
+              </TouchableOpacity>
+            );
+          })}
+          {usageLimitData?.generatedAt ? (
+            <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textMuted }]}>{`Updated ${new Date(usageLimitData.generatedAt).toLocaleTimeString()}`}</Text>
+          ) : null}
+        </View>
+      </>
     );
   };
 
@@ -4762,6 +4955,7 @@ allowQueue: false,
             {usageLimitData ? (
               <>
               <ScrollView style={styles.popupScroll}>
+                {usageLimitData?.providers ? renderProviderUsagePanel() : (
                 <View style={styles.usageSection}>
                   <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>
                     {getUsageBucketForModel(selectedModel, ((usageLimitData?.geminiRateLimits?.source || usageLimitData?.antigravityClaudeRateLimits?.source) ? usageLimitData?.antigravityPlan : undefined)).title}
@@ -4792,6 +4986,7 @@ allowQueue: false,
                     </>
                   )}
                 </View>
+                )}
               </ScrollView>
               {(loadingUsage || usageLimitError) && (
                 <View style={styles.usageStatusRow}>
@@ -6310,6 +6505,33 @@ gap: 12,
   usageRowPercent: {
     fontSize: 14,
     fontWeight: '700',
+  },
+  usageOtherRow: {
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  usageOtherHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  usageOtherName: {
+    flex: 1,
+    fontSize: 12.5,
+    fontWeight: '600',
+  },
+  usageOtherPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  usageOtherPillText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
   popupCloseBtn: {
     marginTop: 20,

@@ -557,27 +557,32 @@ def summarize_codex_rate_limits(response_result: dict[str, Any]) -> Optional[dic
     }
 
 
-def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: float = 10) -> Optional[dict[str, Any]]:
-    """Fetch current Codex account rate limits from the local Codex app-server."""
-    executable = codex_path or resolve_codex_executable()
-    messages = [
-        {
-            "jsonrpc": "2.0",
-            "id": "init",
-            "method": "initialize",
-            "params": {
-                "clientInfo": {"name": "KookAI", "version": "1.0.0"},
-                "capabilities": {"experimentalApi": True},
-            },
+def _codex_initialize_message() -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": "init",
+        "method": "initialize",
+        "params": {
+            "clientInfo": {"name": "KookAI", "version": "1.0.0"},
+            "capabilities": {"experimentalApi": True},
         },
-        {
-            "jsonrpc": "2.0",
-            "id": "rate_limits",
-            "method": "account/rateLimits/read",
-            "params": None,
-        },
-    ]
+    }
 
+
+def _codex_app_server_exchange(
+    messages: list[dict[str, Any]],
+    wanted_ids: set[str],
+    *,
+    codex_path: Optional[str] = None,
+    timeout_seconds: float = 10,
+    env: Optional[dict[str, str]] = None,
+) -> dict[str, dict[str, Any]]:
+    """Send JSON-RPC ``messages`` to a fresh ``codex app-server`` and collect replies for ``wanted_ids``.
+
+    Replies that never arrive before ``timeout_seconds`` are simply absent from
+    the returned mapping; the server process is always terminated afterwards.
+    """
+    executable = codex_path or resolve_codex_executable()
     process = subprocess.Popen(
         [executable, "app-server", "--listen", "stdio://"],
         stdin=subprocess.PIPE,
@@ -586,6 +591,7 @@ def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: f
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
         **hidden_subprocess_kwargs(),
     )
     output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -597,6 +603,7 @@ def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: f
     threading.Thread(target=read_stream, args=(process.stdout, "stdout"), daemon=True).start()
     threading.Thread(target=read_stream, args=(process.stderr, "stderr"), daemon=True).start()
 
+    replies: dict[str, dict[str, Any]] = {}
     try:
         assert process.stdin is not None
         for message in messages:
@@ -604,7 +611,7 @@ def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: f
         process.stdin.flush()
 
         deadline = time.time() + timeout_seconds
-        while time.time() < deadline:
+        while time.time() < deadline and len(replies) < len(wanted_ids):
             try:
                 source, line = output_queue.get(timeout=0.25)
             except queue.Empty:
@@ -617,13 +624,89 @@ def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: f
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if event.get("id") == "rate_limits":
-                if event.get("error"):
-                    return None
-                return summarize_codex_rate_limits(event.get("result") or {})
-        return None
+            if isinstance(event, dict) and event.get("id") in wanted_ids:
+                replies[event["id"]] = event
+        return replies
     finally:
         try:
             process.terminate()
         except Exception:
             pass
+
+
+def fetch_codex_rate_limits(codex_path: Optional[str] = None, timeout_seconds: float = 10) -> Optional[dict[str, Any]]:
+    """Fetch current Codex account rate limits from the local Codex app-server."""
+    messages = [
+        _codex_initialize_message(),
+        {
+            "jsonrpc": "2.0",
+            "id": "rate_limits",
+            "method": "account/rateLimits/read",
+            "params": None,
+        },
+    ]
+    replies = _codex_app_server_exchange(messages, {"rate_limits"}, codex_path=codex_path, timeout_seconds=timeout_seconds)
+    event = replies.get("rate_limits")
+    if not event or event.get("error"):
+        return None
+    return summarize_codex_rate_limits(event.get("result") or {})
+
+
+def fetch_codex_account_status(
+    codex_path: Optional[str] = None,
+    timeout_seconds: float = 8,
+    env: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    """Signed-in Codex account plus its live rate limits, from one app-server session.
+
+    ``account/read`` answers ``{"account": null, "requiresOpenaiAuth": true}``
+    when nobody is signed in, and ``account/rateLimits/read`` then errors with
+    "codex account authentication required"; both are reported, not hidden.
+    """
+    messages = [
+        _codex_initialize_message(),
+        {"jsonrpc": "2.0", "id": "account", "method": "account/read", "params": {}},
+        {"jsonrpc": "2.0", "id": "rate_limits", "method": "account/rateLimits/read", "params": None},
+    ]
+    try:
+        replies = _codex_app_server_exchange(
+            messages,
+            {"account", "rate_limits"},
+            codex_path=codex_path,
+            timeout_seconds=timeout_seconds,
+            env=env,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
+        return {"ok": False, "error": str(exc), "account": None, "requiresOpenaiAuth": None, "rateLimits": None, "sawAccount": False}
+
+    account_event = replies.get("account")
+    rate_event = replies.get("rate_limits")
+    if not account_event and not rate_event:
+        return {"ok": False, "error": "the Codex app-server did not answer in time", "account": None, "requiresOpenaiAuth": None, "rateLimits": None, "sawAccount": False}
+
+    account: Optional[dict[str, Any]] = None
+    requires_auth: Optional[bool] = None
+    saw_account = False
+    if account_event and not account_event.get("error"):
+        result = account_event.get("result") if isinstance(account_event.get("result"), dict) else {}
+        saw_account = True
+        account = result.get("account") if isinstance(result.get("account"), dict) else None
+        requires_auth = result.get("requiresOpenaiAuth")
+
+    rate_limits: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+    if rate_event:
+        if rate_event.get("error"):
+            err = rate_event["error"]
+            error = str(err.get("message") if isinstance(err, dict) else err)
+        else:
+            rate_limits = summarize_codex_rate_limits(rate_event.get("result") or {})
+
+    return {
+        "ok": True,
+        "account": account,
+        "requiresOpenaiAuth": requires_auth,
+        "rateLimits": rate_limits,
+        "error": error,
+        "sawAccount": saw_account,
+    }

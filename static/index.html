@@ -282,78 +282,24 @@
                       </div>
                    </div>
 
-                   <div class="usage-body">
-                     <!-- Gemini section -->
-                     <div class="usage-section" id="usageGeminiSection">
+                   <div class="usage-body" id="usageBody">
+                     <!-- Selected model's provider (rendered by script.js from /api/usage-limits) -->
+                     <div class="usage-section" id="usagePrimarySection">
                         <div class="usage-sec-title">
-                          <span>Gemini Models <span class="info-icon" title="Rate limits applied to Gemini models">ⓘ</span></span>
-                          <span class="usage-plan-badge" id="geminiUsageBadge">Your Plan: Plan unavailable</span>
+                          <span id="usagePrimaryTitle">Loading usage…</span>
+                          <span class="usage-plan-badge" id="usagePrimaryBadge">Loading</span>
                         </div>
-
-                       <div class="usage-row-item" id="secondaryWeeklyRow">
-                         <div class="usage-row-left">
-                           <div class="usage-label">Weekly Limit</div>
-                           <div class="usage-desc" id="geminiWeeklyDesc">You have used some of your weekly limit, it will fully refresh in 5 days, 17 hours.</div>
-                         </div>
-                         <div class="usage-row-right">
-                           <span class="usage-percent-text" id="geminiWeeklyPercent">99%</span>
-                           <svg viewBox="0 0 36 36" class="chart-small green-chart">
-                             <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                             <path class="circle" id="geminiWeeklyChart" stroke-dasharray="99, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                           </svg>
-                         </div>
-                       </div>
-
-                       <div class="usage-row-item" id="secondaryHourlyRow">
-                         <div class="usage-row-left">
-                           <div class="usage-label">Five Hour Limit</div>
-                           <div class="usage-desc" id="geminiHourlyDesc">You have used some of your 5-hour limit, it will fully refresh in 1 hour, 15 minutes.</div>
-                         </div>
-                         <div class="usage-row-right">
-                           <span class="usage-percent-text" id="geminiHourlyPercent">86%</span>
-                           <svg viewBox="0 0 36 36" class="chart-small green-chart">
-                             <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                             <path class="circle" id="geminiHourlyChart" stroke-dasharray="86, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                           </svg>
-                         </div>
-                       </div>
+                        <div class="usage-note hidden" id="usagePrimaryNote"></div>
+                        <div class="usage-rows" id="usagePrimaryRows"></div>
                      </div>
 
-                     <!-- Claude section -->
-                     <div class="usage-section" id="usageSecondarySection">
+                     <!-- Every other provider, one line each; click a row to inspect it -->
+                     <div class="usage-section" id="usageOthersSection">
                         <div class="usage-sec-title">
-                          <span id="secondaryUsageTitle">Claude models <span class="info-icon" title="Rate limits applied to the selected model provider">ⓘ</span></span>
-                          <span class="usage-plan-badge secondary" id="secondaryUsageBadge">Claude account usage</span>
+                          <span>Other providers <span class="info-icon" title="Live account usage for each signed-in provider on this host">ⓘ</span></span>
+                          <span class="usage-meta" id="usageFetchedAt"></span>
                         </div>
-                        <div class="usage-note hidden" id="secondaryUsageNote"></div>
-
-                       <div class="usage-row-item">
-                         <div class="usage-row-left">
-                           <div class="usage-label">Weekly Limit</div>
-                           <div class="usage-desc" id="claudeWeeklyDesc">You have used some of your weekly limit, it will fully refresh in 6 days, 23 hours.</div>
-                         </div>
-                         <div class="usage-row-right">
-                           <span class="usage-percent-text" id="claudeWeeklyPercent">99%</span>
-                           <svg viewBox="0 0 36 36" class="chart-small green-chart">
-                             <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                             <path class="circle" id="claudeWeeklyChart" stroke-dasharray="99, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                           </svg>
-                         </div>
-                       </div>
-
-                       <div class="usage-row-item">
-                         <div class="usage-row-left">
-                           <div class="usage-label">Five Hour Limit</div>
-                           <div class="usage-desc" id="claudeHourlyDesc">You have used some of your 5-hour limit, it will fully refresh in 4 hours, 30 minutes.</div>
-                         </div>
-                         <div class="usage-row-right">
-                           <span class="usage-percent-text" id="claudeHourlyPercent">98%</span>
-                           <svg viewBox="0 0 36 36" class="chart-small green-chart">
-                             <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                             <path class="circle" id="claudeHourlyChart" stroke-dasharray="98, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                           </svg>
-                         </div>
-                       </div>
+                        <div class="usage-other-list" id="usageOtherRows"></div>
                      </div>
                    </div>
                  </div>
