@@ -289,6 +289,34 @@ async function testUrl(baseUrl: string, token: string, timeoutMs = 2000): Promis
   }
 }
 
+function isSameEndpoint(urlA?: string, urlB?: string): boolean {
+  if (!urlA || !urlB) return false;
+  return urlA.replace(/\/+$/, '').toLowerCase() === urlB.replace(/\/+$/, '').toLowerCase();
+}
+
+async function resolveHostFromBroker(hostId: string, timeoutMs = 5000): Promise<{ url?: string; local_ip?: string } | null> {
+  if (!hostId) return null;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(`${WORKER_BASE_URL}/resolve-host/${hostId}`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (!response.ok) {
+      return null;
+    }
+    const freshInfo = await response.json();
+    return {
+      url: typeof freshInfo?.url === 'string' ? freshInfo.url : undefined,
+      local_ip: typeof freshInfo?.local_ip === 'string' ? freshInfo.local_ip : undefined,
+    };
+  } catch (err) {
+    console.error(`[${hostId}] Registry resolution error:`, err);
+    return null;
+  }
+}
+
 export async function getActiveBaseUrlForServer(server: ServerNode, forceRefresh = false): Promise<string | null> {
   if (!server || !server.token) return null;
 
@@ -311,8 +339,8 @@ export async function getActiveBaseUrlForServer(server: ServerNode, forceRefresh
     return localBase;
   }
 
-  // 2. Try stored WAN / Cloudflare Tunnel URL (4000 ms)
-  if (server.url) {
+  // 2. Try stored WAN / Cloudflare Tunnel URL (4000 ms), unless it duplicates the LAN endpoint
+  if (server.url && !isSameEndpoint(server.url, localBase)) {
     const isWanOk = await testUrl(server.url, server.token, 4000);
     if (isWanOk) {
       console.log(`[${server.name}] Routing via public WAN:`, server.url);
@@ -325,21 +353,33 @@ export async function getActiveBaseUrlForServer(server: ServerNode, forceRefresh
     }
   }
 
-  // 3. Central Broker Resolution
+  // 3. Central Broker Resolution (handles rotated *.trycloudflare.com URLs or DHCP IP changes)
   console.log(`[${server.name}] Connection failed. Resolving host URL from broker...`);
-  try {
-    const response = await fetch(`${WORKER_BASE_URL}/resolve-host/${server.hostId}`);
-    if (response.ok) {
-      const freshInfo = await response.json();
-      const freshUrl = freshInfo.url;
-      const freshLocalIp = freshInfo.local_ip;
+  const freshInfo = await resolveHostFromBroker(server.hostId);
+  if (freshInfo) {
+    const freshUrl = freshInfo.url;
+    const freshLocalIp = freshInfo.local_ip;
+    const updatedLocalIp = freshLocalIp || server.localIp;
+    const freshLocalBase = `http://${updatedLocalIp}:${port}`;
 
-      const updatedServer = {
-        ...server,
-        url: freshUrl || server.url,
-        localIp: freshLocalIp || server.localIp,
-      };
+    const updatedServer: ServerNode = {
+      ...server,
+      url: freshUrl || server.url,
+      localIp: updatedLocalIp,
+    };
 
+    if (freshLocalIp && freshLocalIp !== server.localIp) {
+      const isFreshLocalOk = await testUrl(freshLocalBase, server.token, 2000);
+      if (isFreshLocalOk) {
+        console.log(`[${server.name}] Resolved & routed via updated Local LAN:`, freshLocalBase);
+        cachedActiveBaseUrls[server.id] = freshLocalBase;
+        updatedServer.connectionState = 'local';
+        await saveServer(updatedServer, false);
+        return freshLocalBase;
+      }
+    }
+
+    if (updatedServer.url && !isSameEndpoint(updatedServer.url, freshLocalBase)) {
       const isFreshWanOk = await testUrl(updatedServer.url, server.token, 4000);
       if (isFreshWanOk) {
         console.log(`[${server.name}] Resolved & routed via public WAN:`, updatedServer.url);
@@ -349,8 +389,6 @@ export async function getActiveBaseUrlForServer(server: ServerNode, forceRefresh
         return updatedServer.url;
       }
     }
-  } catch (err) {
-    console.error(`[${server.name}] Registry resolution error:`, err);
   }
 
   server.connectionState = 'offline';
@@ -359,14 +397,14 @@ export async function getActiveBaseUrlForServer(server: ServerNode, forceRefresh
 }
 
 export async function pingServer(server: ServerNode): Promise<{ state: 'local' | 'wan' | 'offline'; latency?: number; activeUrl?: string }> {
-  const startTime = Date.now();
   const port = server.port || 8080;
 
-  // LAN check
+  // 1. LAN check
   const localBase = `http://${server.localIp}:${port}`;
+  let pingStart = Date.now();
   const isLocal = await testUrl(localBase, server.token, 2000);
   if (isLocal) {
-    const latency = Date.now() - startTime;
+    const latency = Date.now() - pingStart;
     cachedActiveBaseUrls[server.id] = localBase;
     server.connectionState = 'local';
     server.latency = latency;
@@ -374,16 +412,58 @@ export async function pingServer(server: ServerNode): Promise<{ state: 'local' |
     return { state: 'local', latency, activeUrl: localBase };
   }
 
-  // WAN check
-  if (server.url) {
+  // 2. Stored WAN check
+  if (server.url && !isSameEndpoint(server.url, localBase)) {
+    pingStart = Date.now();
     const isWan = await testUrl(server.url, server.token, 4000);
     if (isWan) {
-      const latency = Date.now() - startTime;
+      const latency = Date.now() - pingStart;
       cachedActiveBaseUrls[server.id] = server.url;
       server.connectionState = 'wan';
       server.latency = latency;
       await saveServer(server, false);
       return { state: 'wan', latency, activeUrl: server.url };
+    }
+  }
+
+  // 3. Broker fallback so rotated Quick Tunnel URLs resolve during status checks too
+  const freshInfo = await resolveHostFromBroker(server.hostId);
+  if (freshInfo) {
+    const freshUrl = freshInfo.url;
+    const freshLocalIp = freshInfo.local_ip;
+    const updatedLocalIp = freshLocalIp || server.localIp;
+    const freshLocalBase = `http://${updatedLocalIp}:${port}`;
+
+    const updatedServer: ServerNode = {
+      ...server,
+      url: freshUrl || server.url,
+      localIp: updatedLocalIp,
+    };
+
+    if (freshLocalIp && freshLocalIp !== server.localIp) {
+      pingStart = Date.now();
+      const isFreshLocal = await testUrl(freshLocalBase, server.token, 2000);
+      if (isFreshLocal) {
+        const latency = Date.now() - pingStart;
+        cachedActiveBaseUrls[server.id] = freshLocalBase;
+        updatedServer.connectionState = 'local';
+        updatedServer.latency = latency;
+        await saveServer(updatedServer, false);
+        return { state: 'local', latency, activeUrl: freshLocalBase };
+      }
+    }
+
+    if (updatedServer.url && !isSameEndpoint(updatedServer.url, freshLocalBase) && !isSameEndpoint(updatedServer.url, server.url)) {
+      pingStart = Date.now();
+      const isFreshWan = await testUrl(updatedServer.url, server.token, 4000);
+      if (isFreshWan) {
+        const latency = Date.now() - pingStart;
+        cachedActiveBaseUrls[server.id] = updatedServer.url;
+        updatedServer.connectionState = 'wan';
+        updatedServer.latency = latency;
+        await saveServer(updatedServer, false);
+        return { state: 'wan', latency, activeUrl: updatedServer.url };
+      }
     }
   }
 

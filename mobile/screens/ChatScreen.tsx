@@ -1392,7 +1392,7 @@ scrollViewRef.current?.scrollToEnd({ animated });
 
 const isConnectionError = (err: unknown) => {
 const message = err instanceof Error ? err.message : String(err);
-return /Cannot reach host|No paired connection|Network request failed|Failed to fetch|aborted|401/.test(message);
+return /Cannot reach (?:host|server)|No paired connection|Network request failed|Failed to fetch|aborted|401/i.test(message);
 };
 
 const callHostApi = async (endpoint: string, options: RequestInit = {}) => {
@@ -1697,6 +1697,7 @@ selectedProjectRef.current = selectedProject;
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
       if (nextAppState === 'active') {
+        void refreshServerList();
         checkAndAttachActiveTask();
       }
     });
@@ -1749,8 +1750,12 @@ selectedProjectRef.current = selectedProject;
             });
             if (response.status === 200) {
               console.log("Auto-reconnected successfully to base URL:", baseUrl);
+              setHostBaseUrl(baseUrl);
               setIsConnected(true);
-              // Reload projects and conversations list
+              void refreshServerList();
+              // Reload projects, profiles, and conversations list
+              void loadProjects();
+              void loadHarnessProfiles();
               loadConversations(true);
               fetchUsageLimits();
               refreshModelCatalog();

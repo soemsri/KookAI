@@ -27,6 +27,7 @@ import asyncio
 import contextvars
 import uvicorn
 import subprocess
+import shutil
 import logging
 import glob
 import re
@@ -321,6 +322,7 @@ TUNNEL_ALLOWED_EXACT_PATHS = {
     "/api/models",
     "/api/models/sync",
     "/api/projects",
+    "/api/harness/profiles",
     "/api/chat-history",
     "/api/chat",
     "/api/chat-tasks",
@@ -443,58 +445,95 @@ def get_local_ip():
 # that Cloudflare Worker is renamed/deployed separately.
 REGISTRY_WORKER_URL = os.environ.get("REGISTRY_WORKER_URL", "https://antigravity-pairing-broker.rangsarn.workers.dev")
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def resolve_tunnel_command(target_url: str = "http://127.0.0.1:8080") -> tuple[list[str], bool]:
+    """Return (cmd, use_shell) for launching Cloudflare Quick Tunnel non-interactively."""
+    cloudflared_bin = shutil.which("cloudflared")
+    if not cloudflared_bin and os.name == "nt":
+        for candidate in (
+            os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "cloudflared", "cloudflared.exe"),
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "cloudflared", "cloudflared.exe"),
+        ):
+            if os.path.isfile(candidate):
+                cloudflared_bin = candidate
+                break
+    if cloudflared_bin:
+        return [cloudflared_bin, "tunnel", "--no-autoupdate", "--url", target_url], False
+    return ["npx", "--yes", "wrangler", "tunnel", "quick-start", target_url], (os.name == "nt")
+
+
+def extract_tunnel_public_url(line: str) -> Optional[str]:
+    """Extract a Quick Tunnel or Localtunnel public origin from a log line."""
+    clean = _ANSI_ESCAPE_RE.sub("", line or "")
+    if "trycloudflare.com" in clean:
+        url_match = re.search(r"https?://(?!api\.)[a-zA-Z0-9-]+\.trycloudflare\.com", clean)
+        if url_match:
+            parsed = urllib.parse.urlparse(url_match.group(0).strip())
+            return f"{parsed.scheme}://{parsed.netloc}"
+    elif "your url is:" in clean.lower():
+        url_match = re.search(r"https?://[^\s|]+", clean)
+        if url_match:
+            parsed = urllib.parse.urlparse(url_match.group(0).strip())
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+    return None
+
+
 def start_localtunnel():
     global public_url, local_ip_addr
     local_ip_addr = get_local_ip()
     host_id = get_or_create_host_id()
     
-    cmd = ["npx", "wrangler", "tunnel", "quick-start", "http://localhost:8080"]
     logging.info("Starting Cloudflare Tunnel...")
     
     def run_tunnel():
         global public_url
         import time
         while True:
+            proc = None
             try:
-                logging.info("Launching Cloudflare Tunnel subprocess...")
+                cmd, use_shell = resolve_tunnel_command("http://127.0.0.1:8080")
+                tunnel_env = os.environ.copy()
+                tunnel_env.setdefault("CI", "true")
+                tunnel_env.setdefault("npm_config_yes", "true")
+                logging.info("Launching Cloudflare Tunnel subprocess: %s", cmd[0])
                 proc = subprocess.Popen(
                     cmd,
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     bufsize=1,
-                    shell=(os.name == 'nt')
+                    shell=use_shell,
+                    env=tunnel_env,
                 )
                 for line in iter(proc.stdout.readline, ''):
                     logging.info(f"[Tunnel] {line.strip()}")
-                    if "trycloudflare.com" in line:
-                        url_match = re.search(r'https?://[^\s|]+trycloudflare\.com[^\s|]*', line)
-                        if url_match:
-                            raw_url = url_match.group(0).strip()
-                            parsed = urllib.parse.urlparse(raw_url)
-                            public_url = f"{parsed.scheme}://{parsed.netloc}"
-                            logging.info(f"Cloudflare Tunnel started successfully! Public URL: {public_url}")
-                            # Update Worker Registry with current local IP dynamically
-                            update_registry(host_id, public_url, get_local_ip())
-                    elif "your url is:" in line.lower():
-                        url_match = re.search(r'https?://[^\s]+', line)
-                        if url_match:
-                            raw_url = url_match.group(0).strip()
-                            parsed = urllib.parse.urlparse(raw_url)
-                            public_url = f"{parsed.scheme}://{parsed.netloc}"
-                            logging.info(f"Localtunnel started successfully! Public URL: {public_url}")
-                            # Update Worker Registry with current local IP dynamically
-                            update_registry(host_id, public_url, get_local_ip())
+                    extracted = extract_tunnel_public_url(line)
+                    if extracted:
+                        public_url = extracted
+                        logging.info(f"Cloudflare Tunnel started successfully! Public URL: {public_url}")
+                        # Update Worker Registry with current local IP dynamically
+                        update_registry(host_id, public_url, get_local_ip())
                 return_code = proc.wait()
                 logging.warning(f"Tunnel subprocess exited with code {return_code}. Restarting in 5 seconds...")
             except Exception as e:
                 logging.error(f"Error running tunnel: {e}. Retrying in 5 seconds...")
+                if proc is not None and proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
             time.sleep(5)
         
     threading.Thread(target=run_tunnel, daemon=True).start()
 
 
-def update_registry(host_id, url, local_ip):
+def update_registry(host_id, url, local_ip) -> bool:
     import urllib.request
     import json
     data = {
@@ -516,8 +555,10 @@ def update_registry(host_id, url, local_ip):
     try:
         with urllib.request.urlopen(req, timeout=5, context=context) as res:
             logging.info(f"Updated host URL on Worker Registry: {res.read().decode().strip()}")
+            return 200 <= getattr(res, "status", 200) < 300
     except Exception as e:
         logging.error(f"Failed to update registry: {e}")
+        return False
 
 def periodic_registry_update():
     import time
@@ -532,10 +573,10 @@ def periodic_registry_update():
             # Force update registry if URL/IP changed, or at least once every 10 minutes (600s) to refresh TTL
             if public_url and (current_ip != last_registered_ip or public_url != last_registered_url or (now - last_update_time) > 600):
                 host_id = get_or_create_host_id()
-                update_registry(host_id, public_url, current_ip)
-                last_registered_ip = current_ip
-                last_registered_url = public_url
-                last_update_time = now
+                if update_registry(host_id, public_url, current_ip):
+                    last_registered_ip = current_ip
+                    last_registered_url = public_url
+                    last_update_time = now
         except Exception as e:
             logging.error(f"Error in periodic registry update: {e}")
         time.sleep(30)

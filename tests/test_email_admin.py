@@ -3,11 +3,15 @@ import tempfile
 import unittest
 import urllib.parse
 
+from unittest import mock
+
 from main import (
+    extract_tunnel_public_url,
     get_tunnel_block_page,
     is_allowed_media_path,
     is_tunnel_allowed_path,
     is_tunnel_host,
+    resolve_tunnel_command,
     rewrite_local_media_links,
 )
 
@@ -24,6 +28,7 @@ class TunnelAccessPolicyTests(unittest.TestCase):
             "/api/pair",
             "/api/models",
             "/api/projects",
+            "/api/harness/profiles",
             "/api/chat-history",
             "/api/chat",
             "/api/chat-tasks",
@@ -48,10 +53,41 @@ class TunnelAccessPolicyTests(unittest.TestCase):
             "/pair.html",
             "/api/pairing-code",
             "/api/admin/status",
+            "/api/harness/profiles/prof_work/connect",
         ]
         for path in blocked_paths:
             with self.subTest(path=path):
                 self.assertFalse(is_tunnel_allowed_path(path))
+
+    def test_resolve_tunnel_command_prefers_cloudflared_and_uses_noninteractive_npx_fallback(self):
+        with mock.patch("main.shutil.which", return_value=r"C:\Program Files (x86)\cloudflared\cloudflared.exe"):
+            cmd, use_shell = resolve_tunnel_command()
+            self.assertEqual(
+                cmd,
+                [r"C:\Program Files (x86)\cloudflared\cloudflared.exe", "tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:8080"],
+            )
+            self.assertFalse(use_shell)
+
+        with (
+            mock.patch("main.shutil.which", return_value=None),
+            mock.patch("main.os.path.isfile", return_value=False),
+        ):
+            cmd, _ = resolve_tunnel_command()
+            self.assertEqual(
+                cmd,
+                ["npx", "--yes", "wrangler", "tunnel", "quick-start", "http://127.0.0.1:8080"],
+            )
+
+    def test_extract_tunnel_public_url_handles_ansi_and_ignores_bare_domain(self):
+        self.assertIsNone(
+            extract_tunnel_public_url("2026-11-11 INF Requesting new quick Tunnel on trycloudflare.com...")
+        )
+        self.assertEqual(
+            extract_tunnel_public_url(
+                "2026-11-11 INF |  \x1b[4mhttps://heath-elevation-deck-swim.trycloudflare.com\x1b[0m  |"
+            ),
+            "https://heath-elevation-deck-swim.trycloudflare.com",
+        )
 
     def test_block_page_is_silent_icon_only(self):
         body = get_tunnel_block_page()

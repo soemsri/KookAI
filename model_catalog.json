@@ -1,8 +1,56 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-10-20.1",
+  "catalog_version": "2026-11-11.2",
   "default_model": "Gemini 4 Argon (High)",
   "models": [
+    {
+      "id": "Gemini 4 Carbon (High)",
+      "label": "Gemini 4 Carbon (High)",
+      "description": "Google flagship frontier reasoning model",
+      "provider": "agy",
+      "cli_model": "gemini-4-carbon-high",
+      "badge": "Carbon",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Gemini 4 Carbon (Medium)",
+      "label": "Gemini 4 Carbon (Medium)",
+      "description": "Balanced frontier reasoning model",
+      "provider": "agy",
+      "cli_model": "gemini-4-carbon-medium",
+      "badge": "Carbon",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Gemini 4 Carbon (Low)",
+      "label": "Gemini 4 Carbon (Low)",
+      "description": "Fast frontier reasoning model",
+      "provider": "agy",
+      "cli_model": "gemini-4-carbon-low",
+      "badge": "Carbon",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
     {
       "id": "Gemini 4 Argon (High)",
       "label": "Gemini 4 Argon (High)",
@@ -276,6 +324,72 @@
       }
     },
     {
+      "id": "Claude Mythos 5.1 (High)",
+      "label": "Claude Mythos 5.1 (High)",
+      "description": "Anthropic Claude Mythos 5.1 (High) model",
+      "provider": "claude",
+      "cli_model": "claude-mythos-5-1-high",
+      "badge": "Mythos",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
+      "id": "Claude Mythos 5.1 (Medium)",
+      "label": "Claude Mythos 5.1 (Medium)",
+      "description": "Anthropic Claude Mythos 5.1 (Medium) model",
+      "provider": "claude",
+      "cli_model": "claude-mythos-5-1-medium",
+      "badge": "Mythos",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
+      "id": "Claude Mythos 5.1 (Low)",
+      "label": "Claude Mythos 5.1 (Low)",
+      "description": "Anthropic Claude Mythos 5.1 (Low) model",
+      "provider": "claude",
+      "cli_model": "claude-mythos-5-1-low",
+      "badge": "Mythos",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
       "id": "Claude Opus 5.5 (High)",
       "label": "Claude Opus 5.5 (High)",
       "description": "Anthropic Claude Opus 5.5 (High) model",
@@ -404,6 +518,38 @@
         ],
         "speed": [],
         "thinking": true,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Sonnet 5.5 (Thinking)",
+      "label": "Claude Sonnet 5.5 (Thinking)",
+      "description": "Anthropic Claude Sonnet 5.5 reasoning with thinking trace",
+      "provider": "agy",
+      "cli_model": "Claude Sonnet 5.5 (Thinking)",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Claude Opus 5.5 (Thinking)",
+      "label": "Claude Opus 5.5 (Thinking)",
+      "description": "Anthropic Claude Opus 5.5 highest reasoning model",
+      "provider": "agy",
+      "cli_model": "Claude Opus 5.5 (Thinking)",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
         "thinking_required": false
       }
     },
@@ -730,6 +876,72 @@
       "enabled": true,
       "capabilities": {
         "effort": [],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
+      "id": "Mythos 5.1",
+      "label": "Mythos 5.1",
+      "description": "Anthropic Mythos 5.1 next-generation frontier intelligence model",
+      "provider": "claude",
+      "cli_model": "claude-mythos-5-1",
+      "badge": "Mythos",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
+      "id": "Mythos 5",
+      "label": "Mythos 5",
+      "description": "Anthropic Mythos 5 frontier reasoning and architecture model",
+      "provider": "claude",
+      "cli_model": "claude-mythos-5",
+      "badge": "Mythos",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
+        "speed": [],
+        "thinking": true,
+        "thinking_required": true
+      }
+    },
+    {
+      "id": "Fable 5.2",
+      "label": "Fable 5.2",
+      "description": "Anthropic Fable 5.2 next-generation agent model",
+      "provider": "claude",
+      "cli_model": "claude-fable-5-2",
+      "badge": "Claude",
+      "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Low",
+          "Medium",
+          "High",
+          "Extra",
+          "Max"
+        ],
         "speed": [],
         "thinking": true,
         "thinking_required": true

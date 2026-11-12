@@ -19,6 +19,25 @@ from typing import Any, Optional
 
 
 CLAUDE_SLUG_ALIASES = {
+    "claude-mythos-5-1-high": "claude-mythos-5-1",
+    "claude-mythos-5-1-medium": "claude-mythos-5-1",
+    "claude-mythos-5-1-low": "claude-mythos-5-1",
+    "claude-mythos-5-high": "claude-mythos-5",
+    "claude-mythos-5-medium": "claude-mythos-5",
+    "claude-mythos-5-low": "claude-mythos-5",
+    "Claude Mythos 5.1": "claude-mythos-5-1",
+    "Claude Mythos 5": "claude-mythos-5",
+    "claude-fable-5-2-high": "claude-fable-5-2",
+    "claude-fable-5-2-medium": "claude-fable-5-2",
+    "claude-fable-5-2-low": "claude-fable-5-2",
+    "Claude Fable 5.2": "claude-fable-5-2",
+    "Claude Fable 5.1": "claude-fable-5-1",
+    "Claude Fable 5": "fable",
+    "Claude Fable 5.2 (High)": "claude-fable-5-2",
+    "Claude Fable 5.2 (Medium)": "claude-fable-5-2",
+    "Claude Fable 5.2 (Low)": "claude-fable-5-2",
+    "fable-5-2": "claude-fable-5-2",
+    "fable-5.2": "claude-fable-5-2",
     "claude-opus-5-5-high": "claude-opus-5-5",
     "claude-opus-5-5-medium": "claude-opus-5-5",
     "claude-opus-5-5-low": "claude-opus-5-5",
@@ -27,9 +46,23 @@ CLAUDE_SLUG_ALIASES = {
     "claude-sonnet-5-5-low": "claude-sonnet-5-5",
     "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
     "Claude Opus 4.6 (Thinking)": "claude-opus-4-6",
+    "Claude Sonnet 5.5 (Thinking)": "claude-sonnet-5-5",
+    "Claude Opus 5.5 (Thinking)": "claude-opus-5-5",
 }
 
 CLAUDE_PRESET_EFFORTS = {
+    "Claude Mythos 5.1 (High)": "High",
+    "Claude Mythos 5.1 (Medium)": "Medium",
+    "Claude Mythos 5.1 (Low)": "Low",
+    "claude-mythos-5-1-high": "High",
+    "claude-mythos-5-1-medium": "Medium",
+    "claude-mythos-5-1-low": "Low",
+    "Claude Fable 5.2 (High)": "High",
+    "Claude Fable 5.2 (Medium)": "Medium",
+    "Claude Fable 5.2 (Low)": "Low",
+    "claude-fable-5-2-high": "High",
+    "claude-fable-5-2-medium": "Medium",
+    "claude-fable-5-2-low": "Low",
     "Claude Opus 5.5 (High)": "High",
     "Claude Opus 5.5 (Medium)": "Medium",
     "Claude Opus 5.5 (Low)": "Low",
@@ -45,6 +78,19 @@ CLAUDE_PRESET_EFFORTS = {
 }
 
 CLAUDE_MODEL_MAP = {
+    "Mythos 5.1": "claude-mythos-5-1",
+    "Claude Mythos 5.1": "claude-mythos-5-1",
+    "Claude Mythos 5.1 (High)": "claude-mythos-5-1",
+    "Claude Mythos 5.1 (Medium)": "claude-mythos-5-1",
+    "Claude Mythos 5.1 (Low)": "claude-mythos-5-1",
+    "Mythos 5": "claude-mythos-5",
+    "Claude Mythos 5": "claude-mythos-5",
+    "Fable 5.2": "claude-fable-5-2",
+    "Claude Fable 5.2": "claude-fable-5-2",
+    "Claude Fable 5.2 (High)": "claude-fable-5-2",
+    "Claude Fable 5.2 (Medium)": "claude-fable-5-2",
+    "Claude Fable 5.2 (Low)": "claude-fable-5-2",
+    "claude-fable-5-2": "claude-fable-5-2",
     "Fable 5.1": "claude-fable-5-1",
     "Fable 5": "fable",
     "Opus 5.5": "claude-opus-5-5",
@@ -68,6 +114,8 @@ CLAUDE_MODEL_MAP = {
     "Opus 3": "claude-3-opus-20240229",
     "Sonnet 4.6": "claude-sonnet-4-6",
     "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
+    "Claude Sonnet 5.5 (Thinking)": "claude-sonnet-5-5",
+    "Claude Opus 5.5 (Thinking)": "claude-opus-5-5",
 }
 
 CLAUDE_EFFORT_MAP = {
@@ -83,6 +131,21 @@ CLAUDE_EFFORT_MAP = {
 }
 
 CLAUDE_MODEL_EFFORTS = {
+    "Mythos 5.1": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Mythos 5.1": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Mythos 5.1 (High)": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Mythos 5.1 (Medium)": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Mythos 5.1 (Low)": {"low", "medium", "high", "xhigh", "max"},
+    "Mythos 5": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Mythos 5": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Sonnet 5.5 (Thinking)": {"low", "medium", "high", "max"},
+    "Claude Opus 5.5 (Thinking)": {"low", "medium", "high", "max"},
+    "Fable 5.2": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Fable 5.2": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Fable 5.2 (High)": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Fable 5.2 (Medium)": {"low", "medium", "high", "xhigh", "max"},
+    "Claude Fable 5.2 (Low)": {"low", "medium", "high", "xhigh", "max"},
+    "claude-fable-5-2": {"low", "medium", "high", "xhigh", "max"},
     "Fable 5.1": {"low", "medium", "high", "xhigh", "max"},
     "Fable 5": {"low", "medium", "high", "xhigh", "max"},
     "Opus 5.5": {"low", "medium", "high", "xhigh", "max"},

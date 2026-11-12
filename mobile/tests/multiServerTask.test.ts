@@ -146,6 +146,54 @@ async function runTests() {
   if (!pingAllRes['host_office_456']) {
     throw new Error('pingAllServers failed to return results for host_office_456');
   }
+
+  // Test WAN Broker Fallback when LAN and cached Quick Tunnel URL are unreachable
+  mockFetchResponses['resolve:host_remote_wan'] = {
+    url: 'https://fresh-rotated.trycloudflare.com',
+    local_ip: '192.168.1.99'
+  };
+  const remoteWanServer: any = {
+    id: 'host_remote_wan',
+    name: 'Remote WAN Host',
+    hostId: 'host_remote_wan',
+    url: 'https://offline-server.com',
+    localIp: '192.168.1.99',
+    port: 8080,
+    token: 'token_remote_wan',
+    createdAt: Date.now(),
+    lastActive: Date.now(),
+    connectionState: 'offline'
+  };
+  await api.saveServer(remoteWanServer, false);
+  const wanPingRes = await api.pingServer(remoteWanServer);
+  if (wanPingRes.state !== 'wan' || wanPingRes.activeUrl !== 'https://fresh-rotated.trycloudflare.com') {
+    throw new Error(`Expected pingServer broker fallback to resolve WAN URL, got ${JSON.stringify(wanPingRes)}`);
+  }
+
+  // Test server originally paired while tunnel was down (server.url == local LAN IP) resolves fresh WAN URL
+  const lanPairedServer: any = {
+    id: 'host_lan_paired',
+    name: 'LAN Paired Host',
+    hostId: 'host_lan_paired',
+    url: 'http://192.168.1.99:8080',
+    localIp: '192.168.1.99',
+    port: 8080,
+    token: 'token_lan_paired',
+    createdAt: Date.now(),
+    lastActive: Date.now(),
+    connectionState: 'offline'
+  };
+  mockFetchResponses['resolve:host_lan_paired'] = {
+    url: 'https://lan-upgraded.trycloudflare.com',
+    local_ip: '192.168.1.99'
+  };
+  await api.saveServer(lanPairedServer, false);
+  const resolvedWanUrl = await api.getActiveBaseUrlForServer(lanPairedServer, true);
+  if (resolvedWanUrl !== 'https://lan-upgraded.trycloudflare.com') {
+    throw new Error(`Expected getActiveBaseUrlForServer to upgrade LAN-paired URL via broker, got ${resolvedWanUrl}`);
+  }
+  await api.removeServer('host_remote_wan');
+  await api.removeServer('host_lan_paired');
   console.log("✓ Phase 2 Dynamic Routing & Ping tests passed!");
 
   // Test 6.4: Active Server switching & Token Isolation in apiCall

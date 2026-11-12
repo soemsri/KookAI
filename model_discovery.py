@@ -163,6 +163,39 @@ KNOWN_CODEX_MODELS: list[dict[str, Any]] = [
 
 KNOWN_AGY_MODELS: list[dict[str, Any]] = [
     {
+        "id": "Gemini 4 Carbon (High)",
+        "label": "Gemini 4 Carbon (High)",
+        "description": "Google flagship frontier reasoning model",
+        "provider": "agy",
+        "cli_model": "gemini-4-carbon-high",
+        "badge": "Carbon",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
+        "id": "Gemini 4 Carbon (Medium)",
+        "label": "Gemini 4 Carbon (Medium)",
+        "description": "Balanced frontier reasoning model",
+        "provider": "agy",
+        "cli_model": "gemini-4-carbon-medium",
+        "badge": "Carbon",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
+        "id": "Gemini 4 Carbon (Low)",
+        "label": "Gemini 4 Carbon (Low)",
+        "description": "Fast frontier reasoning model",
+        "provider": "agy",
+        "cli_model": "gemini-4-carbon-low",
+        "badge": "Carbon",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
         "id": "Gemini 4 Argon (High)",
         "label": "Gemini 4 Argon (High)",
         "description": "Google flagship frontier reasoning model",
@@ -253,6 +286,102 @@ KNOWN_AGY_MODELS: list[dict[str, Any]] = [
 ]
 
 KNOWN_CLAUDE_MODELS: list[dict[str, Any]] = [
+    {
+        "id": "Mythos 5.1",
+        "label": "Mythos 5.1",
+        "description": "Anthropic Mythos 5.1 next-generation frontier intelligence model",
+        "provider": "claude",
+        "cli_model": "claude-mythos-5-1",
+        "badge": "Mythos",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": True,
+        },
+    },
+    {
+        "id": "Mythos 5",
+        "label": "Mythos 5",
+        "description": "Anthropic Mythos 5 frontier reasoning and architecture model",
+        "provider": "claude",
+        "cli_model": "claude-mythos-5",
+        "badge": "Mythos",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": True,
+        },
+    },
+    {
+        "id": "Claude Mythos 5.1 (High)",
+        "label": "Claude Mythos 5.1 (High)",
+        "description": "Anthropic Claude Mythos 5.1 (High) model",
+        "provider": "claude",
+        "cli_model": "claude-mythos-5-1-high",
+        "badge": "Mythos",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": True,
+        },
+    },
+    {
+        "id": "Claude Mythos 5.1 (Medium)",
+        "label": "Claude Mythos 5.1 (Medium)",
+        "description": "Anthropic Claude Mythos 5.1 (Medium) model",
+        "provider": "claude",
+        "cli_model": "claude-mythos-5-1-medium",
+        "badge": "Mythos",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": True,
+        },
+    },
+    {
+        "id": "Claude Mythos 5.1 (Low)",
+        "label": "Claude Mythos 5.1 (Low)",
+        "description": "Anthropic Claude Mythos 5.1 (Low) model",
+        "provider": "claude",
+        "cli_model": "claude-mythos-5-1-low",
+        "badge": "Mythos",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": True,
+        },
+    },
+    {
+        "id": "Fable 5.2",
+        "label": "Fable 5.2",
+        "description": "Anthropic Fable 5.2 next-generation agent model",
+        "provider": "claude",
+        "cli_model": "claude-fable-5-2",
+        "badge": "Claude",
+        "usage_bucket": "claude",
+        "enabled": True,
+        "capabilities": {
+            "effort": ["Low", "Medium", "High", "Extra", "Max"],
+            "speed": [],
+            "thinking": True,
+            "thinking_required": True,
+        },
+    },
     {
         "id": "Fable 5.1",
         "label": "Fable 5.1",
@@ -962,12 +1091,16 @@ def parse_agy_models_output(output: str) -> list[dict[str, Any]]:
             usage_bucket = "gemini"
 
         # Badge
-        if "flash" in name_lower:
+        if "carbon" in name_lower or "carbon" in slug_lower:
+            badge = "Carbon"
+        elif "flash" in name_lower:
             badge = "Flash"
         elif "pro" in name_lower:
             badge = "Pro"
         elif "argon" in name_lower:
             badge = "Argon"
+        elif "mythos" in name_lower or "mythos" in slug_lower:
+            badge = "Mythos"
         elif "claude" in name_lower or "claude" in slug_lower:
             badge = "Claude"
         elif "gpt" in name_lower or "gpt" in slug_lower or "oss" in slug_lower:
@@ -977,9 +1110,9 @@ def parse_agy_models_output(output: str) -> list[dict[str, Any]]:
         else:
             badge = "Gemini"
 
-        is_claude_5_5 = slug_lower.startswith(("claude-opus-5-5", "claude-sonnet-5-5"))
-        provider = "claude" if is_claude_5_5 else "agy"
-        description = f"Anthropic {name} model" if is_claude_5_5 else f"Antigravity {name} model"
+        is_claude_cli_model = slug_lower.startswith(("claude-opus-5-5", "claude-sonnet-5-5", "claude-mythos", "claude-fable"))
+        provider = "claude" if is_claude_cli_model else "agy"
+        description = f"Anthropic {name} model" if is_claude_cli_model else f"Antigravity {name} model"
         capabilities = (
             {
                 "effort": ["Low", "Medium", "High", "Extra", "Max"],
@@ -987,7 +1120,7 @@ def parse_agy_models_output(output: str) -> list[dict[str, Any]]:
                 "thinking": True,
                 "thinking_required": False,
             }
-            if is_claude_5_5
+            if is_claude_cli_model
             else {
                 "effort": [],
                 "speed": [],
