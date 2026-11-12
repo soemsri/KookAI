@@ -228,6 +228,20 @@ class CodexProviderTests(unittest.TestCase):
         provider = pu.build_codex_provider({"ok": False, "error": "did not answer"})
         self.assertEqual(provider["status"], pu.STATUS_UNAVAILABLE)
 
+    def test_expired_jwt_is_reported_as_token_expired(self):
+        status = {
+            "ok": True,
+            "account": None,
+            "requiresOpenaiAuth": True,
+            "rateLimits": None,
+            "error": "GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; invalid_jwt",
+            "sawAccount": True,
+        }
+        provider = pu.build_codex_provider(status)
+        self.assertEqual(provider["status"], pu.STATUS_TOKEN_EXPIRED)
+        self.assertFalse(provider["available"])
+        self.assertIn("codex login", provider["signInHint"])
+
 
 class AntigravityProviderTests(unittest.TestCase):
     def test_bucket_parsing_rejects_junk_fractions(self):

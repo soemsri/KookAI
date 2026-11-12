@@ -183,8 +183,16 @@ def _known_cli_candidates(definition: CliDefinition) -> list[str]:
             [
                 os.path.join(home, ".local", "bin", executable_name),
                 os.path.join(home, ".local", executable_name),
+                os.path.join(home, ".npm-global", "bin", executable_name),
             ]
         )
+        if os.name != "nt":
+            candidates.extend(
+                [
+                    os.path.join("/usr/local/bin", executable_name),
+                    os.path.join("/usr/bin", executable_name),
+                ]
+            )
 
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if os.name == "nt" and local_app_data:
@@ -251,13 +259,15 @@ def _subprocess_command(executable: str, args: Iterable[str]) -> list[str]:
 
 
 def _run_probe(executable: str, args: Iterable[str]) -> subprocess.CompletedProcess[str]:
+    # The native Antigravity binary (~270MB) can take >15s on cold disk cache.
+    probe_timeout = 25 if Path(executable).stem.lower() == "agy" else 8
     return subprocess.run(
         _subprocess_command(executable, args),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        timeout=8,
+        timeout=probe_timeout,
     )
 
 
@@ -850,21 +860,52 @@ def _install_native_deepseek() -> subprocess.CompletedProcess[str]:
     )
 
 
+def _cleanup_stale_npm_temp_dirs(package_name: str, prefixes: Iterable[str]) -> None:
+    """Remove leftover npm staging directories (e.g. ``.codex-XCNbUSl9``) left behind by SIGTERM/SIGKILL."""
+    pkg = package_name.split("@")[0] if not package_name.startswith("@") else "@" + package_name[1:].split("@")[0]
+    parts = [p for p in pkg.split("/") if p]
+    if not parts:
+        return
+    leaf = parts[-1]
+    scope = parts[0] if len(parts) > 1 and parts[0].startswith("@") else None
+    for prefix in prefixes:
+        if not prefix:
+            continue
+        nm_candidates = [
+            os.path.join(prefix, "lib", "node_modules"),
+            os.path.join(prefix, "node_modules"),
+        ]
+        for nm_root in nm_candidates:
+            parent_dir = os.path.join(nm_root, scope) if scope else nm_root
+            if not os.path.isdir(parent_dir):
+                continue
+            try:
+                for entry in os.listdir(parent_dir):
+                    if entry.startswith(f".{leaf}-"):
+                        shutil.rmtree(os.path.join(parent_dir, entry), ignore_errors=True)
+            except OSError:
+                continue
+
+
 def _install_npm_package(package_name: str) -> subprocess.CompletedProcess[str]:
     npm = shutil.which("npm")
     if not npm:
         raise RuntimeError(
             "Node.js/npm is required. Install Node.js, then retry this CLI installation."
         )
-    standard_result = _run_installer([npm, "install", "--global", package_name])
+    user_prefix = os.path.join(os.path.expanduser("~"), ".local")
+    _cleanup_stale_npm_temp_dirs(package_name, ("/usr", "/usr/local", user_prefix))
+
+    npm_flags = ["--global", "--no-audit", "--no-fund"]
+    standard_result = _run_installer([npm, "install", *npm_flags, package_name])
     if standard_result.returncode == 0:
         return standard_result
 
     # A user-owned prefix avoids requiring sudo on Unix and also gives Windows
     # a deterministic fallback location that resolve_cli_executable checks.
-    user_prefix = os.path.join(os.path.expanduser("~"), ".local")
+    _cleanup_stale_npm_temp_dirs(package_name, (user_prefix,))
     fallback_result = _run_installer(
-        [npm, "install", "--global", "--prefix", user_prefix, package_name]
+        [npm, "install", *npm_flags, "--prefix", user_prefix, package_name]
     )
     if fallback_result.returncode == 0:
         bin_dir = (

@@ -670,6 +670,24 @@ class CliApiTests(unittest.TestCase):
         self.assertFalse(mock_kill.called)
         self.assertEqual(len(calls), 1)
 
+    def test_cleanup_stale_npm_temp_dirs_removes_only_dot_staging_dirs(self):
+        with tempfile.TemporaryDirectory() as prefix:
+            scope_dir = os.path.join(prefix, "lib", "node_modules", "@openai")
+            stale_dir = os.path.join(scope_dir, ".codex-XCNbUSl9")
+            live_dir = os.path.join(scope_dir, "codex")
+            os.makedirs(stale_dir)
+            os.makedirs(live_dir)
+            cli_manager._cleanup_stale_npm_temp_dirs("@openai/codex", (prefix,))
+            self.assertFalse(os.path.exists(stale_dir))
+            self.assertTrue(os.path.isdir(live_dir))
+
+    def test_run_probe_uses_extended_timeout_for_agy_binary(self):
+        with mock.patch.object(cli_manager.subprocess, "run", return_value=completed(0, "agy 1.0")) as run_mock:
+            cli_manager._run_probe("/root/.local/bin/agy", ("--version",))
+            self.assertEqual(run_mock.call_args.kwargs.get("timeout"), 25)
+            cli_manager._run_probe("/usr/bin/codex", ("--version",))
+            self.assertEqual(run_mock.call_args.kwargs.get("timeout"), 8)
+
 
 if __name__ == "__main__":
     unittest.main()

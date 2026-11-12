@@ -343,6 +343,9 @@ def resolve_codex_executable() -> str:
     candidates.extend([
         shutil.which("codex"),
         os.path.expanduser("~/.local/bin/codex"),
+        os.path.expanduser("~/.npm-global/bin/codex"),
+        "/usr/local/bin/codex" if os.name != "nt" else None,
+        "/usr/bin/codex" if os.name != "nt" else None,
     ])
 
     checked = set()

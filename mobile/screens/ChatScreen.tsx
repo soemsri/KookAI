@@ -1325,6 +1325,8 @@ const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
   const pendingConversationScrollRef = useRef(false);
   const usageLimitControllerRef = useRef<AbortController | null>(null);
+  const selectedProfileIdRef = useRef<string | null>(selectedProfileId);
+  const didMountProfileUsageRef = useRef(false);
   const activeTaskIdRef = useRef<string | null>(null);
   const savedConvoIdRef = useRef<string | null>(null);
 
@@ -1624,24 +1626,31 @@ selectedProjectRef.current = selectedProject;
     }
   };
 
-  const loadHarnessProfiles = async () => {
+  useEffect(() => {
+    selectedProfileIdRef.current = selectedProfileId;
+  }, [selectedProfileId]);
+
+  const loadHarnessProfiles = async (): Promise<string | null> => {
     try {
       const data = await callHostApi('/api/harness/profiles');
       if (data && Array.isArray(data.profiles)) {
         setHarnessProfiles(data.profiles);
-        setSelectedProfileId((prev) => {
-          if (prev && data.profiles.some((p: any) => p.id === prev)) {
-            return prev;
-          }
-          const defaultProf = data.profiles.find((p: any) => p.is_default);
-          return defaultProf ? defaultProf.id : (data.profiles[0]?.id || null);
-        });
+        const currentProf = selectedProfileIdRef.current;
+        const resolvedId = (currentProf && data.profiles.some((p: any) => p.id === currentProf))
+          ? currentProf
+          : (data.profiles.find((p: any) => p.is_default)?.id || data.profiles[0]?.id || null);
+        selectedProfileIdRef.current = resolvedId;
+        setSelectedProfileId(resolvedId);
+        return resolvedId;
       } else {
         setHarnessProfiles([]);
+        selectedProfileIdRef.current = null;
         setSelectedProfileId(null);
+        return null;
       }
     } catch (err) {
       console.warn("Failed to load harness profiles:", err);
+      return selectedProfileIdRef.current;
     }
   };
 
@@ -1672,8 +1681,8 @@ selectedProjectRef.current = selectedProject;
         await refreshServerList();
         await loadProjects();
         await loadConversations();
-        await loadHarnessProfiles();
-        fetchUsageLimits();
+        const resolvedProfileId = await loadHarnessProfiles();
+        fetchUsageLimits(resolvedProfileId);
         await checkAndAttachActiveTask();
       } finally {
         if (isMounted) {
@@ -1693,12 +1702,13 @@ selectedProjectRef.current = selectedProject;
     };
   }, []);
 
-  // Check and reconnect to active background CLI tasks when app returns to foreground
+  // Check and reconnect to active background CLI tasks and refresh usage when app returns to foreground
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
       if (nextAppState === 'active') {
         void refreshServerList();
         checkAndAttachActiveTask();
+        fetchUsageLimits();
       }
     });
     return () => {
@@ -1880,11 +1890,16 @@ fetchUsageLimits();
     setActiveServer(currentActive);
 
     if (servers.length > 0) {
+      const prevUrl = currentActive?.url || '';
       void pingAllServers().then(async () => {
         const updatedServers = await getSavedServers();
         const updatedActive = await getActiveServer();
         setSavedServers(updatedServers);
         setActiveServer(updatedActive);
+        if (updatedActive && updatedActive.url && updatedActive.url !== prevUrl) {
+          setHostBaseUrl(updatedActive.url);
+          fetchUsageLimits();
+        }
       });
     }
   };
@@ -2995,7 +3010,7 @@ allowQueue: false,
     setLoadingUsage(true);
     setUsageLimitError('');
     try {
-      const activeProf = overrideProfileId !== undefined ? overrideProfileId : selectedProfileId;
+      const activeProf = overrideProfileId !== undefined ? overrideProfileId : selectedProfileIdRef.current;
       const normalizedProf = typeof activeProf === 'string' ? activeProf.trim() : '';
       const validProf = normalizedProf && !['null', 'undefined', 'none', 'default'].includes(normalizedProf.toLowerCase())
         ? normalizedProf
@@ -3016,9 +3031,15 @@ allowQueue: false,
         if (validProf && isProfileNotFound && !controller.signal.aborted) {
           console.warn(`Profile "${validProf}" not found on host. Falling back to default host usage.`);
           data = await callHostApi(`/api/usage-limits${forceRefresh ? '?refresh=true' : ''}`, { signal: controller.signal });
+          selectedProfileIdRef.current = null;
           setSelectedProfileId(null);
           void loadHarnessProfiles();
           showToast('Account profile was unavailable. Showing default account usage.');
+        } else if (isConnectionError(apiErr) && !controller.signal.aborted) {
+          // Transient tunnel swap / reconnect retry once before surfacing failure.
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          if (controller.signal.aborted) throw apiErr;
+          data = await callHostApi(`/api/usage-limits${queryString}`, { signal: controller.signal });
         } else {
           throw apiErr;
         }
@@ -3045,8 +3066,11 @@ allowQueue: false,
   };
 
   useEffect(() => {
-    setUsageLimitData(DEFAULT_USAGE_LIMIT_DATA);
-    fetchUsageLimits(selectedProfileId);
+    if (!didMountProfileUsageRef.current) {
+      didMountProfileUsageRef.current = true;
+      return;
+    }
+    fetchUsageLimits(selectedProfileId, true);
   }, [selectedProfileId]);
 
   const getActiveUsagePercentage = () => {
@@ -3397,7 +3421,7 @@ allowQueue: false,
   const openUsageModal = () => {
     setIsUsageModalOpen(true);
     void loadHarnessProfiles();
-    fetchUsageLimits();
+    fetchUsageLimits(undefined, true);
   };
 
   const closeUsageModal = () => {
@@ -4960,7 +4984,13 @@ allowQueue: false,
             {usageLimitData ? (
               <>
               <ScrollView style={styles.popupScroll}>
-                {usageLimitData?.providers ? renderProviderUsagePanel() : (
+                {usageLimitData?.providers ? renderProviderUsagePanel() : loadingUsage ? (
+                <View style={styles.usageSection}>
+                  <Text style={[styles.usageRowDesc, styles.usageSectionNote, { color: theme.textSecondary }]}>
+                    Loading live account usage...
+                  </Text>
+                </View>
+                ) : (
                 <View style={styles.usageSection}>
                   <Text style={[styles.usageSectionTitle, { color: theme.accent }]}>
                     {getUsageBucketForModel(selectedModel, ((usageLimitData?.geminiRateLimits?.source || usageLimitData?.antigravityClaudeRateLimits?.source) ? usageLimitData?.antigravityPlan : undefined)).title}

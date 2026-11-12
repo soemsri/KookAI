@@ -134,6 +134,7 @@ from provider_usage import (
     PROVIDER_ORDER,
     STATUS_UNAVAILABLE,
     antigravity_signed_in,
+    antigravity_token_paths,
     build_antigravity_providers,
     build_codex_provider,
     build_provider,
@@ -5657,9 +5658,263 @@ async def upload_media_endpoint(conversation_id: str, filename: str, request: Re
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
+_ANTIGRAVITY_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_CACHED_AGY_OAUTH_CLIENTS: Optional[tuple[str, float, tuple[tuple[str, str], ...]]] = None
+
+
+def _discover_antigravity_oauth_clients() -> tuple[tuple[str, str], ...]:
+    """Extract embedded public desktop OAuth client pairs from the installed ``agy`` binary."""
+    global _CACHED_AGY_OAUTH_CLIENTS
+    import shutil
+    import struct
+
+    agy_bin = shutil.which("agy") or "/root/.local/bin/agy"
+    if not (agy_bin and os.path.isfile(agy_bin)):
+        local_bin = os.path.expanduser("~/.local/bin/agy")
+        agy_bin = local_bin if os.path.isfile(local_bin) else ""
+    if not agy_bin:
+        return ()
+
+    try:
+        mtime = os.path.getmtime(agy_bin)
+    except OSError:
+        return ()
+
+    if _CACHED_AGY_OAUTH_CLIENTS and _CACHED_AGY_OAUTH_CLIENTS[0] == agy_bin and _CACHED_AGY_OAUTH_CLIENTS[1] == mtime:
+        return _CACHED_AGY_OAUTH_CLIENTS[2]
+
+    cid_re = re.compile(rb"[0-9]{10,}-[a-z0-9]{20,}\.apps\.googleusercontent\.com")
+    sec_prefix = b"GOCSPX-"
+    sec_re = re.compile(rb"GOCSPX-[A-Za-z0-9_-]{20,40}")
+    cids: list[str] = []
+    secs: list[str] = []
+
+    def _scan_buffer(buf: bytes) -> None:
+        idx = 0
+        while (pos := buf.find(b".apps.googleusercontent.com", idx)) != -1:
+            m = cid_re.search(buf[max(0, pos - 80): pos + 30])
+            if m:
+                val = m.group(0).decode("ascii", errors="ignore")
+                if val and val not in cids:
+                    cids.append(val)
+            idx = pos + 27
+        idx = 0
+        while (pos := buf.find(sec_prefix, idx)) != -1:
+            m = sec_re.match(buf[pos: pos + 48])
+            if m:
+                val = m.group(0).decode("ascii", errors="ignore")
+                if val and val not in secs:
+                    secs.append(val)
+            idx = pos + 7
+
+    try:
+        with open(agy_bin, "rb") as f:
+            ehdr = f.read(64)
+            scanned_elf = False
+            if len(ehdr) == 64 and ehdr[:4] == b"\x7fELF" and ehdr[4] == 2:
+                e_shoff = struct.unpack_from("<Q", ehdr, 40)[0]
+                e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", ehdr, 58)
+                if e_shoff and e_shentsize and e_shnum and e_shstrndx < e_shnum:
+                    f.seek(e_shoff)
+                    shdrs = f.read(e_shentsize * e_shnum)
+                    str_off, str_size = struct.unpack_from("<QQ", shdrs, e_shstrndx * e_shentsize + 24)
+                    f.seek(str_off)
+                    shstr = f.read(min(str_size, 1024 * 1024))
+                    for i in range(e_shnum):
+                        base = i * e_shentsize
+                        sh_name = struct.unpack_from("<I", shdrs, base)[0]
+                        end = shstr.find(b"\x00", sh_name)
+                        name = shstr[sh_name:end if end != -1 else sh_name]
+                        if name == b".rodata":
+                            off, sz = struct.unpack_from("<QQ", shdrs, base + 24)
+                            if sz <= 64 * 1024 * 1024:
+                                f.seek(off)
+                                _scan_buffer(f.read(sz))
+                                scanned_elf = True
+                            break
+            if not scanned_elf:
+                f.seek(0)
+                prev = b""
+                while chunk := f.read(4 * 1024 * 1024):
+                    _scan_buffer(prev + chunk)
+                    prev = chunk[-256:]
+    except Exception as exc:
+        logging.debug("Could not inspect agy OAuth client metadata: %s", exc)
+        return ()
+
+    pairs: list[tuple[str, str]] = []
+    if len(cids) == len(secs):
+        pairs = list(zip(cids, secs))
+    else:
+        for cid in cids:
+            for sec in secs:
+                pairs.append((cid, sec))
+
+    result = tuple(pairs)
+    _CACHED_AGY_OAUTH_CLIENTS = (agy_bin, mtime, result)
+    return result
+
+
+def _decode_jwt_claims(jwt_token: Any) -> dict[str, Any]:
+    if not jwt_token or not isinstance(jwt_token, str) or "." not in jwt_token:
+        return {}
+    parts = jwt_token.split(".")
+    if len(parts) < 2:
+        return {}
+    try:
+        import base64
+        payload = parts[1]
+        payload += "=" * ((4 - len(payload) % 4) % 4)
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8", errors="ignore")
+        claims = json.loads(decoded)
+        return claims if isinstance(claims, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_antigravity_token_email(data: Any) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+    token_info = data.get("token") if isinstance(data.get("token"), dict) else {}
+    for candidate in (
+        data.get("email"),
+        data.get("id_token_email"),
+        token_info.get("email"),
+        token_info.get("id_token_email"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    id_token = data.get("id_token") or token_info.get("id_token")
+    claims = _decode_jwt_claims(id_token)
+    claim_email = claims.get("email")
+    if isinstance(claim_email, str) and claim_email.strip():
+        return claim_email.strip()
+    return None
+
+
+def refresh_antigravity_oauth_token(
+    data: dict[str, Any],
+    token_path: Optional[str] = None,
+    timeout: float = 4.0,
+) -> Optional[dict[str, Any]]:
+    """Refresh an Antigravity OAuth token directly via Google's OAuth2 endpoint.
+
+    Avoids spawning the 267MB ``agy`` CLI binary inside the 8s usage-limits budget.
+    """
+    import datetime
+
+    if not isinstance(data, dict):
+        return None
+    token_info = data.get("token") if isinstance(data.get("token"), dict) else {}
+    refresh_token = token_info.get("refresh_token") or data.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token.strip():
+        return None
+    refresh_token = refresh_token.strip()
+
+    # Prefer explicit env override or the client_id matching existing id_token claims.
+    candidates: list[tuple[str, str]] = []
+    env_cid = os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_ID", "").strip()
+    env_sec = os.environ.get("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "").strip()
+    if env_cid and env_sec:
+        candidates.append((env_cid, env_sec))
+
+    discovered_clients = _discover_antigravity_oauth_clients()
+    claims = _decode_jwt_claims(data.get("id_token") or token_info.get("id_token"))
+    preferred_cid = str(claims.get("azp") or claims.get("aud") or "").strip()
+    if preferred_cid:
+        for pair in discovered_clients:
+            if pair[0] == preferred_cid and pair not in candidates:
+                candidates.append(pair)
+    for pair in discovered_clients:
+        if pair not in candidates:
+            candidates.append(pair)
+
+    for client_id, client_secret in candidates:
+        form_body = urllib.parse.urlencode({
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            _ANTIGRAVITY_OAUTH_TOKEN_URL,
+            data=form_body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status != 200:
+                    continue
+                payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        except urllib.error.HTTPError as exc:
+            try:
+                err_body = json.loads(exc.read().decode("utf-8", errors="ignore"))
+            except Exception:
+                err_body = {}
+            err_code = str(err_body.get("error") or "").lower()
+            if err_code in {"unauthorized_client", "invalid_client"}:
+                continue
+            logging.debug("Antigravity OAuth refresh HTTP %s (%s)", exc.code, err_code or exc)
+            if preferred_cid and client_id == preferred_cid:
+                break
+            continue
+        except Exception as exc:
+            logging.debug("Antigravity OAuth direct refresh error: %s", exc)
+            break
+
+        new_access_token = payload.get("access_token") if isinstance(payload, dict) else None
+        if not isinstance(new_access_token, str) or not new_access_token.strip():
+            continue
+
+        expires_in_raw = payload.get("expires_in", 3599)
+        try:
+            expires_in = max(60, int(expires_in_raw))
+        except (TypeError, ValueError):
+            expires_in = 3599
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        new_expiry = (now_utc + datetime.timedelta(seconds=expires_in)).isoformat()
+
+        updated = dict(data)
+        updated_token = dict(token_info)
+        updated_token["access_token"] = new_access_token.strip()
+        updated_token["expiry"] = new_expiry
+        updated_token["expires_in"] = expires_in
+        if payload.get("token_type"):
+            updated_token["token_type"] = payload["token_type"]
+        if isinstance(payload.get("refresh_token"), str) and payload["refresh_token"].strip():
+            updated_token["refresh_token"] = payload["refresh_token"].strip()
+        else:
+            updated_token["refresh_token"] = refresh_token
+        updated["token"] = updated_token
+
+        if isinstance(payload.get("id_token"), str) and payload["id_token"].strip():
+            updated["id_token"] = payload["id_token"].strip()
+        refreshed_email = _extract_antigravity_token_email(updated)
+        if refreshed_email and not updated.get("id_token_email"):
+            updated["id_token_email"] = refreshed_email
+
+        if token_path:
+            try:
+                os.makedirs(os.path.dirname(token_path), exist_ok=True)
+                tmp_path = f"{token_path}.tmp.{os.getpid()}"
+                with open(tmp_path, "w", encoding="utf-8") as tf:
+                    json.dump(updated, tf, indent=2)
+                if os.name != "nt":
+                    try:
+                        os.chmod(tmp_path, 0o600)
+                    except OSError:
+                        pass
+                os.replace(tmp_path, token_path)
+            except Exception as write_exc:
+                logging.debug("Could not persist refreshed Antigravity token to %s: %s", token_path, write_exc)
+        return updated
+
+    return None
+
+
 def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Fetch live model quota directly from Google Cloud Code API using OAuth token."""
-    import base64
     import datetime
     import shutil
     import subprocess
@@ -5754,6 +6009,20 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
 
     def _do_refresh() -> Optional[str]:
         nonlocal data, token_path
+        save_target = token_path or os.path.join(
+            credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token"
+        )
+        # 1. Fast path: refresh OAuth token directly over HTTPS (<0.5s vs >15s CLI cold start).
+        if isinstance(data, dict):
+            refreshed_data = refresh_antigravity_oauth_token(data, token_path=save_target, timeout=4.0)
+            if refreshed_data:
+                data = refreshed_data
+                token_path = save_target
+                fresh = ((data.get("token") or {}).get("access_token") or "").strip()
+                if fresh:
+                    return fresh
+
+        # 2. Fallback: invoke `agy models` only when direct OAuth refresh is unavailable.
         agy_cmd = shutil.which("agy") or "/root/.local/bin/agy"
         if not (agy_cmd and os.path.isfile(agy_cmd)):
             local_app = os.path.expanduser("~/.local/bin/agy")
@@ -5772,12 +6041,12 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
                 except Exception:
                     pass
             try:
-                subprocess.run([agy_cmd, "models"], env=env, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([agy_cmd, "models"], env=env, timeout=5.5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 kdata = _read_from_keyring() if can_use_keyring else None
                 if kdata:
                     data = kdata
                     if not token_path:
-                        token_path = os.path.join(credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+                        token_path = save_target
                 elif token_path and os.path.isfile(token_path):
                     with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
                         data = json.load(f)
@@ -5803,20 +6072,8 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
     quota_summary = None
     user_status = {}
 
-    # Extract email from id_token
-    email = data.get("email")
-    if not email:
-        id_token = data.get("id_token") or token_info.get("id_token")
-        if id_token and isinstance(id_token, str) and "." in id_token:
-            parts = id_token.split(".")
-            if len(parts) >= 2:
-                try:
-                    payload = parts[1]
-                    payload += "=" * ((4 - len(payload) % 4) % 4)
-                    claims = json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8", errors="ignore"))
-                    email = claims.get("email")
-                except Exception:
-                    pass
+    # Extract email from token metadata (email / id_token_email / JWT id_token)
+    email = _extract_antigravity_token_email(data)
 
     # 1. RetrieveUserQuotaSummary
     try:
@@ -5994,27 +6251,17 @@ def get_profile_oauth_email(profile: Optional[dict]) -> Optional[str]:
     if not profile_root or not os.path.isdir(profile_root):
         return None
 
-    # Check antigravity-oauth-token in profile_root
-    token_file = os.path.join(profile_root, ".gemini", "antigravity-cli", "antigravity-oauth-token")
-    if os.path.isfile(token_file):
-        try:
-            with open(token_file, "r", encoding="utf-8", errors="ignore") as f:
-                data = json.load(f)
-            if data.get("email"):
-                return str(data["email"]).strip()
-            id_token = data.get("id_token") or (data.get("token", {}) if isinstance(data.get("token"), dict) else {}).get("id_token")
-            if id_token and isinstance(id_token, str) and "." in id_token:
-                parts = id_token.split(".")
-                if len(parts) >= 2:
-                    import base64
-                    payload_b64 = parts[1]
-                    payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
-                    payload_json = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8", errors="ignore")
-                    jwt_data = json.loads(payload_json)
-                    if jwt_data.get("email"):
-                        return str(jwt_data["email"]).strip()
-        except Exception as exc:
-            logging.debug("Could not parse profile oauth token %s: %s", token_file, exc)
+    # Check antigravity oauth token candidates in profile_root
+    for token_file in antigravity_token_paths(profile_root):
+        if os.path.isfile(token_file):
+            try:
+                with open(token_file, "r", encoding="utf-8", errors="ignore") as f:
+                    data = json.load(f)
+                extracted = _extract_antigravity_token_email(data)
+                if extracted:
+                    return extracted
+            except Exception as exc:
+                logging.debug("Could not parse profile oauth token %s: %s", token_file, exc)
 
     return None
 
@@ -6165,7 +6412,12 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
                 raw, paths = _provider_usage_cache["raw"], _provider_usage_cache["paths"]
             else:
                 raw, paths = await _fetch_provider_usage_raw(target_profile)
-                if not is_testing:
+                has_transient_error = (
+                    any(isinstance(v, BaseException) for v in raw.values())
+                    or (antigravity_signed_in(paths["agy"]["home"]) and not isinstance(raw.get("antigravity"), dict))
+                    or (isinstance(raw.get("codex"), dict) and raw["codex"].get("ok") is False)
+                )
+                if not is_testing and not has_transient_error:
                     _provider_usage_cache["timestamp"] = time.time()
                     _provider_usage_cache["key"] = cache_key
                     _provider_usage_cache["raw"] = raw

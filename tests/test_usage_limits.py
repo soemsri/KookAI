@@ -279,5 +279,91 @@ class TestUsageLimitsAPI(UsageLimitsTestCase):
                 self.assertIsNone(data["targetProfileId"])
 
 
+class AntigravityDirectRefreshTests(unittest.TestCase):
+    def test_expired_token_refreshes_directly_via_oauth_without_spawning_agy_cli(self):
+        import io
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as profile_root:
+            tok_dir = os.path.join(profile_root, ".gemini", "antigravity-cli")
+            os.makedirs(tok_dir, exist_ok=True)
+            tok_path = os.path.join(tok_dir, "antigravity-oauth-token")
+            with open(tok_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "token": {
+                            "access_token": "expired-tok",
+                            "refresh_token": "valid-refresh-tok",
+                            "token_type": "Bearer",
+                            "expiry": "2020-01-01T00:00:00Z",
+                        },
+                        "auth_method": "oauth",
+                        "id_token_email": "ultra.user@example.com",
+                    },
+                    f,
+                )
+
+            seen_urls = []
+
+            class FakeResp:
+                def __init__(self, payload, status=200):
+                    self._raw = json.dumps(payload).encode("utf-8")
+                    self.status = status
+
+                def read(self):
+                    return self._raw
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+            def fake_urlopen(req, timeout=None, context=None):
+                url = req.full_url
+                seen_urls.append(url)
+                if "oauth2.googleapis.com/token" in url:
+                    body = req.data.decode("utf-8")
+                    self.assertIn("grant_type=refresh_token", body)
+                    self.assertIn("refresh_token=valid-refresh-tok", body)
+                    return FakeResp(
+                        {
+                            "access_token": "fresh-oauth-tok",
+                            "expires_in": 3599,
+                            "token_type": "Bearer",
+                        }
+                    )
+                auth_header = req.headers.get("Authorization") or req.headers.get("authorization")
+                self.assertEqual(auth_header, "Bearer fresh-oauth-tok")
+                if "retrieveUserQuotaSummary" in url:
+                    return FakeResp(ANTIGRAVITY_SUMMARY["quotaSummary"])
+                if "loadCodeAssist" in url:
+                    return FakeResp({"paidTier": {"name": "Google AI Ultra"}})
+                raise AssertionError(f"Unexpected URL: {url}")
+
+            with patch(
+                "main._discover_antigravity_oauth_clients",
+                return_value=(("test-client.apps.googleusercontent.com", "test-client-secret"),),
+            ), patch("main.urllib.request.urlopen", side_effect=fake_urlopen), patch(
+                "subprocess.run"
+            ) as subproc_mock:
+                result = main.fetch_antigravity_cloudcode_quota(profile_root)
+
+            subproc_mock.assert_not_called()
+            self.assertIsNotNone(result)
+            self.assertEqual(result["userStatus"]["email"], "ultra.user@example.com")
+            self.assertEqual(result["userStatus"]["userTier"]["name"], "Google AI Ultra")
+            self.assertTrue(any("oauth2.googleapis.com/token" in u for u in seen_urls))
+
+            with open(tok_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(saved["token"]["access_token"], "fresh-oauth-tok")
+            self.assertEqual(saved["id_token_email"], "ultra.user@example.com")
+
+            prof_email = main.get_profile_oauth_email({"profile_root": profile_root})
+            self.assertEqual(prof_email, "ultra.user@example.com")
+
+
 if __name__ == "__main__":
     unittest.main()

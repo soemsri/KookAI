@@ -637,7 +637,19 @@ def build_codex_provider(status: Any, error: Optional[str] = None) -> dict[str, 
         return build_provider("codex", STATUS_UNAVAILABLE, CODEX_SOURCE, description=f"Codex account usage is unavailable: {detail}.")
 
     account_raw = status.get("account") if isinstance(status.get("account"), dict) else None
+    err_lower = str(status.get("error") or "").lower()
+    is_expired_jwt = any(
+        marker in err_lower
+        for marker in ("invalid_jwt", "401 unauthorized", "signing in again", "token expired")
+    )
     if status.get("requiresOpenaiAuth") or (account_raw is None and status.get("sawAccount")):
+        if is_expired_jwt:
+            return build_provider(
+                "codex",
+                STATUS_TOKEN_EXPIRED,
+                CODEX_SOURCE,
+                description="Codex sign-in has expired on this host.",
+            )
         return build_provider("codex", STATUS_NOT_LOGGED_IN, CODEX_SOURCE, description="Codex is not signed in on this host.")
 
     account: Optional[dict[str, Any]] = None
@@ -652,6 +664,8 @@ def build_codex_provider(status: Any, error: Optional[str] = None) -> dict[str, 
     rate_limits = status.get("rateLimits") if isinstance(status.get("rateLimits"), dict) else None
     if not rate_limits:
         message = status.get("error") or "the Codex app-server returned no rate limits"
+        if is_expired_jwt:
+            return build_provider("codex", STATUS_TOKEN_EXPIRED, CODEX_SOURCE, account=account, description="Codex sign-in has expired on this host.")
         if "authentication required" in str(message).lower():
             return build_provider("codex", STATUS_NOT_LOGGED_IN, CODEX_SOURCE, description="Codex is not signed in on this host.")
         return build_provider("codex", STATUS_UNAVAILABLE, CODEX_SOURCE, account=account, description=f"Codex account usage is unavailable: {message}.")
