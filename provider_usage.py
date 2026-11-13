@@ -598,8 +598,11 @@ _CODEX_PLAN_LABELS = {
     "free": "ChatGPT Free",
     "plus": "ChatGPT Plus",
     "pro": "ChatGPT Pro",
+    "prolite": "ChatGPT Pro Lite",
+    "self_serve_business_prolite": "ChatGPT Pro Lite",
     "team": "ChatGPT Team",
     "business": "ChatGPT Business",
+    "self_serve_business": "ChatGPT Business",
     "enterprise": "ChatGPT Enterprise",
     "edu": "ChatGPT Edu",
 }
@@ -642,7 +645,7 @@ def build_codex_provider(status: Any, error: Optional[str] = None) -> dict[str, 
         marker in err_lower
         for marker in ("invalid_jwt", "401 unauthorized", "signing in again", "token expired")
     )
-    if status.get("requiresOpenaiAuth") or (account_raw is None and status.get("sawAccount")):
+    if account_raw is None and (status.get("requiresOpenaiAuth") or status.get("sawAccount")):
         if is_expired_jwt:
             return build_provider(
                 "codex",
@@ -707,8 +710,74 @@ def antigravity_token_paths(profile_root: Optional[str] = None) -> list[str]:
     ]
 
 
+def _is_default_profile_root(profile_root: Optional[str]) -> bool:
+    if not profile_root:
+        return True
+    try:
+        target = os.path.normcase(os.path.realpath(_expand_home(profile_root)))
+        default_home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
+        return target == default_home
+    except OSError:
+        return False
+
+
+def read_windows_antigravity_credential() -> Optional[dict[str, Any]]:
+    """Read Antigravity OAuth JSON from Windows Credential Manager (no disk writes)."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        class _CREDENTIALW(ctypes.Structure):
+            _fields_ = [
+                ("Flags", wt.DWORD),
+                ("Type", wt.DWORD),
+                ("TargetName", wt.LPWSTR),
+                ("Comment", wt.LPWSTR),
+                ("LastWritten", wt.FILETIME),
+                ("CredentialBlobSize", wt.DWORD),
+                ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+                ("Persist", wt.DWORD),
+                ("AttributeCount", wt.DWORD),
+                ("Attributes", ctypes.c_void_p),
+                ("TargetAlias", wt.LPWSTR),
+                ("UserName", wt.LPWSTR),
+            ]
+
+        advapi32 = getattr(ctypes, "windll", None) and ctypes.windll.advapi32
+        if advapi32 is None:
+            return None
+        advapi32.CredReadW.argtypes = [wt.LPCWSTR, wt.DWORD, wt.DWORD, ctypes.POINTER(ctypes.POINTER(_CREDENTIALW))]
+        advapi32.CredReadW.restype = wt.BOOL
+        advapi32.CredFree.argtypes = [ctypes.c_void_p]
+
+        for target_name in ("gemini:antigravity", "LegacyGeneric:target=gemini:antigravity"):
+            pcred = ctypes.POINTER(_CREDENTIALW)()
+            if not advapi32.CredReadW(target_name, 1, 0, ctypes.byref(pcred)):
+                continue
+            try:
+                raw_bytes = ctypes.string_at(pcred.contents.CredentialBlob, pcred.contents.CredentialBlobSize)
+            finally:
+                advapi32.CredFree(pcred)
+            for encoding in ("utf-8", "utf-16-le"):
+                try:
+                    parsed = json.loads(raw_bytes.decode(encoding))
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                if isinstance(parsed, dict) and isinstance(parsed.get("token"), dict) and parsed["token"].get("access_token"):
+                    return parsed
+    except Exception as exc:
+        LOGGER.debug("Failed to read Antigravity credential from Windows Credential Manager: %s", exc)
+    return None
+
+
 def antigravity_signed_in(profile_root: Optional[str] = None) -> bool:
-    return any(os.path.isfile(path) for path in antigravity_token_paths(profile_root))
+    if any(os.path.isfile(path) for path in antigravity_token_paths(profile_root)):
+        return True
+    if os.name == "nt" and _is_default_profile_root(profile_root):
+        return read_windows_antigravity_credential() is not None
+    return False
 
 
 def parse_antigravity_quota_summary(quota_summary: Any) -> dict[str, dict[str, Optional[dict[str, Any]]]]:

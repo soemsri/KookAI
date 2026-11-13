@@ -154,6 +154,10 @@ const colors = {
 };
 
 const FALLBACK_MODELS: ModelOption[] = [
+  { value: "Gemini 4 Hydrogen (XHigh)", desc: "Google experimental frontier model with maximum reasoning effort", provider: "agy", badge: "Hydrogen" },
+  { value: "Gemini 4 Hydrogen (High)", desc: "Google experimental frontier model with high reasoning effort", provider: "agy", badge: "Hydrogen" },
+  { value: "Gemini 4 Hydrogen (Medium)", desc: "Google experimental frontier model with balanced reasoning effort", provider: "agy", badge: "Hydrogen" },
+  { value: "Gemini 4 Hydrogen (Low)", desc: "Google experimental frontier model with fast reasoning effort", provider: "agy", badge: "Hydrogen" },
   { value: "Gemini 4 Argon (High)", desc: "Google flagship frontier reasoning model", provider: "agy", badge: "Argon" },
   { value: "Gemini 4 Argon (Medium)", desc: "Balanced frontier reasoning model", provider: "agy", badge: "Argon" },
   { value: "Gemini 4 Argon (Low)", desc: "Fast frontier reasoning model", provider: "agy", badge: "Argon" },
@@ -589,6 +593,11 @@ const getBadgeStyles = (modelName: string, isDark: boolean) => {
     return isDark
       ? { text: catalogBadge || 'Argon', bg: 'rgba(99, 102, 241, 0.15)', color: '#818cf8' }
       : { text: catalogBadge || 'Argon', bg: '#e0e7ff', color: '#4f46e5' };
+  }
+  if (name.includes('hydrogen')) {
+    return isDark
+      ? { text: catalogBadge || 'Hydrogen', bg: 'rgba(14, 165, 233, 0.15)', color: '#38bdf8' }
+      : { text: catalogBadge || 'Hydrogen', bg: '#e0f2fe', color: '#0284c7' };
   }
   if (name.includes('flash')) {
     return isDark

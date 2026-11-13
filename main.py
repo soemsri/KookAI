@@ -145,6 +145,7 @@ from provider_usage import (
     fetch_muse_account_status,
     fetch_zai_account_usage,
     provider_from_claude_cli_snapshot,
+    read_windows_antigravity_credential,
 )
 from cli_manager import (
     auto_install_missing,
@@ -5970,9 +5971,13 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
             logging.debug(f"Failed to read token from SecretService keyring: {kerr}")
         return None
 
-    can_use_keyring = (not profile_root) or (os.path.realpath(profile_root) == os.path.realpath(os.path.expanduser("~")))
+    can_use_keyring = (not profile_root) or (
+        os.path.normcase(os.path.realpath(profile_root))
+        == os.path.normcase(os.path.realpath(os.path.expanduser("~")))
+    )
 
     data = None
+    from_windows_keyring = False
     if token_path:
         try:
             with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -5981,9 +5986,13 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
             data = None
 
     if (not data or not (data.get("token") or {}).get("access_token")) and can_use_keyring:
-        data = _read_from_keyring()
-        if data and not token_path:
-            token_path = os.path.join(credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+        if os.name == "nt":
+            data = read_windows_antigravity_credential()
+            from_windows_keyring = bool(data)
+        else:
+            data = _read_from_keyring()
+            if data and not token_path:
+                token_path = os.path.join(credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 
     if not data:
         return None
@@ -6009,21 +6018,24 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
 
     def _do_refresh() -> Optional[str]:
         nonlocal data, token_path
-        save_target = token_path or os.path.join(
-            credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token"
+        save_target = None if (from_windows_keyring and not token_path) else (
+            token_path or os.path.join(
+                credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token"
+            )
         )
         # 1. Fast path: refresh OAuth token directly over HTTPS (<0.5s vs >15s CLI cold start).
         if isinstance(data, dict):
             refreshed_data = refresh_antigravity_oauth_token(data, token_path=save_target, timeout=4.0)
             if refreshed_data:
                 data = refreshed_data
-                token_path = save_target
+                if save_target:
+                    token_path = save_target
                 fresh = ((data.get("token") or {}).get("access_token") or "").strip()
                 if fresh:
                     return fresh
 
         # 2. Fallback: invoke `agy models` only when direct OAuth refresh is unavailable.
-        agy_cmd = shutil.which("agy") or "/root/.local/bin/agy"
+        agy_cmd = shutil.which("agy") or resolve_managed_cli_executable("agy") or "/root/.local/bin/agy"
         if not (agy_cmd and os.path.isfile(agy_cmd)):
             local_app = os.path.expanduser("~/.local/bin/agy")
             if os.path.isfile(local_app):
@@ -6042,10 +6054,12 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
                     pass
             try:
                 subprocess.run([agy_cmd, "models"], env=env, timeout=5.5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                kdata = _read_from_keyring() if can_use_keyring else None
+                kdata = None
+                if can_use_keyring:
+                    kdata = read_windows_antigravity_credential() if os.name == "nt" else _read_from_keyring()
                 if kdata:
                     data = kdata
-                    if not token_path:
+                    if not token_path and save_target:
                         token_path = save_target
                 elif token_path and os.path.isfile(token_path):
                     with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -6162,9 +6176,10 @@ def fetch_antigravity_language_server_quota(profile_root: Optional[str] = None) 
             if "language_server" not in pname and not any("language_server" in str(arg).lower() for arg in cmdline):
                 continue
             try:
-                process_home = psutil.Process(p.info["pid"]).environ().get("HOME")
+                proc_env = psutil.Process(p.info["pid"]).environ()
+                process_home = proc_env.get("HOME") or (proc_env.get("USERPROFILE") if os.name == "nt" else None)
                 expected_home = profile_root or os.path.expanduser("~")
-                if not process_home or os.path.realpath(process_home) != os.path.realpath(expected_home):
+                if not process_home or os.path.normcase(os.path.realpath(process_home)) != os.path.normcase(os.path.realpath(expected_home)):
                     continue
             except (psutil.Error, OSError):
                 continue
@@ -6392,7 +6407,7 @@ async def get_usage_limits(request: Request, profile_id: Optional[str] = None):
         request.query_params.get("refresh", "").lower() in ("true", "1")
         or request.query_params.get("force_refresh", "").lower() in ("true", "1")
     )
-    is_testing = hasattr(subprocess.run, "mock_calls") or ("pytest" in sys.modules)
+    is_testing = hasattr(subprocess.run, "mock_calls") or ("pytest" in sys.modules) or ("unittest" in sys.modules)
     cache_key = target_profile.get("id") if target_profile else None
 
     def cache_is_valid() -> bool:

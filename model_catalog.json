@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026-11-11.2",
+  "catalog_version": "2026-11-11.2.auto.1794527701",
   "default_model": "Gemini 4 Argon (High)",
   "models": [
     {
@@ -90,6 +90,70 @@
       "provider": "agy",
       "cli_model": "gemini-4-argon-low",
       "badge": "Argon",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Gemini 4 Hydrogen (XHigh)",
+      "label": "Gemini 4 Hydrogen (XHigh)",
+      "description": "Antigravity Gemini 4 Hydrogen (XHigh) model",
+      "provider": "agy",
+      "cli_model": "gemini-4-hydrogen-xhigh",
+      "badge": "Hydrogen",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Gemini 4 Hydrogen (High)",
+      "label": "Gemini 4 Hydrogen (High)",
+      "description": "Antigravity Gemini 4 Hydrogen (High) model",
+      "provider": "agy",
+      "cli_model": "gemini-4-hydrogen-high",
+      "badge": "Hydrogen",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Gemini 4 Hydrogen (Medium)",
+      "label": "Gemini 4 Hydrogen (Medium)",
+      "description": "Antigravity Gemini 4 Hydrogen (Medium) model",
+      "provider": "agy",
+      "cli_model": "gemini-4-hydrogen-medium",
+      "badge": "Hydrogen",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Gemini 4 Hydrogen (Low)",
+      "label": "Gemini 4 Hydrogen (Low)",
+      "description": "Antigravity Gemini 4 Hydrogen (Low) model",
+      "provider": "agy",
+      "cli_model": "gemini-4-hydrogen-low",
+      "badge": "Hydrogen",
       "usage_bucket": "gemini",
       "enabled": true,
       "capabilities": {
@@ -577,6 +641,38 @@
       "cli_model": "Claude Opus 4.6 (Thinking)",
       "badge": "Claude",
       "usage_bucket": "claude",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Orchestrator (Carbon)",
+      "label": "Orchestrator (Carbon)",
+      "description": "Antigravity Orchestrator (Carbon) model",
+      "provider": "agy",
+      "cli_model": "gemini-pro-orchestrator",
+      "badge": "Carbon",
+      "usage_bucket": "gemini",
+      "enabled": true,
+      "capabilities": {
+        "effort": [],
+        "speed": [],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "Orchestrator (Argon)",
+      "label": "Orchestrator (Argon)",
+      "description": "Antigravity Orchestrator (Argon) model",
+      "provider": "agy",
+      "cli_model": "gemini-pro-orchestrator-argon",
+      "badge": "Argon",
+      "usage_bucket": "gemini",
       "enabled": true,
       "capabilities": {
         "effort": [],
@@ -1483,6 +1579,31 @@
         ],
         "speed": [
           "Standard"
+        ],
+        "thinking": false,
+        "thinking_required": false
+      }
+    },
+    {
+      "id": "6.1 Terra",
+      "label": "6.1 Terra",
+      "description": "GPT-6.1 Terra Codex model.",
+      "provider": "codex",
+      "cli_model": "gpt-6.1-terra",
+      "badge": "Codex",
+      "usage_bucket": "gpt",
+      "enabled": true,
+      "capabilities": {
+        "effort": [
+          "Light",
+          "Medium",
+          "High",
+          "Extra High",
+          "Ultra"
+        ],
+        "speed": [
+          "Standard",
+          "Fast"
         ],
         "thinking": false,
         "thinking_required": false

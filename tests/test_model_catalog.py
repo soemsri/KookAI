@@ -335,6 +335,22 @@ class ModelCatalogApiTests(unittest.TestCase):
             )
             self.assertEqual(resolved["provider"], "claude")
 
+    def test_hydrogen_models_are_available(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+        for level, slug in [
+            ("XHigh", "gemini-4-hydrogen-xhigh"),
+            ("High", "gemini-4-hydrogen-high"),
+            ("Medium", "gemini-4-hydrogen-medium"),
+            ("Low", "gemini-4-hydrogen-low"),
+        ]:
+            model = resolve_catalog_model(catalog, f"Gemini 4 Hydrogen ({level})")
+            self.assertIsNotNone(model)
+            self.assertEqual(model["provider"], "agy")
+            self.assertEqual(model["cli_model"], slug)
+            self.assertEqual(model["badge"], "Hydrogen")
+            self.assertEqual(model["usage_bucket"], "gemini")
+            self.assertEqual(main.map_model_name(f"Gemini 4 Hydrogen ({level})"), slug)
+
     def test_codex_6_astra_is_available(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)
         model = resolve_catalog_model(catalog, "6 Astra")

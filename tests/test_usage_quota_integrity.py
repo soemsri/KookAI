@@ -106,6 +106,83 @@ class QuotaSourceTests(unittest.TestCase):
             self.assertIsNone(main.fetch_antigravity_language_server_quota('/selected-profile'))
             network.assert_not_called()
 
+    def test_windows_userprofile_matches_default_home_when_home_unset(self):
+        import io
+        import json as _json
+
+        process = MagicMock()
+        process.info = {'pid': 456, 'name': 'language_server.exe', 'cmdline': ['language_server.exe', '--csrf_token', 'win-csrf']}
+        conn = MagicMock()
+        conn.status = 'LISTEN'
+        conn.laddr.port = 51234
+
+        def fake_urlopen(req, context=None, timeout=None):
+            url = req.full_url
+            resp = MagicMock()
+            resp.status = 200
+            resp.__enter__.return_value = resp
+            if 'RetrieveUserQuotaSummary' in url:
+                payload = {'response': {'groups': [{'displayName': 'Gemini Models', 'buckets': [{'bucketId': 'weekly', 'remainingFraction': 0.75}]}]}}
+            else:
+                payload = {'userStatus': {'email': 'win@example.com', 'userTier': {'name': 'Google AI Pro'}}}
+            resp.read.return_value = _json.dumps(payload).encode('utf-8')
+            return resp
+
+        home_dir = os.path.expanduser('~')
+        with patch('main.os.name', 'nt'), \
+             patch('main.fetch_antigravity_cloudcode_quota', return_value=None), \
+             patch('psutil.process_iter', return_value=[process]), \
+             patch('psutil.Process') as proc, \
+             patch('main.urllib.request.urlopen', side_effect=fake_urlopen) as network:
+            proc.return_value.environ.return_value = {'USERPROFILE': home_dir}
+            proc.return_value.net_connections.return_value = [conn]
+            result = main.fetch_antigravity_language_server_quota(None)
+            self.assertIsNotNone(result)
+            self.assertEqual(len(result['quotaSummary']['groups']), 1)
+            self.assertGreaterEqual(network.call_count, 1)
+
+            # And an explicit isolated profile must NOT match the host USERPROFILE.
+            network.reset_mock()
+            self.assertIsNone(main.fetch_antigravity_language_server_quota('/isolated/other-profile'))
+            network.assert_not_called()
+
+    def test_windows_keyring_supplies_default_antigravity_quota_without_writing_plaintext_file(self):
+        import json as _json
+        import tempfile
+
+        fake_cred = {
+            'token': {
+                'access_token': 'win-keyring-tok',
+                'refresh_token': 'win-refresh-tok',
+                'expiry': '2099-01-01T00:00:00Z',
+            },
+            'id_token_email': 'win.user@example.com',
+        }
+
+        def fake_urlopen(req, timeout=None):
+            resp = MagicMock()
+            resp.status = 200
+            resp.__enter__.return_value = resp
+            if 'retrieveUserQuotaSummary' in req.full_url:
+                payload = {'groups': [{'displayName': 'Gemini Models', 'buckets': [{'bucketId': '5h', 'remainingFraction': 0.8}]}]}
+            else:
+                payload = {'paidTier': {'name': 'Google AI Pro'}}
+            resp.read.return_value = _json.dumps(payload).encode('utf-8')
+            return resp
+
+        with tempfile.TemporaryDirectory() as fake_home, \
+             patch('main.os.name', 'nt'), \
+             patch('main.os.path.expanduser', return_value=fake_home), \
+             patch('main.read_windows_antigravity_credential', return_value=fake_cred, create=True) as read_cred, \
+             patch('main.urllib.request.urlopen', side_effect=fake_urlopen):
+            result = main.fetch_antigravity_cloudcode_quota(None)
+            self.assertIsNotNone(result)
+            self.assertEqual(result['userStatus']['email'], 'win.user@example.com')
+            self.assertEqual(len(result['quotaSummary']['groups']), 1)
+            read_cred.assert_called_once()
+            # Ensure no plaintext token file was created on disk under fake_home.
+            self.assertFalse(os.path.exists(os.path.join(fake_home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')))
+
     def test_unknown_profile_does_not_silently_use_default(self):
         with patch('main.verify_authorization'), patch('main.get_profile', return_value=None), \
              patch('main.fetch_antigravity_language_server_quota') as fetch:

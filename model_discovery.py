@@ -229,6 +229,50 @@ KNOWN_AGY_MODELS: list[dict[str, Any]] = [
         "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
     },
     {
+        "id": "Gemini 4 Hydrogen (XHigh)",
+        "label": "Gemini 4 Hydrogen (XHigh)",
+        "description": "Google experimental frontier model with maximum reasoning effort",
+        "provider": "agy",
+        "cli_model": "gemini-4-hydrogen-xhigh",
+        "badge": "Hydrogen",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
+        "id": "Gemini 4 Hydrogen (High)",
+        "label": "Gemini 4 Hydrogen (High)",
+        "description": "Google experimental frontier model with high reasoning effort",
+        "provider": "agy",
+        "cli_model": "gemini-4-hydrogen-high",
+        "badge": "Hydrogen",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
+        "id": "Gemini 4 Hydrogen (Medium)",
+        "label": "Gemini 4 Hydrogen (Medium)",
+        "description": "Google experimental frontier model with balanced reasoning effort",
+        "provider": "agy",
+        "cli_model": "gemini-4-hydrogen-medium",
+        "badge": "Hydrogen",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
+        "id": "Gemini 4 Hydrogen (Low)",
+        "label": "Gemini 4 Hydrogen (Low)",
+        "description": "Google experimental frontier model with fast reasoning effort",
+        "provider": "agy",
+        "cli_model": "gemini-4-hydrogen-low",
+        "badge": "Hydrogen",
+        "usage_bucket": "gemini",
+        "enabled": True,
+        "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+    },
+    {
         "id": "Gemini 3.8 Flash (High)",
         "label": "Gemini 3.8 Flash (High)",
         "description": "Fastest response, ideal for coding tasks",
@@ -1099,6 +1143,8 @@ def parse_agy_models_output(output: str) -> list[dict[str, Any]]:
             badge = "Pro"
         elif "argon" in name_lower:
             badge = "Argon"
+        elif "hydrogen" in name_lower or "hydrogen" in slug_lower:
+            badge = "Hydrogen"
         elif "mythos" in name_lower or "mythos" in slug_lower:
             badge = "Mythos"
         elif "claude" in name_lower or "claude" in slug_lower:

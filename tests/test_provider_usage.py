@@ -221,6 +221,27 @@ class CodexProviderTests(unittest.TestCase):
         self.assertEqual(provider["usedPercent"], 5.0)
         self.assertEqual(provider["description"], "2 available resets.")
 
+    def test_signed_in_openai_auth_mode_with_requires_openai_auth_true_is_ok(self):
+        # Codex CLI sets requiresOpenaiAuth=True whenever the active provider
+        # uses OpenAI auth, even when the user IS signed in and account is non-null.
+        status = {
+            "ok": True, "sawAccount": True, "requiresOpenaiAuth": True,
+            "account": {"type": "chatgpt", "email": "pro@example.com", "planType": "self_serve_business_prolite"},
+            "rateLimits": {
+                "available": True, "limitId": "codex", "limitName": None, "planType": "self_serve_business_prolite",
+                "primary": {"usedPercent": 100, "remainingPercent": 0, "windowDurationMins": 10080, "resetsAt": 1794897471},
+                "secondary": None,
+                "availableResets": 0,
+            },
+            "error": None,
+        }
+        provider = pu.build_codex_provider(status)
+        self.assertEqual(provider["status"], pu.STATUS_OK)
+        self.assertTrue(provider["available"])
+        self.assertEqual(provider["account"], {"email": "pro@example.com", "plan": "ChatGPT Pro Lite", "label": None})
+        self.assertEqual(provider["weekly"]["usedPercent"], 100.0)
+        self.assertEqual(provider["description"], "0 available resets.")
+
     def test_cli_failure_is_unavailable(self):
         provider = pu.build_codex_provider(None, error="codex not installed")
         self.assertEqual(provider["status"], pu.STATUS_UNAVAILABLE)
@@ -280,6 +301,23 @@ class AntigravityProviderTests(unittest.TestCase):
         self.assertEqual(gemini["account"], {"email": "g@example.com", "plan": "Google AI Pro"})
         self.assertEqual(claude["status"], pu.STATUS_UNAVAILABLE)
         self.assertIn("no Claude/GPT quota windows", claude["description"])
+
+    def test_antigravity_signed_in_checks_windows_credential_for_default_home_only(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as home, \
+             patch("provider_usage.os.name", "nt"), \
+             patch("provider_usage.os.path.expanduser", side_effect=lambda p: home if p == "~" else p), \
+             patch("provider_usage.read_windows_antigravity_credential", return_value={"token": {"access_token": "tok"}}, create=True) as read_cred:
+            self.assertTrue(pu.antigravity_signed_in(None))
+            self.assertTrue(pu.antigravity_signed_in(home))
+            self.assertEqual(read_cred.call_count, 2)
+
+            # Explicit isolated profile must not fall back to host Windows Credential Manager.
+            read_cred.reset_mock()
+            with tempfile.TemporaryDirectory() as isolated:
+                self.assertFalse(pu.antigravity_signed_in(isolated))
+                read_cred.assert_not_called()
 
 
 class KimiProviderTests(unittest.TestCase):
