@@ -29,6 +29,7 @@ Each fetcher returns the same shape (see :func:`build_provider`)::
 """
 from __future__ import annotations
 
+import base64
 import datetime
 import glob
 import json
@@ -38,6 +39,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -366,6 +368,70 @@ def claude_credential_paths(home: Optional[str] = None, config_dir: Optional[str
     return list(dict.fromkeys(paths))
 
 
+def _decode_macos_keychain_json(raw: str) -> Optional[dict[str, Any]]:
+    """Decode a JSON object stored in macOS Keychain (plain, go-keyring-base64, or hex)."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if text.startswith("go-keyring-base64:"):
+        try:
+            text = base64.b64decode(text[len("go-keyring-base64:"):]).decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    elif not text.startswith("{") and len(text) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", text):
+        try:
+            text = bytes.fromhex(text).decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    parsed = _maybe_json(text)
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _read_macos_keychain_json(
+    service: str,
+    account: Optional[str] = None,
+    *,
+    timeout: float = 2.5,
+) -> Optional[dict[str, Any]]:
+    """Read a JSON generic-password entry from macOS Keychain via ``security`` (read-only)."""
+    if sys.platform != "darwin":
+        return None
+    cmd = ["security", "find-generic-password", "-s", service]
+    if account:
+        cmd.extend(["-a", account])
+    cmd.append("-w")
+    try:
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except Exception as exc:
+        LOGGER.debug("Failed to query macOS Keychain (%s): %s", service, exc)
+        return None
+    if res.returncode != 0:
+        return None
+    return _decode_macos_keychain_json(res.stdout)
+
+
+def read_macos_claude_credential() -> Optional[dict[str, Any]]:
+    """Read Claude Code OAuth JSON from macOS Keychain (no disk writes)."""
+    data = _read_macos_keychain_json("Claude Code-credentials")
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if isinstance(oauth, dict) and oauth.get("accessToken"):
+        return {
+            "accessToken": str(oauth["accessToken"]),
+            "expiresAt": _to_float(oauth.get("expiresAt")),
+            "subscriptionType": oauth.get("subscriptionType"),
+            "rateLimitTier": oauth.get("rateLimitTier"),
+            "path": "keychain:Claude Code-credentials",
+        }
+    return None
+
+
 def load_claude_oauth_credentials(home: Optional[str] = None, config_dir: Optional[str] = None) -> Optional[dict[str, Any]]:
     for path in claude_credential_paths(home, config_dir):
         data = _read_json_file(path)
@@ -378,6 +444,13 @@ def load_claude_oauth_credentials(home: Optional[str] = None, config_dir: Option
                 "rateLimitTier": oauth.get("rateLimitTier"),
                 "path": path,
             }
+    if (
+        sys.platform == "darwin"
+        and not config_dir
+        and not (home is None and os.environ.get("CLAUDE_CONFIG_DIR"))
+        and _is_default_profile_root(home)
+    ):
+        return read_macos_claude_credential()
     return None
 
 
@@ -772,11 +845,25 @@ def read_windows_antigravity_credential() -> Optional[dict[str, Any]]:
     return None
 
 
+def read_macos_antigravity_credential() -> Optional[dict[str, Any]]:
+    """Read Antigravity OAuth JSON from macOS Keychain (no disk writes)."""
+    if sys.platform != "darwin":
+        return None
+    for service, account in (("gemini", "antigravity"), ("gemini:antigravity", None)):
+        parsed = _read_macos_keychain_json(service, account)
+        if isinstance(parsed, dict) and isinstance(parsed.get("token"), dict) and parsed["token"].get("access_token"):
+            return parsed
+    return None
+
+
 def antigravity_signed_in(profile_root: Optional[str] = None) -> bool:
     if any(os.path.isfile(path) for path in antigravity_token_paths(profile_root)):
         return True
-    if os.name == "nt" and _is_default_profile_root(profile_root):
-        return read_windows_antigravity_credential() is not None
+    if _is_default_profile_root(profile_root):
+        if os.name == "nt":
+            return read_windows_antigravity_credential() is not None
+        if sys.platform == "darwin":
+            return read_macos_antigravity_credential() is not None
     return False
 
 

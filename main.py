@@ -145,6 +145,7 @@ from provider_usage import (
     fetch_muse_account_status,
     fetch_zai_account_usage,
     provider_from_claude_cli_snapshot,
+    read_macos_antigravity_credential,
     read_windows_antigravity_credential,
 )
 from cli_manager import (
@@ -5977,7 +5978,7 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
     )
 
     data = None
-    from_windows_keyring = False
+    from_host_keyring = False
     if token_path:
         try:
             with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -5988,7 +5989,10 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
     if (not data or not (data.get("token") or {}).get("access_token")) and can_use_keyring:
         if os.name == "nt":
             data = read_windows_antigravity_credential()
-            from_windows_keyring = bool(data)
+            from_host_keyring = bool(data)
+        elif sys.platform == "darwin":
+            data = read_macos_antigravity_credential()
+            from_host_keyring = bool(data)
         else:
             data = _read_from_keyring()
             if data and not token_path:
@@ -6018,7 +6022,7 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
 
     def _do_refresh() -> Optional[str]:
         nonlocal data, token_path
-        save_target = None if (from_windows_keyring and not token_path) else (
+        save_target = None if (from_host_keyring and not token_path) else (
             token_path or os.path.join(
                 credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token"
             )
@@ -6056,7 +6060,12 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
                 subprocess.run([agy_cmd, "models"], env=env, timeout=5.5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 kdata = None
                 if can_use_keyring:
-                    kdata = read_windows_antigravity_credential() if os.name == "nt" else _read_from_keyring()
+                    if os.name == "nt":
+                        kdata = read_windows_antigravity_credential()
+                    elif sys.platform == "darwin":
+                        kdata = read_macos_antigravity_credential()
+                    else:
+                        kdata = _read_from_keyring()
                 if kdata:
                     data = kdata
                     if not token_path and save_target:
