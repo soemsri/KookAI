@@ -163,6 +163,7 @@ from model_catalog import (
     save_model_catalog,
 )
 from model_discovery import sync_model_catalog
+from local_backend import discover_local_models, complete_local, LocalRequestCancelled, base_url as local_llm_base_url
 from profile_manager import (
     create_profile,
     delete_profile,
@@ -262,6 +263,9 @@ def load_runtime_model_catalog() -> dict:
         else BUILTIN_MODEL_CATALOG_PATH
     )
     catalog = load_model_catalog(catalog_path)
+    # Local inventory is host-specific and refreshed without persisting it.
+    local_models = discover_local_models()
+    catalog["models"] = [m for m in catalog["models"] if m["provider"] != "local"] + local_models
     configure_codex_catalog(catalog["models"])
     configure_claude_catalog(catalog["models"])
     configure_kimi_catalog(catalog["models"])
@@ -838,6 +842,33 @@ async def get_cli_status(request: Request):
     )
 
 
+@app.get("/api/local/status")
+async def get_local_connection_status(request: Request):
+    verify_cli_admin(request)
+    try:
+        return {"url": local_llm_base_url()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/local/connect")
+async def connect_local_llm(request: Request):
+    verify_cli_admin(request)
+    try:
+        url = local_llm_base_url()
+        # Bypass discovery's cache so a newly started model appears immediately.
+        models = await asyncio.to_thread(discover_local_models, force=True)
+        catalog = await asyncio.to_thread(load_runtime_model_catalog)
+    except (ValueError, ModelCatalogError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "url": url,
+        "status": "ready" if models else "no_models",
+        "models": [{"id": model["id"], "label": model["label"]} for model in models],
+        "catalog": public_model_catalog(catalog),
+    }
+
+
 class SettingsUpdate(BaseModel):
     groq_api_key: str | None = None
     openai_api_key: str | None = None
@@ -1045,7 +1076,7 @@ _last_models_sync_check_time: float = 0.0
 
 
 @app.get("/api/models")
-async def get_models(request: Request, include_disabled: bool = False):
+async def get_models(request: Request, include_disabled: bool = False, include_local: bool = False):
     verify_authorization(request)
     if include_disabled and not can_manage_cli_connections(request):
         raise HTTPException(
@@ -1071,6 +1102,9 @@ async def get_models(request: Request, include_disabled: bool = False):
         catalog = load_runtime_model_catalog()
     except ModelCatalogError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    # Older clients reject an unknown provider for the entire catalog.
+    if not include_local:
+        catalog["models"] = [m for m in catalog["models"] if m["provider"] != "local"]
     return JSONResponse(
         content=public_model_catalog(
             catalog,
@@ -4082,6 +4116,33 @@ def is_provider_available(prov: str) -> bool:
     return False
 
 
+def run_local_llm(message, model_name, conversation_id, workspace,
+                  thinking=False, image_paths=None, progress_callback=None, cancel_event=None):
+    if image_paths:
+        raise ValueError("Local LLM currently supports text chat only; remove image attachments")
+    model = resolve_catalog_model(load_runtime_model_catalog(), model_name)
+    if not model or model["provider"] != "local":
+        raise ValueError("Local model is unavailable. Start it in your inference server and refresh models.")
+    cid = conversation_id or "local_" + uuid.uuid4().hex
+    prior = in_memory_chats.get(cid)
+    if prior is None:
+        record = get_canonical_conversation(cid)
+        prior = (record or {}).get("messages", [])
+    in_memory_chats[cid] = list(prior)
+    messages = [{"role": "system", "content":
+                 "You are a local chat assistant. You have no tools or filesystem access. "
+                 "Do not claim to read files or execute commands. Workspace: " + workspace}]
+    messages.extend({"role": m["role"], "content": m["content"]}
+                    for m in prior if m.get("role") in {"user", "assistant"})
+    messages.append({"role": "user", "content": message})
+    try:
+        reply = complete_local(model, messages, thinking=thinking,
+                               progress_callback=progress_callback, cancel_event=cancel_event)
+    except LocalRequestCancelled as exc:
+        raise AgentCommandCancelled(str(exc)) from exc
+    return reply, cid
+
+
 def _invoke_provider_backend(
     prov: str,
     prov_model: str,
@@ -4095,7 +4156,11 @@ def _invoke_provider_backend(
     image_paths: Optional[List[str]],
     progress_callback,
     profile_id: Optional[str] = None,
+    cancel_event=None,
 ):
+    if prov == "local":
+        return run_local_llm(message, prov_model, conversation_id, workspace, thinking,
+                             image_paths, progress_callback, cancel_event)
     if not profile_id:
         def_prof = get_default_profile(prov)
         if def_prof:
@@ -4234,7 +4299,7 @@ def run_selected_cli(
     selected_provider = (provider or "").strip().lower()
     if not selected_provider:
         selected_provider = resolve_provider(None, model_ui_name)
-    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai", "muse", "deepseek", "zai"}:
+    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai", "muse", "deepseek", "zai", "local"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
 
     attempted_providers = set()
@@ -4243,7 +4308,7 @@ def run_selected_cli(
     primary_failed = False
     primary_error_msg = ""
     try:
-        backend_kwargs = {}
+        backend_kwargs = {"cancel_event": cancel_event} if selected_provider == "local" else {}
         if profile_id is not None:
             try:
                 import inspect
@@ -4284,6 +4349,9 @@ def run_selected_cli(
 
     if cancel_event and cancel_event.is_set():
         raise AgentCommandCancelled("Prompt execution was cancelled by user")
+
+    if primary_failed and selected_provider == "local":
+        return primary_error_msg, conversation_id
 
     if primary_failed:
         logging.warning(
@@ -5237,13 +5305,13 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
         provider,
         effort if provider in {"codex", "claude", "xai", "muse"} and capabilities["effort"] else None,
         speed if provider == "codex" else None,
-        thinking if provider in {"claude", "kimi", "xai", "muse", "zai"} else None,
+        thinking if provider in {"claude", "kimi", "xai", "muse", "zai", "local"} else None,
     )
 
     # agy's native transcript is not guaranteed to be written by every CLI
     # version. Keep the UI's complete transcript in KookAI's canonical store so
     # the latest conversation survives both app and server restarts.
-    if provider == "agy":
+    if provider in {"agy", "local"}:
         persist_canonical_conversation(
             resolved_cid,
             project_id,
@@ -5324,7 +5392,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
         "model": model,
         "effort": effort if provider in {"codex", "claude", "xai", "muse"} and capabilities["effort"] else None,
         "speed": speed if provider == "codex" else None,
-        "thinking": thinking if provider in {"claude", "kimi", "xai", "muse"} else None,
+        "thinking": thinking if provider in {"claude", "kimi", "xai", "muse", "local"} else None,
     }
 
 

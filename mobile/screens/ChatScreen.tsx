@@ -100,14 +100,15 @@ interface HarnessProfile {
 
 type SettingsTab = 'general' | 'diagnostics';
 type ThemeMode = 'system' | 'light' | 'dark';
-type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai' | 'muse' | 'deepseek' | 'zai';
+type AgentProvider = 'agy' | 'codex' | 'claude' | 'kimi' | 'xai' | 'muse' | 'deepseek' | 'zai' | 'local';
 type CodexEffort = 'Light' | 'Medium' | 'High' | 'Extra High' | 'Ultra';
 type CodexSpeed = 'Standard' | 'Fast';
 type ClaudeEffort = 'Low' | 'Medium' | 'High' | 'Extra' | 'Max';
-type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai' | 'muse' | 'deepseek' | 'zai';
+type UsageBucketKey = 'gemini' | 'claude' | 'gpt' | 'xai' | 'muse' | 'deepseek' | 'zai' | 'local';
 type UsagePeriodKey = 'Weekly' | 'Hourly';
 
 interface ModelOption {
+  supportsLocalThinking?: boolean;
   value: string;
   label?: string;
   desc: string;
@@ -244,6 +245,7 @@ const catalogToModelOptions = (catalog: ModelCatalog): ModelOption[] => (
       supportsClaudeExtra: model.capabilities.effort.includes('Extra'),
       claudeEfforts: model.capabilities.effort as ClaudeEffort[],
       thinkingRequired: model.capabilities.thinking_required,
+      supportsLocalThinking: model.provider === "local" && model.capabilities.thinking,
     }))
 );
 
@@ -278,11 +280,11 @@ const isXaiModel = (modelName: string) => getModelOption(modelName)?.provider ==
 const isMuseModel = (modelName: string) => getModelOption(modelName)?.provider === "muse";
 const isDeepSeekModel = (modelName: string) => getModelOption(modelName)?.provider === "deepseek";
 const usesClaudeStyleControls = (modelName: string) => (
-  isClaudeModel(modelName) || isXaiModel(modelName) || isMuseModel(modelName)
+  isClaudeModel(modelName) || isXaiModel(modelName) || isMuseModel(modelName) || !!getModelOption(modelName)?.supportsLocalThinking
 );
 const showsClaudeStyleControls = (modelName: string) => {
   const model = getModelOption(modelName);
-  return isClaudeModel(modelName) || isXaiModel(modelName) || isMuseModel(modelName) || (
+  return isClaudeModel(modelName) || isXaiModel(modelName) || isMuseModel(modelName) || !!getModelOption(modelName)?.supportsLocalThinking || (
     !!model?.supportsClaudeEffort
   );
 };
@@ -376,7 +378,7 @@ const getUsageBucketForModel = (modelName: string, planName?: string): {
   };
 };
 
-type UsageProviderId = 'claude' | 'codex' | 'antigravity' | 'antigravity_claude' | 'kimi' | 'grok' | 'muse' | 'deepseek' | 'zai';
+type UsageProviderId = 'claude' | 'codex' | 'antigravity' | 'antigravity_claude' | 'kimi' | 'grok' | 'muse' | 'deepseek' | 'zai' | 'local';
 
 const USAGE_PROVIDER_ORDER: UsageProviderId[] = ['claude', 'codex', 'antigravity', 'antigravity_claude', 'kimi', 'grok', 'muse', 'deepseek', 'zai'];
 const USAGE_PROVIDER_NAMES: Record<UsageProviderId, string> = {
@@ -389,6 +391,7 @@ const USAGE_PROVIDER_NAMES: Record<UsageProviderId, string> = {
   muse: 'Muse Code (Meta)',
   deepseek: 'DeepSeek',
   zai: 'GLM (Z.ai Coding Plan)',
+  local: 'Local LLM',
 };
 const USAGE_STATUS_LABELS: Record<string, string> = {
   ok: 'Live',
@@ -404,6 +407,7 @@ const USAGE_STATUS_LABELS: Record<string, string> = {
 const getUsageProviderIdForModel = (modelName: string): UsageProviderId => {
   const option = getModelOption(modelName);
   const provider = option?.provider;
+  if (provider === 'local') return 'local';
   if (provider === 'codex') return 'codex';
   if (provider === 'xai') return 'grok';
   if (provider === 'muse') return 'muse';
@@ -1508,7 +1512,7 @@ const applyModelCatalog = (catalog: ModelCatalog) => {
 
 const refreshModelCatalog = async () => {
   try {
-    const freshCatalog = await apiCall('/api/models');
+    const freshCatalog = await apiCall('/api/models?include_local=true');
     if (!isModelCatalog(freshCatalog)) {
       throw new Error('Host returned an invalid model catalog');
     }
@@ -2379,7 +2383,7 @@ const selectConversation = async (cid: string, projectName?: string, updateModel
   try {
     const data = await callHostApi(`/api/conversation/${cid}`);
     const resolvedProject = data.project || conversationProject;
-    const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai', 'muse', 'deepseek', 'zai'].includes(data.provider)
+    const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai', 'muse', 'deepseek', 'zai', 'local'].includes(data.provider)
       ? data.provider
       : conversationProvider;
     if (resolvedProject) {
@@ -3360,10 +3364,10 @@ allowQueue: false,
       available: false,
       windows: [],
       balances: [],
-      description: 'The KookAI server did not report this provider.',
+      description: primaryId === 'local' ? 'Runs on your inference server; no cloud account quota.' : 'The KookAI server did not report this provider.',
     };
     const account = primary.account || {};
-    const badge = primary.available
+    const badge = primaryId === 'local' ? 'Local' : primary.available
       ? (account.plan || account.label || account.email || USAGE_STATUS_LABELS[primary.status] || 'Live')
       : (USAGE_STATUS_LABELS[primary.status] || 'Unavailable');
     const noteParts: string[] = [];

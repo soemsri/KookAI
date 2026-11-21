@@ -172,6 +172,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const getCatalogModel = model => MODEL_CATALOG[model] || null;
   const getModelLabel = model => getCatalogModel(model)?.label || model;
 
+  function localThinkingCapability(model) {
+    const entry = getCatalogModel(model);
+    return entry?.provider === "local" && entry.capabilities?.thinking
+      ? { effort: false, extra: false, thinkingRequired: false } : null;
+  }
+
   function renderModelCatalog(payload) {
     const models = Array.isArray(payload?.models)
       ? payload.models.filter(model => model?.enabled !== false)
@@ -184,6 +190,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextXaiModels = {};
     const nextMuseModels = {};
     const groups = [
+      ["local", "Local LLM"],
       ["agy", "Antigravity Models"],
       ["zai", "Z.ai GLM (OpenCode CLI)"],
       ["deepseek", "DeepSeek Code CLI"],
@@ -199,7 +206,7 @@ document.addEventListener("DOMContentLoaded", () => {
         !model
         || typeof model.id !== "string"
         || typeof model.label !== "string"
-        || !["agy", "claude", "codex", "kimi", "xai", "muse", "deepseek", "zai"].includes(model.provider)
+        || !["agy", "claude", "codex", "kimi", "xai", "muse", "deepseek", "zai", "local"].includes(model.provider)
       ) {
         return;
       }
@@ -334,7 +341,7 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadModelCatalog() {
     if (!canUseProtectedWorkspaceApis()) return;
     try {
-      const response = await fetch("/api/models");
+      const response = await fetch("/api/models?include_local=true");
       if (!response.ok) throw new Error(`Failed to load model catalog (${response.status})`);
       renderModelCatalog(await response.json());
     } catch (error) {
@@ -347,7 +354,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const claudeCapability = CLAUDE_MODELS[currentModel];
     const xaiCapability = XAI_MODELS[currentModel];
     const museCapability = MUSE_MODELS[currentModel];
-    const reasoningCapability = claudeCapability || xaiCapability || museCapability;
+    const reasoningCapability = claudeCapability || xaiCapability || museCapability || localThinkingCapability(currentModel);
     const selectedItem = Array.from(
       modelDropdown?.querySelectorAll(".dropdown-item") || []
     ).find(item => item.dataset.value === currentModel);
@@ -409,7 +416,7 @@ document.addEventListener("DOMContentLoaded", () => {
         : (xaiCapability ? "Grok Reasoning Effort" : "Claude Effort");
     }
     if (settingsThinkingLabel) {
-      settingsThinkingLabel.textContent = museCapability
+      settingsThinkingLabel.textContent = localThinkingCapability(currentModel) ? "Local Thinking" : museCapability
         ? "Muse Reasoning"
         : (xaiCapability ? "Grok Reasoning" : "Claude Thinking");
     }
@@ -1786,8 +1793,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   codexSpeedBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (["claude", "xai", "muse"].includes(currentProvider)) {
-      const reasoningCapability = CLAUDE_MODELS[currentModel] || XAI_MODELS[currentModel] || MUSE_MODELS[currentModel];
+    if (["claude", "xai", "muse", "local"].includes(currentProvider)) {
+      const reasoningCapability = CLAUDE_MODELS[currentModel] || XAI_MODELS[currentModel] || MUSE_MODELS[currentModel] || localThinkingCapability(currentModel);
       if (!reasoningCapability?.thinkingRequired) {
         currentClaudeThinking = !currentClaudeThinking;
         updateCodexControls();
@@ -1989,6 +1996,65 @@ document.addEventListener("DOMContentLoaded", () => {
   const cliRefreshBtn = document.getElementById("cliRefreshBtn");
   const CLI_STATUS_TIMEOUT_MS = 15000;
   let cliStatusLoading = false;
+  const localConnectBtn = document.getElementById("localConnectBtn");
+  const localConnectionStatus = document.getElementById("localConnectionStatus");
+  const localConnectionUrl = document.getElementById("localConnectionUrl");
+  const localConnectionMessage = document.getElementById("localConnectionMessage");
+  let localConnectionLoading = false;
+
+  async function loadLocalConnection(connect = false) {
+    if (!localConnectBtn || localConnectionLoading) return;
+    localConnectionLoading = true;
+    localConnectBtn.disabled = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    if (connect) {
+      localConnectBtn.textContent = "Connecting…";
+      localConnectionStatus.textContent = "Checking";
+      localConnectionStatus.className = "cli-status-pill installing";
+      localConnectionMessage.textContent = "Looking for models on the local server…";
+      localConnectionMessage.classList.remove("error");
+    }
+    try {
+      const response = await fetch(connect ? "/api/local/connect" : "/api/local/status", {
+        method: connect ? "POST" : "GET",
+        signal: controller.signal
+      });
+      // An old backend falls through to StaticFiles: GET returns 404, POST 405.
+      if (response.status === 404 || response.status === 405) {
+        throw new Error("Restart KookAI to enable Local LLM connections, then refresh this page.");
+      }
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not check the local server.");
+      localConnectionUrl.textContent = data.url;
+      if (connect) {
+        // Refresh even an empty inventory to remove models that have stopped.
+        if (!renderModelCatalog(data.catalog)) throw new Error("Could not update the model list. Try Connect again.");
+        const ready = data.status === "ready" && data.models.length > 0;
+        localConnectionStatus.textContent = ready ? "Connected" : "No models";
+        localConnectionStatus.className = `cli-status-pill ${ready ? "installed" : "missing"}`;
+        localConnectionMessage.textContent = ready
+          ? `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. Text chat only; no workspace tools.`
+          : "No models found. Start the local server and load a model, then try Connect again. To use another address, set KOOKAI_LOCAL_LLM_URL in the server’s .env and restart KookAI.";
+        localConnectionMessage.classList.toggle("error", !ready);
+      }
+    } catch (error) {
+      if (!connect) localConnectionUrl.textContent = "Server address unavailable";
+      localConnectionStatus.textContent = "Check failed";
+      localConnectionStatus.className = "cli-status-pill error";
+      localConnectionMessage.textContent = error?.name === "AbortError"
+        ? "Connection check timed out. Check the local server and try again."
+        : (error.message || "Connection check failed. Try again.");
+      localConnectionMessage.classList.add("error");
+    } finally {
+      clearTimeout(timeoutId);
+      localConnectionLoading = false;
+      localConnectBtn.disabled = false;
+      localConnectBtn.textContent = "Connect";
+    }
+  }
+
+  localConnectBtn?.addEventListener("click", () => loadLocalConnection(true));
 
   function setModelCatalogMessage(message, isError = false) {
     if (!modelCatalogMessage) return;
@@ -2232,7 +2298,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (cliRefreshBtn) {
-    cliRefreshBtn.addEventListener("click", loadCliStatuses);
+    cliRefreshBtn.addEventListener("click", () => {
+      loadCliStatuses();
+      loadLocalConnection(true);
+    });
   }
 
   if (cliConnectionsList) {
@@ -2407,6 +2476,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (targetId === "settingsCli") {
       loadCliStatuses();
+      loadLocalConnection();
       loadHarnessProfiles();
     } else if (targetId === "settingsModels") {
       loadModelCatalogEditor();
@@ -2462,7 +2532,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const claudeCapability = CLAUDE_MODELS[settingsDefaultModel.value];
     const xaiCapability = XAI_MODELS[settingsDefaultModel.value];
     const museCapability = MUSE_MODELS[settingsDefaultModel.value];
-    const reasoningCapability = claudeCapability || xaiCapability || museCapability;
+    const reasoningCapability = claudeCapability || xaiCapability || museCapability || localThinkingCapability(settingsDefaultModel.value);
     const effortGroupLabel = document.querySelector(
       "#settingsClaudeEffortGroup label"
     );
@@ -2687,6 +2757,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function usageProviderIdForModel(model) {
     const catalog = getCatalogModel(model);
     const provider = catalog?.provider;
+    if (provider === "local") return "local";
     if (provider === "codex" || isCodexModel(model)) return "codex";
     if (provider === "xai" || isXaiModel(model)) return "grok";
     if (provider === "muse" || isMuseModel(model)) return "muse";
@@ -2837,10 +2908,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (provider?.available) {
       return account.plan || account.label || account.email || USAGE_STATUS_LABELS[provider.status] || "Live";
     }
-    return USAGE_STATUS_LABELS[provider?.status] || "Unavailable";
+    return provider?.status === "local" ? "Local" : USAGE_STATUS_LABELS[provider?.status] || "Unavailable";
   }
 
   function placeholderProvider(id) {
+    if (id === "local") return {
+      id, name: "Local LLM", status: "local", available: false,
+      windows: [], balances: [], description: "Runs on your inference server; no cloud account quota.",
+    };
     return {
       id,
       name: USAGE_PROVIDER_NAMES[id] || id,
