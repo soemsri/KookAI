@@ -2034,7 +2034,9 @@ document.addEventListener("DOMContentLoaded", () => {
         localConnectionStatus.textContent = ready ? "Connected" : "No models";
         localConnectionStatus.className = `cli-status-pill ${ready ? "installed" : "missing"}`;
         localConnectionMessage.textContent = ready
-          ? `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. Text chat only; no workspace tools.`
+          ? (data.harness?.enabled
+            ? `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. Workspace tools enabled via Qwen Code harness (Sandbox: file edits; Real: file edits + shell).`
+            : `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. Text chat only; install Qwen Code CLI below to enable workspace tools.`)
           : "No models found. Start the local server and load a model, then try Connect again. To use another address, set KOOKAI_LOCAL_LLM_URL in the server’s .env and restart KookAI.";
         localConnectionMessage.classList.toggle("error", !ready);
       }
@@ -2136,7 +2138,8 @@ document.addEventListener("DOMContentLoaded", () => {
     grok: "GX",
     muse: "MU",
     claude: "CL",
-    codex: "CX"
+    codex: "CX",
+    qwen: "QW"
   };
 
   function renderCliStatuses(payload) {

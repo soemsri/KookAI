@@ -103,12 +103,27 @@ def _request(path, payload=None, cancel_event=None):
             watcher.join(timeout=0.2)
 
 
+def _local_model_description():
+    try:
+        from qwen_backend import should_use_qwen_harness
+
+        if should_use_qwen_harness():
+            return "Local LLM • Qwen Code harness • workspace tools"
+    except Exception:
+        pass
+    return "Local LLM chat • running server • no workspace tools"
+
+
 def discover_local_models(force=False):
     url = base_url()
     with _cache_lock:
         cached = _cache.get(url)
         if not force and cached and time.monotonic() - cached[0] < 10:
-            return copy.deepcopy(cached[1])
+            result = copy.deepcopy(cached[1])
+            desc = _local_model_description()
+            for model in result:
+                model["description"] = desc
+            return result
         models = []
         try:
             payload = next(_request("models"))
@@ -132,6 +147,7 @@ def discover_local_models(force=False):
                                 running.add(model_id)
                 entries = [m for m in entries if isinstance(m, dict) and m.get("id") in running]
             seen = set()
+            desc = _local_model_description()
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
@@ -144,7 +160,7 @@ def discover_local_models(force=False):
                 models.append({
                     "id": "local-" + digest,
                     "label": (raw_id[:100] + " (Local)"),
-                    "description": "Local LLM chat • running server • no workspace tools",
+                    "description": desc,
                     "provider": "local", "cli_model": "local/" + raw_id,
                     "badge": "Local", "usage_bucket": "local", "enabled": True,
                     "capabilities": {"effort": [], "speed": [],
@@ -154,7 +170,11 @@ def discover_local_models(force=False):
         except (OSError, ValueError, RuntimeError, http.client.HTTPException):
             models = []
         _cache[url] = (time.monotonic(), models)
-        return copy.deepcopy(models)
+        result = copy.deepcopy(models)
+        desc = _local_model_description()
+        for model in result:
+            model["description"] = desc
+        return result
 
 
 def complete_local(model, messages, *, thinking=False, progress_callback=None, cancel_event=None, max_tokens=4096):

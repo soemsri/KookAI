@@ -164,6 +164,19 @@ from model_catalog import (
 )
 from model_discovery import sync_model_catalog
 from local_backend import discover_local_models, complete_local, LocalRequestCancelled, base_url as local_llm_base_url
+from qwen_backend import (
+    QWEN_CONVERSATION_PREFIX,
+    build_qwen_command,
+    build_qwen_environment,
+    classify_qwen_progress_line,
+    is_qwen_available,
+    local_harness_mode,
+    make_qwen_conversation_id,
+    parse_qwen_stream_json,
+    qwen_session_id,
+    resolve_qwen_executable,
+    should_use_qwen_harness,
+)
 from profile_manager import (
     create_profile,
     delete_profile,
@@ -855,6 +868,7 @@ async def get_local_connection_status(request: Request):
 async def connect_local_llm(request: Request):
     verify_cli_admin(request)
     try:
+        resolve_qwen_executable.cache_clear()
         url = local_llm_base_url()
         # Bypass discovery's cache so a newly started model appears immediately.
         models = await asyncio.to_thread(discover_local_models, force=True)
@@ -866,6 +880,13 @@ async def connect_local_llm(request: Request):
         "status": "ready" if models else "no_models",
         "models": [{"id": model["id"], "label": model["label"]} for model in models],
         "catalog": public_model_catalog(catalog),
+        "harness": {
+            "id": "qwen",
+            "name": "Qwen Code",
+            "enabled": should_use_qwen_harness(),
+            "mode": local_harness_mode(),
+            "installed": is_qwen_available(),
+        },
     }
 
 
@@ -944,7 +965,7 @@ async def update_settings(payload: SettingsUpdate):
 @app.post("/api/cli/{cli_id}/install")
 async def install_cli_requirement(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai", "qwen"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
     status = await asyncio.to_thread(install_cli, cli_id)
     resolve_codex_executable.cache_clear()
@@ -954,6 +975,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
     resolve_muse_executable.cache_clear()
     resolve_deepseek_executable.cache_clear()
     resolve_zai_executable.cache_clear()
+    resolve_qwen_executable.cache_clear()
     return JSONResponse(
         status_code=200 if status["installed"] else 500,
         content={"cli": status},
@@ -963,7 +985,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
 @app.post("/api/cli/{cli_id}/connect")
 async def connect_cli_account(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai", "qwen"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
 
     statuses = {
@@ -4116,13 +4138,229 @@ def is_provider_available(prov: str) -> bool:
     return False
 
 
+def _build_qwen_prompt_with_history(
+    project_id: str,
+    cwd_path: str,
+    message: str,
+    actual_cid: str,
+    original_cid: str,
+) -> str:
+    prior = in_memory_chats.get(actual_cid)
+    if prior is None and original_cid and original_cid != actual_cid:
+        prior = in_memory_chats.get(original_cid)
+    if prior is None:
+        record = get_canonical_conversation(actual_cid) or (
+            get_canonical_conversation(original_cid)
+            if original_cid and original_cid != actual_cid
+            else None
+        )
+        prior = (record or {}).get("messages", [])
+
+    selected_lines: list[str] = []
+    total_chars = 0
+    max_chars = 24000
+    for item in reversed((prior or [])[-20:]):
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+            continue
+        label = "User" if role == "user" else "Assistant"
+        entry = f"[{label}]: {content.strip()}"
+        if total_chars + len(entry) > max_chars and selected_lines:
+            break
+        selected_lines.append(entry)
+        total_chars += len(entry)
+    selected_lines.reverse()
+
+    history_block = ""
+    if selected_lines:
+        history_block = (
+            "[Previous Conversation History]\n"
+            + "\n\n".join(selected_lines)
+            + "\n[End of Previous Conversation History]\n\n"
+        )
+    return (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"{history_block}"
+        f"User message:\n{message}"
+    )
+
+
+def run_qwen_local_cli(
+    message: str,
+    model: dict,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    thinking: bool = False,
+    progress_callback=None,
+    cancel_event=None,
+):
+    del thinking
+    project_id = clean_project_name(workspace or "agy")
+    cwd_path = resolve_project_directory(project_id)
+    raw_model_id = model["cli_model"].removeprefix("local/")
+    url = local_llm_base_url()
+    api_key = os.environ.get("KOOKAI_LOCAL_LLM_API_KEY", "").strip()
+    mapping_key = f"local:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+
+    base_prompt = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+
+    def execute(run_conversation_id: Optional[str], prompt_text: str):
+        stream_result = {"session_id": None, "final_message": "", "errors": []}
+
+        def capture_qwen_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_qwen_stream_json(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["final_message"] = parsed_line["final_message"]
+            if parsed_line["errors"]:
+                stream_result["errors"].extend(parsed_line["errors"])
+
+        cmd = build_qwen_command(
+            resolve_qwen_executable(),
+            prompt_text,
+            raw_model_id,
+            url,
+            target=target,
+            conversation_id=run_conversation_id,
+        )
+        env = build_qwen_environment(url, raw_model_id, api_key=api_key)
+        logging.info(
+            "Executing Qwen Code CLI in %s for local model=%s target=%s resume=%s",
+            cwd_path,
+            raw_model_id,
+            target,
+            bool(qwen_session_id(run_conversation_id)),
+        )
+        result = run_agent_command(
+            cmd,
+            cwd_path,
+            timeout=AGY_CLI_TIMEOUT,
+            progress_callback=progress_callback,
+            progress_line_classifier=classify_qwen_progress_line,
+            raw_line_callback=capture_qwen_line,
+            stdin_text=prompt_text,
+            env=env,
+            cancel_event=cancel_event,
+        )
+        parsed = parse_qwen_stream_json(result.stdout or "")
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": parsed["final_message"] or stream_result["final_message"],
+            "errors": parsed["errors"] or stream_result["errors"],
+        }
+
+    try:
+        if qwen_session_id(actual_cid):
+            result, parsed = execute(actual_cid, base_prompt)
+        else:
+            prompt_with_history = _build_qwen_prompt_with_history(
+                project_id, cwd_path, message, actual_cid, conversation_id
+            )
+            result, parsed = execute(None, prompt_with_history)
+
+        combined_error = "\n".join(
+            part
+            for part in [
+                (result.stderr or "").strip(),
+                "\n".join(parsed["errors"]).strip(),
+            ]
+            if part
+        )
+        recoverable_resume_error = (
+            qwen_session_id(actual_cid)
+            and (result.returncode != 0 or not parsed["final_message"])
+            and any(
+                phrase in combined_error.lower()
+                for phrase in (
+                    "session not found",
+                    "no session",
+                    "conversation not found",
+                    "failed to resume",
+                    "unable to resume",
+                    "invalid session",
+                    "enoent",
+                )
+            )
+        )
+        if recoverable_resume_error:
+            if progress_callback:
+                progress_callback(
+                    "progress",
+                    "Qwen Code session was unavailable; starting a fresh session.",
+                )
+            prompt_with_history = _build_qwen_prompt_with_history(
+                project_id, cwd_path, message, actual_cid, conversation_id
+            )
+            result, parsed = execute(None, prompt_with_history)
+            combined_error = "\n".join(
+                part
+                for part in [
+                    (result.stderr or "").strip(),
+                    "\n".join(parsed["errors"]).strip(),
+                ]
+                if part
+            )
+
+        session_id = parsed["session_id"]
+        resolved_cid = (
+            make_qwen_conversation_id(session_id)
+            if session_id
+            else (actual_cid or "local_" + uuid.uuid4().hex)
+        )
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+
+        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
+            return parsed["final_message"].strip(), resolved_cid
+
+        error_message = combined_error or "Qwen Code CLI did not return a final response."
+        return (
+            f"⚠️ **Qwen Code CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```",
+            resolved_cid,
+        )
+    except AgentCommandCancelled:
+        raise
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("qwen", exc), actual_cid
+    except Exception as exc:
+        return (
+            f"❌ **Execution Error**: Failed to run Qwen Code CLI for local model `{raw_model_id}`. "
+            f"Details: `{str(exc)}`",
+            actual_cid,
+        )
+
+
 def run_local_llm(message, model_name, conversation_id, workspace,
-                  thinking=False, image_paths=None, progress_callback=None, cancel_event=None):
-    if image_paths:
-        raise ValueError("Local LLM currently supports text chat only; remove image attachments")
+                  thinking=False, image_paths=None, progress_callback=None, cancel_event=None,
+                  target="Sandbox"):
     model = resolve_catalog_model(load_runtime_model_catalog(), model_name)
     if not model or model["provider"] != "local":
         raise ValueError("Local model is unavailable. Start it in your inference server and refresh models.")
+    if should_use_qwen_harness():
+        return run_qwen_local_cli(
+            message,
+            model,
+            conversation_id,
+            target=target,
+            workspace=workspace,
+            thinking=thinking,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+    if image_paths:
+        raise ValueError("Local LLM currently supports text chat only; remove image attachments")
     cid = conversation_id or "local_" + uuid.uuid4().hex
     prior = in_memory_chats.get(cid)
     if prior is None:
@@ -4160,7 +4398,7 @@ def _invoke_provider_backend(
 ):
     if prov == "local":
         return run_local_llm(message, prov_model, conversation_id, workspace, thinking,
-                             image_paths, progress_callback, cancel_event)
+                             image_paths, progress_callback, cancel_event, target=target)
     if not profile_id:
         def_prof = get_default_profile(prov)
         if def_prof:
@@ -4854,6 +5092,11 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
     elif provider == "zai":
         actual_cid = convo_id_mapping.get(
             f"zai:{project_id}:{conversation_id}",
+            conversation_id,
+        )
+    elif provider == "local":
+        actual_cid = convo_id_mapping.get(
+            f"local:{project_id}:{conversation_id}",
             conversation_id,
         )
     else:

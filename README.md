@@ -162,19 +162,31 @@ KookAI discovers the running Exo instances at `http://127.0.0.1:52415/v1`
 when loading the model selector. Choose a model under **Local LLM** to chat.
 Open **Settings → Connections → Local LLM → Connect** to check the configured
 server and refresh the model selector immediately after starting or stopping a
-model. The card shows the server address and discovered models. KookAI does not
-download or start models. Local LLM connections support text chat only.
+model. The card shows the server address, discovered models, and Qwen Code
+harness status. KookAI does not download or start models.
+
+When **Qwen Code** (`@qwen-code/qwen-code` / `qwen` CLI) is installed, KookAI
+runs Local LLM models through the Qwen Code headless agent harness inside the
+selected workspace directory:
+
+- **Sandbox target (`--approval-mode auto-edit`)**: enables reading, searching,
+  and editing/writing workspace files while denying shell execution.
+- **Real target (`--approval-mode yolo`)**: enables file tools plus shell
+  command and test execution.
+- **Fallback / opt-out**: if `qwen` is unavailable or `KOOKAI_LOCAL_HARNESS=none`
+  is set in `.env`, KookAI falls back to direct text-only `chat/completions`.
 
 For another inference server, set `KOOKAI_LOCAL_LLM_URL` in the server's `.env`
 (e.g. `http://127.0.0.1:1234/v1`) and restart KookAI. The endpoint must support
-`GET /v1/models` and `POST /v1/chat/completions`. Optionally set
-`KOOKAI_LOCAL_LLM_API_KEY` if the server requires authentication. The URL is
-resolved on the KookAI host, including when chatting from a phone.
+`GET /v1/models` and `POST /v1/chat/completions` (plus OpenAI tool calling for
+Qwen Code harness actions). Optionally set `KOOKAI_LOCAL_LLM_API_KEY` if the
+server requires authentication. The URL is resolved on the KookAI host,
+including when chatting from a phone.
 
-Local chat keeps conversation history and supports cancellation. It currently
-supports text only, without agent tools or filesystem access. Local request
-failures stay local instead of automatically forwarding prompts to cloud
-providers; existing cloud-provider failover priorities are unchanged. Exo
-inventory is filtered by active instances; other compatible servers determine
-which models their `/v1/models` endpoint exposes. Update the mobile client for
-support of the new `local` catalog provider.
+Local sessions persist conversation history, resume via Qwen Code `--resume`
+sessions (with canonical history synthesis on fresh fallback), and support
+cancellation. Local request failures stay local instead of automatically
+forwarding prompts to cloud providers; existing cloud-provider failover
+priorities are unchanged. Exo inventory is filtered by active instances; other
+compatible servers determine which models their `/v1/models` endpoint exposes.
+Update the mobile client for support of the new `local` catalog provider.

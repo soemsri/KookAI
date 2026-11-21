@@ -75,6 +75,7 @@ class LocalChatIntegrationTests(unittest.TestCase):
              patch.object(main, 'CONVERSATION_METADATA_FILE', tmp + '/metadata.json'), \
              patch.object(main, 'get_workspace_alignment_context', return_value=''), \
              patch.object(main, 'in_memory_chats', {}), \
+             patch.object(main, 'should_use_qwen_harness', return_value=False), \
              patch.object(main, 'complete_local', return_value='local reply') as complete, \
              patch.object(main, 'discover_local_models') as discover:
             discover.return_value = [{'id': 'local-test', 'label': 'Test (Local)', 'provider': 'local',
@@ -92,6 +93,53 @@ class LocalChatIntegrationTests(unittest.TestCase):
             self.assertEqual([m['content'] for m in sent[1:]], ['first', 'local reply', 'second'])
             record = main.get_canonical_conversation('local-test-chat')
             self.assertEqual(len(record['messages']), 4)
+
+    def test_local_harness_roundtrip_persists_and_resumes_qwen_session(self):
+        import subprocess
+        import tempfile
+        import main
+
+        calls = []
+
+        def fake_run_agent(cmd, cwd_path, **kwargs):
+            calls.append((list(cmd), cwd_path, kwargs.get('stdin_text', '')))
+            out = "\n".join([
+                json.dumps({"type": "system", "subtype": "init", "session_id": "qwen-ses-1"}),
+                json.dumps({"type": "result", "subtype": "success", "session_id": "qwen-ses-1", "is_error": False, "result": "harness reply"}),
+            ])
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(main, 'CANONICAL_CONVERSATIONS_FILE', tmp + '/conversations.json'), \
+             patch.object(main, 'CONVERSATION_METADATA_FILE', tmp + '/metadata.json'), \
+             patch.object(main, 'get_workspace_alignment_context', return_value=''), \
+             patch.object(main, 'in_memory_chats', {}), \
+             patch.object(main, 'convo_id_mapping', {}), \
+             patch.object(main, 'should_use_qwen_harness', return_value=True), \
+             patch.object(main, 'resolve_qwen_executable', return_value='/usr/local/bin/qwen'), \
+             patch.object(main, 'run_agent_command', side_effect=fake_run_agent), \
+             patch.object(main, 'discover_local_models') as discover:
+            discover.return_value = [{'id': 'local-test', 'label': 'Test (Local)', 'provider': 'local',
+                'cli_model': 'local/qwen-local', 'enabled': True, 'capabilities': {
+                    'thinking': False, 'thinking_required': False, 'effort': [], 'speed': []}}]
+            req1 = main.ChatRequest(message='edit file', model='local-test', provider='local',
+                                    workspace='KookAI', target='Sandbox', conversation_id='temp-local-1')
+            res1 = main.build_chat_response(req1)
+            self.assertEqual(res1['reply'], 'harness reply')
+            self.assertEqual(res1['provider'], 'local')
+            self.assertEqual(res1['conversation_id'], 'local_qwen_qwen-ses-1')
+            self.assertIn('auto-edit', calls[0][0])
+            self.assertNotIn('--resume', calls[0][0])
+            record = main.get_canonical_conversation('local_qwen_qwen-ses-1')
+            self.assertEqual(len(record['messages']), 2)
+
+            req2 = main.ChatRequest(message='run tests', model='local-test', provider='local',
+                                    workspace='KookAI', target='Real', conversation_id='local_qwen_qwen-ses-1')
+            res2 = main.build_chat_response(req2)
+            self.assertEqual(res2['conversation_id'], 'local_qwen_qwen-ses-1')
+            self.assertIn('yolo', calls[1][0])
+            resume_idx = calls[1][0].index('--resume')
+            self.assertEqual(calls[1][0][resume_idx + 1], 'qwen-ses-1')
 
     def test_local_failure_never_falls_back_to_cloud(self):
         import main

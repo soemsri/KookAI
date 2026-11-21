@@ -38,6 +38,11 @@ class LocalConnectionAPITests(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "ready")
         self.assertEqual(data["models"][0]["label"], "local-test (Local)")
+        self.assertEqual(data["harness"]["id"], "qwen")
+        self.assertEqual(data["harness"]["name"], "Qwen Code")
+        self.assertIn("enabled", data["harness"])
+        self.assertIn("installed", data["harness"])
+        self.assertIn("mode", data["harness"])
         local = [m for m in data["catalog"]["models"] if m["provider"] == "local"]
         self.assertEqual(local[0]["id"], data["models"][0]["id"])
         self.assertNotEqual(data["catalog"]["default_model"], local[0]["id"])
