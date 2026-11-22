@@ -9,9 +9,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
+import tempfile
+from contextlib import contextmanager
+from copy import deepcopy
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
 
@@ -152,6 +158,7 @@ def build_qwen_command(
         raw_model_id,
         "--output-format",
         "stream-json",
+        "--include-partial-messages",
         "--approval-mode",
         qwen_approval_mode(target),
     ]
@@ -175,7 +182,103 @@ def build_qwen_environment(
     env["OPENAI_API_KEY"] = (api_key or "").strip() or "local"
     env["OPENAI_MODEL"] = raw_model_id
     env["NO_BROWSER"] = "1"
+    # Slow local generation can exceed Qwen's 15-minute upstream-wait cap
+    # while still streaming. Exo also buffers a complete tool call (including
+    # large file contents) before emitting it, exceeding Qwen's idle default.
+    # Keep both budgets finite and honor operator overrides and cancellation.
+    env.setdefault("QWEN_STREAM_MAX_LIFETIME_MS", "1800000")
+    env.setdefault("QWEN_STREAM_IDLE_TIMEOUT_MS", "1800000")
     return env
+
+
+def _read_qwen_settings(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    # Qwen accepts JSON with comments. Keep quoted strings (including URLs)
+    # intact while removing comments, without adding a JSON5 dependency.
+    content = path.read_text(encoding="utf-8-sig")
+    content = re.sub(
+        r'"(?:\\.|[^"\\])*"|//[^\r\n]*|/\*[\s\S]*?\*/',
+        lambda match: match[0] if match[0].startswith('"') else " ",
+        content,
+    )
+    try:
+        settings = json.loads(content)
+    except ValueError:
+        raise ValueError(f"Cannot read Qwen settings at {path}; fix the JSON before retrying") from None
+    if not isinstance(settings, dict):
+        raise ValueError(f"Qwen settings at {path} must be a JSON object")
+    return settings
+
+
+@contextmanager
+def qwen_generation_environment(
+    env: dict[str, str], cwd_path: str, raw_model_id: str, thinking: Optional[bool],
+):
+    """Apply a turn's Thinking control without editing shared Qwen settings.
+
+    Preserve the system policy and its defaults location. Use an explicit local
+    provider entry because provider-defined models ignore model.generationConfig.
+    Session storage and resume IDs remain in the original Qwen home.
+    """
+    if thinking is None:
+        yield env
+        return
+
+    if sys.platform == "darwin":
+        default_system_path = "/Library/Application Support/QwenCode/settings.json"
+    elif os.name == "nt":
+        default_system_path = r"C:\ProgramData\qwen-code\settings.json"
+    else:
+        default_system_path = "/etc/qwen-code/settings.json"
+
+    def absolute_path(value: str) -> Path:
+        path = Path(value).expanduser()
+        return path if path.is_absolute() else Path(cwd_path) / path
+
+    system_path = absolute_path(env.get("QWEN_CODE_SYSTEM_SETTINGS_PATH") or default_system_path)
+    defaults_path = absolute_path(env.get("QWEN_CODE_SYSTEM_DEFAULTS_PATH") or str(system_path.with_name("system-defaults.json")))
+    qwen_home = absolute_path(env.get("QWEN_HOME") or str(Path.home() / ".qwen"))
+    scopes = [_read_qwen_settings(path) for path in (
+        defaults_path, qwen_home / "settings.json", system_path,
+    )]
+    settings = deepcopy(scopes[-1])
+
+    def merge_objects(base, incoming):
+        for key, value in incoming.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                merge_objects(base[key], value)
+            else:
+                base[key] = deepcopy(value)
+
+    generation = {}
+    models = []
+    for scope in scopes:
+        merge_objects(generation, (scope.get("model") or {}).get("generationConfig") or {})
+        provider_models = (scope.get("modelProviders") or {}).get("openai")
+        if provider_models is not None:
+            models = deepcopy(provider_models)
+    # Do not promote project settings into system scope: Qwen owns their trust
+    # checks. This invocation pins only the selected model to KookAI's local URL.
+    selected = next((model for model in models if model.get("id") == raw_model_id), None)
+    if selected is None:
+        selected = {"id": raw_model_id, "generationConfig": generation}
+        models.append(selected)
+    selected["baseUrl"] = env["OPENAI_BASE_URL"]
+    selected["envKey"] = "OPENAI_API_KEY"
+    selected.pop("apiKey", None)
+    selected["wireApi"] = "chat-completions"
+    selected.setdefault("generationConfig", {}).setdefault("extra_body", {})["enable_thinking"] = thinking
+    settings.setdefault("modelProviders", {})["openai"] = models
+
+    with tempfile.TemporaryDirectory(prefix="kookai-qwen-settings-") as directory:
+        settings_path = Path(directory) / "settings.json"
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
+        settings_path.chmod(0o600)
+        scoped_env = dict(env)
+        scoped_env["QWEN_CODE_SYSTEM_SETTINGS_PATH"] = str(settings_path)
+        scoped_env["QWEN_CODE_SYSTEM_DEFAULTS_PATH"] = str(defaults_path)
+        yield scoped_env
 
 
 def _content_text(content: Any) -> str:
@@ -268,6 +371,16 @@ def classify_qwen_progress_line(source: str, line: str) -> Optional[dict[str, st
     event_type = event.get("type")
     if event_type == "system" and event.get("subtype") in {"init", "session_start"}:
         return {"type": "progress", "message": "Qwen Code session started."}
+    if event_type == "stream_event":
+        stream_event = event.get("event")
+        if isinstance(stream_event, dict) and stream_event.get("type") == "content_block_delta":
+            delta = stream_event.get("delta")
+            if not isinstance(delta, dict):
+                return None
+            if delta.get("type") == "thinking_delta":
+                return {"type": "progress", "message": "Qwen Code is thinking..."}
+            if delta.get("type") in {"text_delta", "input_json_delta"}:
+                return {"type": "progress", "message": "Qwen Code is generating a response..."}
     if event_type == "assistant":
         message = event.get("message")
         content = message.get("content") if isinstance(message, dict) else []

@@ -34,6 +34,7 @@ class QwenBackendUnitTests(unittest.TestCase):
             "mlx-community/Qwen3.8-27B-8bit",
         ])
         self.assertIn("--output-format", sandbox_cmd)
+        self.assertIn("--include-partial-messages", sandbox_cmd)
         self.assertEqual(sandbox_cmd[sandbox_cmd.index("--output-format") + 1], "stream-json")
         self.assertEqual(sandbox_cmd[sandbox_cmd.index("--approval-mode") + 1], "auto-edit")
         self.assertNotIn("--resume", sandbox_cmd)
@@ -79,6 +80,93 @@ class QwenBackendUnitTests(unittest.TestCase):
             )
             self.assertEqual(env_with_key["OPENAI_API_KEY"], "local-token-xyz")
 
+    def test_local_stream_budget_is_finite_and_preserves_explicit_overrides(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = qwen_backend.build_qwen_environment("http://localhost/v1", "local-model")
+            self.assertEqual(env.get("QWEN_STREAM_MAX_LIFETIME_MS"), "1800000")
+            self.assertEqual(env.get("QWEN_STREAM_IDLE_TIMEOUT_MS"), "1800000")
+        for configured in ("60000", "0"):
+            with mock.patch.dict(os.environ, {"QWEN_STREAM_MAX_LIFETIME_MS": configured,
+                                             "QWEN_STREAM_IDLE_TIMEOUT_MS": configured}):
+                env = qwen_backend.build_qwen_environment("http://localhost/v1", "local-model")
+                self.assertEqual(env["QWEN_STREAM_MAX_LIFETIME_MS"], configured)
+                self.assertEqual(env["QWEN_STREAM_IDLE_TIMEOUT_MS"], configured)
+
+    def test_generation_settings_preserve_policy_and_provider_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            qwen_home = os.path.join(tmp, "qwen")
+            os.makedirs(qwen_home)
+            system_path = os.path.join(tmp, "system.json")
+            policy = {"tools": {"exclude": ["run_shell_command"]}, "security": {"auth": {"enforcedType": "openai"}}}
+            with open(system_path, "w") as stream:
+                stream.write("// operator policy\n" + json.dumps(policy))
+            provider = {"id": "local-model", "baseUrl": "https://cloud.example/v1", "envKey": "CLOUD_KEY",
+                        "generationConfig": {"samplingParams": {"temperature": 0.2}, "extra_body": {"custom": "https://keep.example/*value*/"}}}
+            sibling = {"id": "other-model", "generationConfig": {"extra_body": {"enable_thinking": True}}}
+            with open(os.path.join(qwen_home, "settings.json"), "w") as stream:
+                json.dump({"modelProviders": {"openai": [provider, sibling]}}, stream)
+            # Project-only configuration must not be promoted into system scope.
+            os.makedirs(os.path.join(tmp, ".qwen"))
+            with open(os.path.join(tmp, ".qwen", "settings.json"), "w") as stream:
+                json.dump({"modelProviders": {"openai": [{"id": "untrusted-model"}]}}, stream)
+            env = {"QWEN_HOME": qwen_home, "QWEN_CODE_SYSTEM_SETTINGS_PATH": system_path,
+                   "OPENAI_BASE_URL": "http://127.0.0.1:52415/v1", "OPENAI_API_KEY": "local"}
+            original_env = dict(env)
+            with qwen_backend.qwen_generation_environment(env, tmp, "local-model", False) as scoped:
+                with open(scoped["QWEN_CODE_SYSTEM_SETTINGS_PATH"]) as stream:
+                    result = json.load(stream)
+                self.assertEqual(result["tools"], policy["tools"])
+                self.assertEqual(result["security"], policy["security"])
+                self.assertEqual(scoped["QWEN_HOME"], qwen_home)
+                self.assertEqual(scoped["QWEN_CODE_SYSTEM_DEFAULTS_PATH"], os.path.join(tmp, "system-defaults.json"))
+                selected, other = result["modelProviders"]["openai"]
+                self.assertEqual(other, sibling)
+                self.assertEqual(selected["generationConfig"]["samplingParams"], {"temperature": 0.2})
+                self.assertEqual(selected["generationConfig"]["extra_body"], {"custom": "https://keep.example/*value*/", "enable_thinking": False})
+                self.assertEqual(selected["baseUrl"], env["OPENAI_BASE_URL"])
+                self.assertEqual(selected["envKey"], "OPENAI_API_KEY")
+            self.assertEqual(env, original_env)
+            with open(system_path) as stream:
+                self.assertEqual(stream.read(), "// operator policy\n" + json.dumps(policy))
+
+    def test_generation_settings_are_isolated_and_cleanup_after_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"QWEN_HOME": tmp, "QWEN_CODE_SYSTEM_SETTINGS_PATH": os.path.join(tmp, "missing.json"),
+                   "OPENAI_BASE_URL": "http://localhost/v1"}
+            with qwen_backend.qwen_generation_environment(env, tmp, "test", False) as first:
+                first_path = first["QWEN_CODE_SYSTEM_SETTINGS_PATH"]
+                with self.assertRaises(RuntimeError):
+                    with qwen_backend.qwen_generation_environment(env, tmp, "test", True) as second:
+                        second_path = second["QWEN_CODE_SYSTEM_SETTINGS_PATH"]
+                        self.assertNotEqual(first_path, second_path)
+                        with open(first_path) as stream:
+                            self.assertFalse(json.load(stream)["modelProviders"]["openai"][0]["generationConfig"]["extra_body"]["enable_thinking"])
+                        with open(second_path) as stream:
+                            self.assertTrue(json.load(stream)["modelProviders"]["openai"][0]["generationConfig"]["extra_body"]["enable_thinking"])
+                        raise RuntimeError("cancelled")
+                self.assertFalse(os.path.exists(second_path))
+                self.assertTrue(os.path.exists(first_path))
+            self.assertFalse(os.path.exists(first_path))
+
+    def test_generation_settings_skip_models_without_thinking_control(self):
+        env = {"QWEN_CODE_SYSTEM_SETTINGS_PATH": "/do-not-read.json"}
+        with mock.patch.object(qwen_backend, "_read_qwen_settings") as read:
+            with qwen_backend.qwen_generation_environment(env, "/tmp", "test", None) as scoped:
+                self.assertIs(scoped, env)
+        read.assert_not_called()
+
+    def test_generation_settings_reject_invalid_policy_without_overwriting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            system_path = os.path.join(tmp, "system.json")
+            with open(system_path, "w") as stream:
+                stream.write("broken policy")
+            env = {"QWEN_HOME": tmp, "QWEN_CODE_SYSTEM_SETTINGS_PATH": system_path}
+            with self.assertRaisesRegex(ValueError, "fix the JSON"):
+                with qwen_backend.qwen_generation_environment(env, tmp, "test", False):
+                    self.fail("Invalid system policy was ignored")
+            with open(system_path) as stream:
+                self.assertEqual(stream.read(), "broken policy")
+
     def test_parse_qwen_stream_json_events_and_fallbacks(self):
         output = "\n".join([
             "not json line",
@@ -109,6 +197,15 @@ class QwenBackendUnitTests(unittest.TestCase):
         self.assertEqual(parsed_err["errors"], ["Bad request", "Connection refused"])
 
     def test_classify_qwen_progress_line(self):
+        for delta_type, expected in (
+            ("thinking_delta", "Qwen Code is thinking..."),
+            ("text_delta", "Qwen Code is generating a response..."),
+            ("input_json_delta", "Qwen Code is generating a response..."),
+        ):
+            event = {"type": "stream_event", "event": {"type": "content_block_delta",
+                     "delta": {"type": delta_type, "thinking": "private reasoning", "text": "partial answer"}}}
+            self.assertEqual(qwen_backend.classify_qwen_progress_line("stdout", json.dumps(event)),
+                             {"type": "progress", "message": expected})
         self.assertEqual(
             qwen_backend.classify_qwen_progress_line(
                 "stdout", json.dumps({"type": "system", "subtype": "init"})
@@ -190,6 +287,36 @@ class QwenIntegrationAndRoutingTests(unittest.TestCase):
             "models": [self.local_model],
         }
 
+    def test_qwen_passes_thinking_to_cli_and_cleans_up_per_request_settings(self):
+        settings_paths = []
+
+        def capture_settings(cmd, cwd_path, **kwargs):
+            env = kwargs["env"]
+            settings_path = env.get("QWEN_CODE_SYSTEM_SETTINGS_PATH")
+            self.assertIsNotNone(settings_path, "Thinking was discarded before launching Qwen")
+            settings_paths.append(settings_path)
+            with open(settings_path, encoding="utf-8") as stream:
+                settings = json.load(stream)
+            model_settings = settings["modelProviders"]["openai"][0]
+            self.assertEqual(model_settings["generationConfig"]["extra_body"]["enable_thinking"], thinking)
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "result", "subtype": "success", "result": "Done", "session_id": "sid",
+            }), stderr="")
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"QWEN_CODE_SYSTEM_SETTINGS_PATH": os.path.join(tmp, "system.json")}),
+            mock.patch.object(main, "resolve_project_directory", return_value=tmp),
+            mock.patch.object(main, "get_canonical_conversation", return_value=None),
+            mock.patch.object(main, "convo_id_mapping", {}),
+            mock.patch.object(main, "resolve_qwen_executable", return_value="qwen"),
+            mock.patch.object(main, "run_agent_command", side_effect=capture_settings),
+        ):
+            for thinking in (False, True):
+                reply, _ = main.run_qwen_local_cli("hello", self.local_model, "test", thinking=thinking)
+                self.assertEqual(reply, "Done")
+                self.assertFalse(os.path.exists(settings_paths[-1]))
+
     def test_run_local_llm_routes_to_qwen_harness_and_recovers_missing_session(self):
         calls = []
         progress_events = []
@@ -245,6 +372,35 @@ class QwenIntegrationAndRoutingTests(unittest.TestCase):
         self.assertIn("Remember 77", calls[1][2])
         self.assertEqual(calls[1][3]["OPENAI_API_KEY"], "local")
         self.assertTrue(any("fresh session" in msg.lower() for _, msg in progress_events))
+
+    def test_partial_progress_is_throttled_without_hiding_errors(self):
+        events = []
+
+        def fake_run(cmd, cwd_path, **kwargs):
+            classify = kwargs["progress_line_classifier"]
+            line = json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                               "delta": {"type": "thinking_delta", "thinking": "not for display"}}})
+            with mock.patch.object(main.time, "monotonic", side_effect=[0, 1, 5]):
+                events.extend(classify("stdout", line) for _ in range(3))
+            events.append(classify("stderr", "Error: server stopped"))
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+                "type": "result", "subtype": "success", "result": "Done",
+            }), stderr="")
+
+        model = dict(self.local_model, capabilities={"thinking": False})
+        with (
+            mock.patch.object(main, "resolve_qwen_executable", return_value="qwen"),
+            mock.patch.object(main, "run_agent_command", side_effect=fake_run),
+            mock.patch.object(main, "get_canonical_conversation", return_value=None),
+            mock.patch.object(main, "convo_id_mapping", {}),
+        ):
+            reply, _ = main.run_qwen_local_cli("hello", model, "test")
+        self.assertEqual(reply, "Done")
+        self.assertEqual(events, [
+            {"type": "progress", "message": "Qwen Code is thinking..."}, None,
+            {"type": "progress", "message": "Qwen Code is thinking..."},
+            {"type": "error", "message": "Error: server stopped"},
+        ])
 
     def test_run_local_llm_falls_back_to_complete_local_when_harness_disabled(self):
         with (

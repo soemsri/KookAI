@@ -190,3 +190,23 @@ forwarding prompts to cloud providers; existing cloud-provider failover
 priorities are unchanged. Exo inventory is filtered by active instances; other
 compatible servers determine which models their `/v1/models` endpoint exposes.
 Update the mobile client for support of the new `local` catalog provider.
+
+For Exo models that advertise a Thinking toggle, KookAI passes the selected
+value to Qwen's OpenAI request as `enable_thinking`. The setting is scoped to
+each invocation using a temporary settings file; Qwen session storage and
+shared settings files are retained. The selected local model uses KookAI's
+endpoint and key, with generation defaults from Qwen's user/system settings.
+Project settings are left to Qwen's own trust checks; project-specific model
+provider definitions do not override this local model entry.
+
+Slow local models can hit Qwen's stream lifetime cap even while generating.
+KookAI gives local Qwen requests finite **30-minute** lifetime and idle stream
+budgets. Exo buffers complete tool calls, so generating a large file can otherwise
+hit Qwen's shorter idle limit. When chunks arrive, KookAI emits periodic
+Thinking/generation progress without displaying reasoning text.
+Explicit `QWEN_STREAM_MAX_LIFETIME_MS` and `QWEN_STREAM_IDLE_TIMEOUT_MS`
+environment values are preserved. Qwen's configured `streamMaxLifetimeMs` and
+`streamIdleTimeoutMs`, if present, take precedence over them. Cancellation and
+`AGY_CLI_MAX_RUNTIME` still apply.
+If a long coding request times out, turn **Thinking off** and retry. Restart
+the KookAI backend after updating this code or its environment.

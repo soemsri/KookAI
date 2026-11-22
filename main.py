@@ -174,6 +174,7 @@ from qwen_backend import (
     make_qwen_conversation_id,
     parse_qwen_stream_json,
     qwen_session_id,
+    qwen_generation_environment,
     resolve_qwen_executable,
     should_use_qwen_harness,
 )
@@ -4197,7 +4198,6 @@ def run_qwen_local_cli(
     progress_callback=None,
     cancel_event=None,
 ):
-    del thinking
     project_id = clean_project_name(workspace or "agy")
     cwd_path = resolve_project_directory(project_id)
     raw_model_id = model["cli_model"].removeprefix("local/")
@@ -4214,6 +4214,19 @@ def run_qwen_local_cli(
 
     def execute(run_conversation_id: Optional[str], prompt_text: str):
         stream_result = {"session_id": None, "final_message": "", "errors": []}
+        last_stream_progress = None
+
+        def classify_progress(source: str, line: str):
+            nonlocal last_stream_progress
+            event = classify_qwen_progress_line(source, line)
+            if event and event["message"] in {
+                "Qwen Code is thinking...", "Qwen Code is generating a response...",
+            }:
+                now = time.monotonic()
+                if last_stream_progress is not None and now - last_stream_progress < 5:
+                    return None
+                last_stream_progress = now
+            return event
 
         def capture_qwen_line(source: str, line: str):
             if source != "stdout":
@@ -4242,17 +4255,19 @@ def run_qwen_local_cli(
             target,
             bool(qwen_session_id(run_conversation_id)),
         )
-        result = run_agent_command(
-            cmd,
-            cwd_path,
-            timeout=AGY_CLI_TIMEOUT,
-            progress_callback=progress_callback,
-            progress_line_classifier=classify_qwen_progress_line,
-            raw_line_callback=capture_qwen_line,
-            stdin_text=prompt_text,
-            env=env,
-            cancel_event=cancel_event,
-        )
+        thinking_control = thinking if model.get("capabilities", {}).get("thinking") else None
+        with qwen_generation_environment(env, cwd_path, raw_model_id, thinking_control) as scoped_env:
+            result = run_agent_command(
+                cmd,
+                cwd_path,
+                timeout=AGY_CLI_TIMEOUT,
+                progress_callback=progress_callback,
+                progress_line_classifier=classify_progress,
+                raw_line_callback=capture_qwen_line,
+                stdin_text=prompt_text,
+                env=scoped_env,
+                cancel_event=cancel_event,
+            )
         parsed = parse_qwen_stream_json(result.stdout or "")
         return result, {
             "session_id": stream_result["session_id"] or parsed["session_id"],
