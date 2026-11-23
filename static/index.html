@@ -970,9 +970,27 @@
             </div>
             <button type="button" class="cli-refresh-btn" id="cliRefreshBtn">Refresh</button>
           </div>
+          <div class="cli-connection-card local-connection-card" id="localConnectionCard">
+            <div class="cli-provider-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>
+              </svg>
+            </div>
+            <div class="cli-provider-info">
+              <div class="cli-provider-title-row">
+                <span class="cli-provider-name">Local LLM</span>
+                <span class="cli-status-pill" id="localConnectionStatus">Not checked</span>
+              </div>
+              <div class="cli-provider-detail" id="localConnectionUrl">Loading server address…</div>
+            </div>
+            <div class="cli-actions">
+              <button type="button" class="cli-action-btn primary" id="localConnectBtn" aria-label="Connect to Local LLM" disabled>Connect</button>
+            </div>
+            <div class="cli-action-message" id="localConnectionMessage" role="status" aria-live="polite">Connect to a running local server, then choose a model in chat. Install Qwen Code CLI below to enable workspace file &amp; shell tools.</div>
+          </div>
           <div class="cli-auto-install-note">
             Missing tools listed in <code>requirements.txt</code> are installed automatically
-            when the server starts. Connect opens the provider sign-in flow in a terminal
+            when the server starts. For the CLI tools below, Connect opens the provider sign-in flow in a terminal
             on the server computer.
           </div>
           <div class="cli-connections-list" id="cliConnectionsList" aria-live="polite">
@@ -1079,6 +1097,6 @@
 
   <!-- Markdown parser library -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="script.js?v=11"></script>
+  <script src="script.js?v=12"></script>
 </body>
 </html>

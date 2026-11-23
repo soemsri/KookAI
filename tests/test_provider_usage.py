@@ -319,6 +319,65 @@ class AntigravityProviderTests(unittest.TestCase):
                 self.assertFalse(pu.antigravity_signed_in(isolated))
                 read_cred.assert_not_called()
 
+    def test_decode_macos_keychain_json_formats(self):
+        import base64
+
+        payload = {"token": {"access_token": "abc"}, "id_token_email": "u@example.com"}
+        raw_json = json.dumps(payload)
+        b64_payload = "go-keyring-base64:" + base64.b64encode(raw_json.encode("utf-8")).decode("ascii")
+        hex_payload = raw_json.encode("utf-8").hex()
+
+        self.assertEqual(pu._decode_macos_keychain_json(raw_json), payload)
+        self.assertEqual(pu._decode_macos_keychain_json(b64_payload), payload)
+        self.assertEqual(pu._decode_macos_keychain_json(hex_payload), payload)
+        self.assertIsNone(pu._decode_macos_keychain_json("not-json"))
+        self.assertIsNone(pu._decode_macos_keychain_json(""))
+
+    def test_antigravity_signed_in_checks_macos_keychain_for_default_home_only(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as home, \
+             patch("provider_usage.os.name", "posix"), \
+             patch("provider_usage.sys.platform", "darwin"), \
+             patch("provider_usage.os.path.expanduser", side_effect=lambda p: home if p == "~" else p), \
+             patch("provider_usage.read_macos_antigravity_credential", return_value={"token": {"access_token": "tok"}}) as read_cred:
+            self.assertTrue(pu.antigravity_signed_in(None))
+            self.assertTrue(pu.antigravity_signed_in(home))
+            self.assertEqual(read_cred.call_count, 2)
+
+            # Explicit isolated profile must not fall back to host macOS Keychain.
+            read_cred.reset_mock()
+            with tempfile.TemporaryDirectory() as isolated:
+                self.assertFalse(pu.antigravity_signed_in(isolated))
+                read_cred.assert_not_called()
+
+    def test_claude_oauth_checks_macos_keychain_for_default_home_only(self):
+        from unittest.mock import patch
+
+        fake_cred = {
+            "accessToken": "sk-ant-keychain",
+            "expiresAt": 4102444800000.0,
+            "subscriptionType": "max",
+            "rateLimitTier": "default_claude_max_5x",
+            "path": "keychain:Claude Code-credentials",
+        }
+        with tempfile.TemporaryDirectory() as home, \
+             patch("provider_usage.sys.platform", "darwin"), \
+             patch("provider_usage.os.path.expanduser", side_effect=lambda p: home if p == "~" else p), \
+             patch.dict(os.environ, {}, clear=False), \
+             patch("provider_usage.read_macos_claude_credential", return_value=fake_cred) as read_cred:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+            self.assertEqual(pu.load_claude_oauth_credentials(None), fake_cred)
+            self.assertEqual(pu.load_claude_oauth_credentials(home), fake_cred)
+            self.assertEqual(read_cred.call_count, 2)
+
+            # Isolated home or explicit config_dir must not fall back to host macOS Keychain.
+            read_cred.reset_mock()
+            with tempfile.TemporaryDirectory() as isolated:
+                self.assertIsNone(pu.load_claude_oauth_credentials(isolated))
+                self.assertIsNone(pu.load_claude_oauth_credentials(None, config_dir=isolated))
+                read_cred.assert_not_called()
+
 
 class KimiProviderTests(unittest.TestCase):
     def test_not_signed_in_without_token(self):

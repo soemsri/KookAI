@@ -12,8 +12,8 @@ from typing import Any, Optional
 SCHEMA_VERSION = 1
 # Discovery spans eight providers and keeps existing user-managed entries.
 MAX_MODELS = 1000
-PROVIDERS = {"agy", "claude", "codex", "kimi", "xai", "muse", "deepseek", "zai"}
-USAGE_BUCKETS = {"gemini", "claude", "gpt", "xai", "muse", "deepseek", "zai"}
+PROVIDERS = {"agy", "claude", "codex", "kimi", "xai", "muse", "deepseek", "zai", "local"}
+USAGE_BUCKETS = {"gemini", "claude", "gpt", "xai", "muse", "deepseek", "zai", "local"}
 EFFORT_VALUES = {
     "Light",
     "Low",

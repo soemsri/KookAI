@@ -1999,6 +1999,30 @@ body {
   color: var(--status-red);
 }
 
+.local-connection-card {
+  margin-bottom: 16px;
+}
+
+.local-connection-card .cli-provider-title-row {
+  flex-wrap: wrap;
+}
+
+.local-connection-card .cli-status-pill {
+  font-size: 11px;
+}
+
+.local-connection-card .cli-provider-detail,
+.local-connection-card .cli-action-message {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.local-connection-card .cli-action-message.error {
+  color: var(--status-red);
+}
+
 .model-catalog-editor {
   width: 100%;
   min-height: 320px;

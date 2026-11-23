@@ -133,6 +133,21 @@ After changing the mobile renderer (for example, generated AiPASS media
 links), reload the Expo development client or rebuild/reinstall the Android
 APK so the updated JavaScript bundle is installed on the phone.
 
+For a local Android build on macOS/Linux with a JDK and Android SDK configured:
+
+```bash
+cd mobile
+npx expo prebuild --platform android --no-install
+cd android
+./gradlew assembleRelease -Duser.language=en -Duser.country=US
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+The Gradle locale flags avoid Android ZIP packaging failures when the host uses
+the Thai Buddhist calendar. LAN HTTP access is configured through the
+`expo-build-properties` plugin so it survives native project regeneration.
+Use the same signing key as the installed APK to preserve app data when updating.
+
 ---
 
 ## 📄 Support & License
@@ -140,3 +155,58 @@ APK so the updated JavaScript bundle is installed on the phone.
 - **License:** MIT License
 - **Developer Contact:** rangsarn@gmail.com
 - **Donations:** `0xcCAe4BDA3F9A92dd14D4193680535128f7DEE842` (EVM Address)
+
+### Local LLM (Exo / OpenAI-compatible API)
+
+KookAI discovers the running Exo instances at `http://127.0.0.1:52415/v1`
+when loading the model selector. Choose a model under **Local LLM** to chat.
+Open **Settings → Connections → Local LLM → Connect** to check the configured
+server and refresh the model selector immediately after starting or stopping a
+model. The card shows the server address, discovered models, and Qwen Code
+harness status. KookAI does not download or start models.
+
+When **Qwen Code** (`@qwen-code/qwen-code` / `qwen` CLI) is installed, KookAI
+runs Local LLM models through the Qwen Code headless agent harness inside the
+selected workspace directory:
+
+- **Sandbox target (`--approval-mode auto-edit`)**: enables reading, searching,
+  and editing/writing workspace files while denying shell execution.
+- **Real target (`--approval-mode yolo`)**: enables file tools plus shell
+  command and test execution.
+- **Fallback / opt-out**: if `qwen` is unavailable or `KOOKAI_LOCAL_HARNESS=none`
+  is set in `.env`, KookAI falls back to direct text-only `chat/completions`.
+
+For another inference server, set `KOOKAI_LOCAL_LLM_URL` in the server's `.env`
+(e.g. `http://127.0.0.1:1234/v1`) and restart KookAI. The endpoint must support
+`GET /v1/models` and `POST /v1/chat/completions` (plus OpenAI tool calling for
+Qwen Code harness actions). Optionally set `KOOKAI_LOCAL_LLM_API_KEY` if the
+server requires authentication. The URL is resolved on the KookAI host,
+including when chatting from a phone.
+
+Local sessions persist conversation history, resume via Qwen Code `--resume`
+sessions (with canonical history synthesis on fresh fallback), and support
+cancellation. Local request failures stay local instead of automatically
+forwarding prompts to cloud providers; existing cloud-provider failover
+priorities are unchanged. Exo inventory is filtered by active instances; other
+compatible servers determine which models their `/v1/models` endpoint exposes.
+Update the mobile client for support of the new `local` catalog provider.
+
+For Exo models that advertise a Thinking toggle, KookAI passes the selected
+value to Qwen's OpenAI request as `enable_thinking`. The setting is scoped to
+each invocation using a temporary settings file; Qwen session storage and
+shared settings files are retained. The selected local model uses KookAI's
+endpoint and key, with generation defaults from Qwen's user/system settings.
+Project settings are left to Qwen's own trust checks; project-specific model
+provider definitions do not override this local model entry.
+
+Slow local models can hit Qwen's stream lifetime cap even while generating.
+KookAI gives local Qwen requests finite **30-minute** lifetime and idle stream
+budgets. Exo buffers complete tool calls, so generating a large file can otherwise
+hit Qwen's shorter idle limit. When chunks arrive, KookAI emits periodic
+Thinking/generation progress without displaying reasoning text.
+Explicit `QWEN_STREAM_MAX_LIFETIME_MS` and `QWEN_STREAM_IDLE_TIMEOUT_MS`
+environment values are preserved. Qwen's configured `streamMaxLifetimeMs` and
+`streamIdleTimeoutMs`, if present, take precedence over them. Cancellation and
+`AGY_CLI_MAX_RUNTIME` still apply.
+If a long coding request times out, turn **Thinking off** and retry. Restart
+the KookAI backend after updating this code or its environment.

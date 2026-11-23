@@ -14,3 +14,4 @@ psutil>=5.9.0
 # kookai-cli: muse
 # kookai-cli: deepseek
 # kookai-cli: zai
+# kookai-cli: qwen

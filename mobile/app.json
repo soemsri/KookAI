@@ -3,7 +3,7 @@
     "name": "KookAI",
     "slug": "kookai",
     "scheme": "kookai",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,8 +18,7 @@
     },
     "android": {
       "package": "com.kookai.app",
-      "versionCode": 7,
-      "usesCleartextTraffic": true,
+      "versionCode": 8,
       "adaptiveIcon": {
         "backgroundColor": "#061433",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -34,6 +33,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
       "expo-secure-store",
       [
         "expo-camera",

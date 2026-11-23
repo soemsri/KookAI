@@ -129,6 +129,16 @@ CLI_DEFINITIONS: dict[str, CliDefinition] = {
         connect_help="Select Z.AI Coding Plan, then enter your Z.ai API key.",
         env_path="ZAI_CLI_PATH",
     ),
+    "qwen": CliDefinition(
+        cli_id="qwen",
+        name="Qwen Code",
+        executable="qwen",
+        install_kind="npm",
+        install_source="@qwen-code/qwen-code",
+        connect_args=(),
+        connect_help="Launches Qwen Code for optional account sign-in. Local LLM models use KookAI's Local LLM endpoint automatically.",
+        env_path="QWEN_CLI_PATH",
+    ),
 }
 
 _install_lock = threading.Lock()
@@ -182,6 +192,7 @@ def _known_cli_candidates(definition: CliDefinition) -> list[str]:
         candidates.extend(
             [
                 os.path.join(home, ".local", "bin", executable_name),
+                os.path.join(home, ".local", "node", "bin", executable_name),
                 os.path.join(home, ".local", executable_name),
                 os.path.join(home, ".npm-global", "bin", executable_name),
             ]

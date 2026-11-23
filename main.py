@@ -145,6 +145,7 @@ from provider_usage import (
     fetch_muse_account_status,
     fetch_zai_account_usage,
     provider_from_claude_cli_snapshot,
+    read_macos_antigravity_credential,
     read_windows_antigravity_credential,
 )
 from cli_manager import (
@@ -162,6 +163,21 @@ from model_catalog import (
     save_model_catalog,
 )
 from model_discovery import sync_model_catalog
+from local_backend import discover_local_models, complete_local, LocalRequestCancelled, base_url as local_llm_base_url
+from qwen_backend import (
+    QWEN_CONVERSATION_PREFIX,
+    build_qwen_command,
+    build_qwen_environment,
+    classify_qwen_progress_line,
+    is_qwen_available,
+    local_harness_mode,
+    make_qwen_conversation_id,
+    parse_qwen_stream_json,
+    qwen_session_id,
+    qwen_generation_environment,
+    resolve_qwen_executable,
+    should_use_qwen_harness,
+)
 from profile_manager import (
     create_profile,
     delete_profile,
@@ -261,6 +277,9 @@ def load_runtime_model_catalog() -> dict:
         else BUILTIN_MODEL_CATALOG_PATH
     )
     catalog = load_model_catalog(catalog_path)
+    # Local inventory is host-specific and refreshed without persisting it.
+    local_models = discover_local_models()
+    catalog["models"] = [m for m in catalog["models"] if m["provider"] != "local"] + local_models
     configure_codex_catalog(catalog["models"])
     configure_claude_catalog(catalog["models"])
     configure_kimi_catalog(catalog["models"])
@@ -875,6 +894,41 @@ async def get_cli_status(request: Request):
     )
 
 
+@app.get("/api/local/status")
+async def get_local_connection_status(request: Request):
+    verify_cli_admin(request)
+    try:
+        return {"url": local_llm_base_url()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/local/connect")
+async def connect_local_llm(request: Request):
+    verify_cli_admin(request)
+    try:
+        resolve_qwen_executable.cache_clear()
+        url = local_llm_base_url()
+        # Bypass discovery's cache so a newly started model appears immediately.
+        models = await asyncio.to_thread(discover_local_models, force=True)
+        catalog = await asyncio.to_thread(load_runtime_model_catalog)
+    except (ValueError, ModelCatalogError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "url": url,
+        "status": "ready" if models else "no_models",
+        "models": [{"id": model["id"], "label": model["label"]} for model in models],
+        "catalog": public_model_catalog(catalog),
+        "harness": {
+            "id": "qwen",
+            "name": "Qwen Code",
+            "enabled": should_use_qwen_harness(),
+            "mode": local_harness_mode(),
+            "installed": is_qwen_available(),
+        },
+    }
+
+
 class SettingsUpdate(BaseModel):
     groq_api_key: str | None = None
     openai_api_key: str | None = None
@@ -950,7 +1004,7 @@ async def update_settings(payload: SettingsUpdate):
 @app.post("/api/cli/{cli_id}/install")
 async def install_cli_requirement(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai", "qwen"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
     status = await asyncio.to_thread(install_cli, cli_id)
     resolve_codex_executable.cache_clear()
@@ -960,6 +1014,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
     resolve_muse_executable.cache_clear()
     resolve_deepseek_executable.cache_clear()
     resolve_zai_executable.cache_clear()
+    resolve_qwen_executable.cache_clear()
     return JSONResponse(
         status_code=200 if status["installed"] else 500,
         content={"cli": status},
@@ -969,7 +1024,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
 @app.post("/api/cli/{cli_id}/connect")
 async def connect_cli_account(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai", "qwen"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
 
     statuses = {
@@ -1079,7 +1134,7 @@ async def connect_harness_profile_endpoint(profile_id: str, req_raw: Request):
 
 
 @app.get("/api/models")
-async def get_models(request: Request, include_disabled: bool = False):
+async def get_models(request: Request, include_disabled: bool = False, include_local: bool = False):
     verify_authorization(request)
     if include_disabled and not can_manage_cli_connections(request):
         raise HTTPException(
@@ -1105,6 +1160,9 @@ async def get_models(request: Request, include_disabled: bool = False):
         catalog = load_runtime_model_catalog()
     except ModelCatalogError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    # Older clients reject an unknown provider for the entire catalog.
+    if not include_local:
+        catalog["models"] = [m for m in catalog["models"] if m["provider"] != "local"]
     return JSONResponse(
         headers={"Cache-Control": "no-store", "X-KookAI-Model-Sync": sync_status},
         content=public_model_catalog(
@@ -4112,6 +4170,263 @@ def is_provider_available(prov: str) -> bool:
     return False
 
 
+def _build_qwen_prompt_with_history(
+    project_id: str,
+    cwd_path: str,
+    message: str,
+    actual_cid: str,
+    original_cid: str,
+) -> str:
+    prior = in_memory_chats.get(actual_cid)
+    if prior is None and original_cid and original_cid != actual_cid:
+        prior = in_memory_chats.get(original_cid)
+    if prior is None:
+        record = get_canonical_conversation(actual_cid) or (
+            get_canonical_conversation(original_cid)
+            if original_cid and original_cid != actual_cid
+            else None
+        )
+        prior = (record or {}).get("messages", [])
+
+    selected_lines: list[str] = []
+    total_chars = 0
+    max_chars = 24000
+    for item in reversed((prior or [])[-20:]):
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+            continue
+        label = "User" if role == "user" else "Assistant"
+        entry = f"[{label}]: {content.strip()}"
+        if total_chars + len(entry) > max_chars and selected_lines:
+            break
+        selected_lines.append(entry)
+        total_chars += len(entry)
+    selected_lines.reverse()
+
+    history_block = ""
+    if selected_lines:
+        history_block = (
+            "[Previous Conversation History]\n"
+            + "\n\n".join(selected_lines)
+            + "\n[End of Previous Conversation History]\n\n"
+        )
+    return (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"{history_block}"
+        f"User message:\n{message}"
+    )
+
+
+def run_qwen_local_cli(
+    message: str,
+    model: dict,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    thinking: bool = False,
+    progress_callback=None,
+    cancel_event=None,
+):
+    project_id = clean_project_name(workspace or "agy")
+    cwd_path = resolve_project_directory(project_id)
+    raw_model_id = model["cli_model"].removeprefix("local/")
+    url = local_llm_base_url()
+    api_key = os.environ.get("KOOKAI_LOCAL_LLM_API_KEY", "").strip()
+    mapping_key = f"local:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+
+    base_prompt = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+
+    def execute(run_conversation_id: Optional[str], prompt_text: str):
+        stream_result = {"session_id": None, "final_message": "", "errors": []}
+        last_stream_progress = None
+
+        def classify_progress(source: str, line: str):
+            nonlocal last_stream_progress
+            event = classify_qwen_progress_line(source, line)
+            if event and event["message"] in {
+                "Qwen Code is thinking...", "Qwen Code is generating a response...",
+            }:
+                now = time.monotonic()
+                if last_stream_progress is not None and now - last_stream_progress < 5:
+                    return None
+                last_stream_progress = now
+            return event
+
+        def capture_qwen_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_qwen_stream_json(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["final_message"] = parsed_line["final_message"]
+            if parsed_line["errors"]:
+                stream_result["errors"].extend(parsed_line["errors"])
+
+        cmd = build_qwen_command(
+            resolve_qwen_executable(),
+            prompt_text,
+            raw_model_id,
+            url,
+            target=target,
+            conversation_id=run_conversation_id,
+        )
+        env = build_qwen_environment(url, raw_model_id, api_key=api_key)
+        logging.info(
+            "Executing Qwen Code CLI in %s for local model=%s target=%s resume=%s",
+            cwd_path,
+            raw_model_id,
+            target,
+            bool(qwen_session_id(run_conversation_id)),
+        )
+        thinking_control = thinking if model.get("capabilities", {}).get("thinking") else None
+        with qwen_generation_environment(env, cwd_path, raw_model_id, thinking_control) as scoped_env:
+            result = run_agent_command(
+                cmd,
+                cwd_path,
+                timeout=AGY_CLI_TIMEOUT,
+                progress_callback=progress_callback,
+                progress_line_classifier=classify_progress,
+                raw_line_callback=capture_qwen_line,
+                stdin_text=prompt_text,
+                env=scoped_env,
+                cancel_event=cancel_event,
+            )
+        parsed = parse_qwen_stream_json(result.stdout or "")
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": parsed["final_message"] or stream_result["final_message"],
+            "errors": parsed["errors"] or stream_result["errors"],
+        }
+
+    try:
+        if qwen_session_id(actual_cid):
+            result, parsed = execute(actual_cid, base_prompt)
+        else:
+            prompt_with_history = _build_qwen_prompt_with_history(
+                project_id, cwd_path, message, actual_cid, conversation_id
+            )
+            result, parsed = execute(None, prompt_with_history)
+
+        combined_error = "\n".join(
+            part
+            for part in [
+                (result.stderr or "").strip(),
+                "\n".join(parsed["errors"]).strip(),
+            ]
+            if part
+        )
+        recoverable_resume_error = (
+            qwen_session_id(actual_cid)
+            and (result.returncode != 0 or not parsed["final_message"])
+            and any(
+                phrase in combined_error.lower()
+                for phrase in (
+                    "session not found",
+                    "no session",
+                    "conversation not found",
+                    "failed to resume",
+                    "unable to resume",
+                    "invalid session",
+                    "enoent",
+                )
+            )
+        )
+        if recoverable_resume_error:
+            if progress_callback:
+                progress_callback(
+                    "progress",
+                    "Qwen Code session was unavailable; starting a fresh session.",
+                )
+            prompt_with_history = _build_qwen_prompt_with_history(
+                project_id, cwd_path, message, actual_cid, conversation_id
+            )
+            result, parsed = execute(None, prompt_with_history)
+            combined_error = "\n".join(
+                part
+                for part in [
+                    (result.stderr or "").strip(),
+                    "\n".join(parsed["errors"]).strip(),
+                ]
+                if part
+            )
+
+        session_id = parsed["session_id"]
+        resolved_cid = (
+            make_qwen_conversation_id(session_id)
+            if session_id
+            else (actual_cid or "local_" + uuid.uuid4().hex)
+        )
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+
+        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
+            return parsed["final_message"].strip(), resolved_cid
+
+        error_message = combined_error or "Qwen Code CLI did not return a final response."
+        return (
+            f"⚠️ **Qwen Code CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```",
+            resolved_cid,
+        )
+    except AgentCommandCancelled:
+        raise
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message("qwen", exc), actual_cid
+    except Exception as exc:
+        return (
+            f"❌ **Execution Error**: Failed to run Qwen Code CLI for local model `{raw_model_id}`. "
+            f"Details: `{str(exc)}`",
+            actual_cid,
+        )
+
+
+def run_local_llm(message, model_name, conversation_id, workspace,
+                  thinking=False, image_paths=None, progress_callback=None, cancel_event=None,
+                  target="Sandbox"):
+    model = resolve_catalog_model(load_runtime_model_catalog(), model_name)
+    if not model or model["provider"] != "local":
+        raise ValueError("Local model is unavailable. Start it in your inference server and refresh models.")
+    if should_use_qwen_harness():
+        return run_qwen_local_cli(
+            message,
+            model,
+            conversation_id,
+            target=target,
+            workspace=workspace,
+            thinking=thinking,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+    if image_paths:
+        raise ValueError("Local LLM currently supports text chat only; remove image attachments")
+    cid = conversation_id or "local_" + uuid.uuid4().hex
+    prior = in_memory_chats.get(cid)
+    if prior is None:
+        record = get_canonical_conversation(cid)
+        prior = (record or {}).get("messages", [])
+    in_memory_chats[cid] = list(prior)
+    messages = [{"role": "system", "content":
+                 "You are a local chat assistant. You have no tools or filesystem access. "
+                 "Do not claim to read files or execute commands. Workspace: " + workspace}]
+    messages.extend({"role": m["role"], "content": m["content"]}
+                    for m in prior if m.get("role") in {"user", "assistant"})
+    messages.append({"role": "user", "content": message})
+    try:
+        reply = complete_local(model, messages, thinking=thinking,
+                               progress_callback=progress_callback, cancel_event=cancel_event)
+    except LocalRequestCancelled as exc:
+        raise AgentCommandCancelled(str(exc)) from exc
+    return reply, cid
+
+
 def _invoke_provider_backend(
     prov: str,
     prov_model: str,
@@ -4125,7 +4440,11 @@ def _invoke_provider_backend(
     image_paths: Optional[List[str]],
     progress_callback,
     profile_id: Optional[str] = None,
+    cancel_event=None,
 ):
+    if prov == "local":
+        return run_local_llm(message, prov_model, conversation_id, workspace, thinking,
+                             image_paths, progress_callback, cancel_event, target=target)
     if not profile_id:
         def_prof = get_default_profile(prov)
         if def_prof:
@@ -4264,7 +4583,7 @@ def run_selected_cli(
     selected_provider = (provider or "").strip().lower()
     if not selected_provider:
         selected_provider = resolve_provider(None, model_ui_name)
-    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai", "muse", "deepseek", "zai"}:
+    if selected_provider not in {"agy", "codex", "claude", "kimi", "xai", "muse", "deepseek", "zai", "local"}:
         raise ValueError(f"Unsupported agent provider: {provider}")
 
     attempted_providers = set()
@@ -4273,7 +4592,7 @@ def run_selected_cli(
     primary_failed = False
     primary_error_msg = ""
     try:
-        backend_kwargs = {}
+        backend_kwargs = {"cancel_event": cancel_event} if selected_provider == "local" else {}
         if profile_id is not None:
             try:
                 import inspect
@@ -4314,6 +4633,9 @@ def run_selected_cli(
 
     if cancel_event and cancel_event.is_set():
         raise AgentCommandCancelled("Prompt execution was cancelled by user")
+
+    if primary_failed and selected_provider == "local":
+        return primary_error_msg, conversation_id
 
     if primary_failed:
         logging.warning(
@@ -4818,6 +5140,11 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
             f"zai:{project_id}:{conversation_id}",
             conversation_id,
         )
+    elif provider == "local":
+        actual_cid = convo_id_mapping.get(
+            f"local:{project_id}:{conversation_id}",
+            conversation_id,
+        )
     else:
         actual_cid = convo_id_mapping.get(
             f"{project_id}:{conversation_id}",
@@ -5267,13 +5594,13 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
         provider,
         effort if provider in {"codex", "claude", "xai", "muse"} and capabilities["effort"] else None,
         speed if provider == "codex" else None,
-        thinking if provider in {"claude", "kimi", "xai", "muse", "zai"} else None,
+        thinking if provider in {"claude", "kimi", "xai", "muse", "zai", "local"} else None,
     )
 
     # agy's native transcript is not guaranteed to be written by every CLI
     # version. Keep the UI's complete transcript in KookAI's canonical store so
     # the latest conversation survives both app and server restarts.
-    if provider == "agy":
+    if provider in {"agy", "local"}:
         persist_canonical_conversation(
             resolved_cid,
             project_id,
@@ -5354,7 +5681,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
         "model": model,
         "effort": effort if provider in {"codex", "claude", "xai", "muse"} and capabilities["effort"] else None,
         "speed": speed if provider == "codex" else None,
-        "thinking": thinking if provider in {"claude", "kimi", "xai", "muse"} else None,
+        "thinking": thinking if provider in {"claude", "kimi", "xai", "muse", "local"} else None,
     }
 
 
@@ -6008,7 +6335,7 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
     )
 
     data = None
-    from_windows_keyring = False
+    from_host_keyring = False
     if token_path:
         try:
             with open(token_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -6019,7 +6346,10 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
     if (not data or not (data.get("token") or {}).get("access_token")) and can_use_keyring:
         if os.name == "nt":
             data = read_windows_antigravity_credential()
-            from_windows_keyring = bool(data)
+            from_host_keyring = bool(data)
+        elif sys.platform == "darwin":
+            data = read_macos_antigravity_credential()
+            from_host_keyring = bool(data)
         else:
             data = _read_from_keyring()
             if data and not token_path:
@@ -6049,7 +6379,7 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
 
     def _do_refresh() -> Optional[str]:
         nonlocal data, token_path
-        save_target = None if (from_windows_keyring and not token_path) else (
+        save_target = None if (from_host_keyring and not token_path) else (
             token_path or os.path.join(
                 credential_root, ".gemini", "antigravity-cli", "antigravity-oauth-token"
             )
@@ -6087,7 +6417,12 @@ def fetch_antigravity_cloudcode_quota(profile_root: Optional[str] = None) -> Opt
                 subprocess.run([agy_cmd, "models"], env=env, timeout=5.5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 kdata = None
                 if can_use_keyring:
-                    kdata = read_windows_antigravity_credential() if os.name == "nt" else _read_from_keyring()
+                    if os.name == "nt":
+                        kdata = read_windows_antigravity_credential()
+                    elif sys.platform == "darwin":
+                        kdata = read_macos_antigravity_credential()
+                    else:
+                        kdata = _read_from_keyring()
                 if kdata:
                     data = kdata
                     if not token_path and save_target:
