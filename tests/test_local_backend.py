@@ -19,6 +19,39 @@ class LocalBackendTests(unittest.TestCase):
             models = lb.discover_local_models(True)
         self.assertEqual([m['cli_model'] for m in models], ['local/loaded'])
 
+    def test_ollama_discovers_thinking_capability_via_api_tags(self):
+        models_payload = {
+            'data': [
+                {'id': 'inkling-2-mini:latest', 'owned_by': 'library'},
+                {'id': 'plain-model:latest', 'owned_by': 'library'},
+            ]
+        }
+        tags_payload = {
+            'models': [
+                {'name': 'inkling-2-mini:latest', 'model': 'inkling-2-mini:latest', 'capabilities': ['completion', 'tools', 'thinking']},
+                {'name': 'plain-model:latest', 'model': 'plain-model:latest', 'capabilities': ['completion']},
+            ]
+        }
+
+        def fake_request(path):
+            if path == 'models':
+                return iter([models_payload])
+            if path == '/api/tags':
+                return iter([tags_payload])
+            raise AssertionError(f'Unexpected request path: {path}')
+
+        with patch.object(lb, '_request', side_effect=fake_request) as req:
+            models = lb.discover_local_models(True)
+        self.assertEqual([c.args[0] for c in req.call_args_list], ['models', '/api/tags'])
+        self.assertTrue(models[0]['capabilities']['thinking'])
+        self.assertFalse(models[1]['capabilities']['thinking'])
+
+    def test_generic_openai_server_does_not_probe_ollama_tags(self):
+        with patch.object(lb, '_request', return_value=iter([{'data': [{'id': 'generic-model', 'owned_by': 'vllm'}]}])) as req:
+            models = lb.discover_local_models(True)
+        req.assert_called_once_with('models')
+        self.assertFalse(models[0]['capabilities']['thinking'])
+
     def test_unreachable_server_has_no_models(self):
         with patch.object(lb, '_request', side_effect=OSError('offline')):
             self.assertEqual(lb.discover_local_models(True), [])
@@ -75,6 +108,7 @@ class LocalChatIntegrationTests(unittest.TestCase):
              patch.object(main, 'CONVERSATION_METADATA_FILE', tmp + '/metadata.json'), \
              patch.object(main, 'get_workspace_alignment_context', return_value=''), \
              patch.object(main, 'in_memory_chats', {}), \
+             patch.object(main, 'should_use_dsh_harness', return_value=False), \
              patch.object(main, 'should_use_qwen_harness', return_value=False), \
              patch.object(main, 'complete_local', return_value='local reply') as complete, \
              patch.object(main, 'discover_local_models') as discover:
@@ -115,6 +149,7 @@ class LocalChatIntegrationTests(unittest.TestCase):
              patch.object(main, 'get_workspace_alignment_context', return_value=''), \
              patch.object(main, 'in_memory_chats', {}), \
              patch.object(main, 'convo_id_mapping', {}), \
+             patch.object(main, 'should_use_dsh_harness', return_value=False), \
              patch.object(main, 'should_use_qwen_harness', return_value=True), \
              patch.object(main, 'resolve_qwen_executable', return_value='/usr/local/bin/qwen'), \
              patch.object(main, 'run_agent_command', side_effect=fake_run_agent), \

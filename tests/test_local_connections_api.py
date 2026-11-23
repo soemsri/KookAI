@@ -16,7 +16,13 @@ class LocalConnectionAPITests(unittest.TestCase):
         self.admin = patch.object(main, "can_manage_cli_connections", return_value=True)
         self.admin.start()
         self.addCleanup(self.admin.stop)
-        self.env = patch.dict(os.environ, {"KOOKAI_LOCAL_LLM_URL": "http://127.0.0.1:1234"})
+        self.env = patch.dict(
+            os.environ,
+            {
+                "KOOKAI_LOCAL_LLM_URL": "http://127.0.0.1:1234",
+                "KOOKAI_LOCAL_HARNESS": "qwen",
+            },
+        )
         self.env.start()
         self.addCleanup(self.env.stop)
         self.addCleanup(local_backend._cache.clear)
@@ -48,6 +54,26 @@ class LocalConnectionAPITests(unittest.TestCase):
         self.assertNotEqual(data["catalog"]["default_model"], local[0]["id"])
         request.assert_called_once_with("models")
         login.assert_not_called()
+
+    def test_connect_reports_dsh_harness_when_configured(self):
+        with patch.dict(os.environ, {"KOOKAI_LOCAL_HARNESS": "dsh"}), \
+             patch.object(local_backend, "_request", return_value=iter([{"data": [{"id": "inkling-2-mini:latest"}]}])), \
+             patch.object(main, "is_dsh_available", return_value=True), \
+             patch.object(main, "should_use_dsh_harness", return_value=True):
+            response = self.client.post("/api/local/connect")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "ready")
+        self.assertEqual(
+            data["harness"],
+            {
+                "id": "dsh",
+                "name": "DeepSeek Harness",
+                "enabled": True,
+                "mode": "dsh",
+                "installed": True,
+            },
+        )
 
     def test_offline_removes_previously_discovered_models(self):
         with patch.object(local_backend, "_request", return_value=iter([{"data": [{"id": "old-model"}]}])):

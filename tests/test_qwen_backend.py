@@ -251,7 +251,8 @@ class QwenBackendUnitTests(unittest.TestCase):
     def test_local_harness_mode_opt_out_and_discovery_description(self):
         local_backend._cache.clear()
         self.addCleanup(local_backend._cache.clear)
-        with mock.patch.object(local_backend, "_request", return_value=iter([{"data": [{"id": "qwen-local"}]}])):
+        with mock.patch.dict(os.environ, {"KOOKAI_LOCAL_HARNESS": "qwen"}), \
+             mock.patch.object(local_backend, "_request", return_value=iter([{"data": [{"id": "qwen-local"}]}])):
             with mock.patch.object(qwen_backend, "should_use_qwen_harness", return_value=True):
                 with_harness = local_backend.discover_local_models(force=True)
             self.assertIn("Qwen Code harness", with_harness[0]["description"])
@@ -269,6 +270,9 @@ class QwenBackendUnitTests(unittest.TestCase):
 class QwenIntegrationAndRoutingTests(unittest.TestCase):
     def setUp(self):
         local_backend._cache.clear()
+        env_patch = mock.patch.dict(os.environ, {"KOOKAI_LOCAL_HARNESS": "qwen"})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.local_model = {
             "id": "local-test",
             "label": "Qwen3.8-27B (Local)",

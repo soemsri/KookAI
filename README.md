@@ -156,40 +156,64 @@ Use the same signing key as the installed APK to preserve app data when updating
 - **Developer Contact:** rangsarn@gmail.com
 - **Donations:** `0xcCAe4BDA3F9A92dd14D4193680535128f7DEE842` (EVM Address)
 
-### Local LLM (Exo / OpenAI-compatible API)
+### Local LLM (Exo / Ollama / OpenAI-compatible API)
 
-KookAI discovers the running Exo instances at `http://127.0.0.1:52415/v1`
-when loading the model selector. Choose a model under **Local LLM** to chat.
-Open **Settings → Connections → Local LLM → Connect** to check the configured
-server and refresh the model selector immediately after starting or stopping a
-model. The card shows the server address, discovered models, and Qwen Code
-harness status. KookAI does not download or start models.
+KookAI discovers running Exo instances at `http://127.0.0.1:52415/v1` by default,
+or Ollama (e.g. `inkling-2-mini:latest` at `http://127.0.0.1:11434/v1`) when
+`KOOKAI_LOCAL_LLM_URL` is set in `.env`. Choose a model under **Local LLM** in
+Web or KookAI mobile chat. Open **Settings → Connections → Local LLM → Connect**
+to check the configured server and refresh the model selector immediately after
+starting or stopping a model. The card shows the server address, discovered
+models, and configured local harness status. KookAI does not download or start
+models.
 
-When **Qwen Code** (`@qwen-code/qwen-code` / `qwen` CLI) is installed, KookAI
-runs Local LLM models through the Qwen Code headless agent harness inside the
-selected workspace directory:
+By default (`KOOKAI_LOCAL_HARNESS=qwen`), when **Qwen Code**
+(`@qwen-code/qwen-code` / `qwen` CLI) is installed, KookAI runs Local LLM models
+through the Qwen Code headless agent harness inside the selected workspace
+directory:
 
 - **Sandbox target (`--approval-mode auto-edit`)**: enables reading, searching,
   and editing/writing workspace files while denying shell execution.
 - **Real target (`--approval-mode yolo`)**: enables file tools plus shell
   command and test execution.
-- **Fallback / opt-out**: if `qwen` is unavailable or `KOOKAI_LOCAL_HARNESS=none`
-  is set in `.env`, KookAI falls back to direct text-only `chat/completions`.
+
+When `KOOKAI_LOCAL_HARNESS=dsh` is set in `.env` and **DeepSeek Harness**
+(`@deepseek-ai/dsh` / `dsh` CLI) is installed, KookAI runs Local LLM models
+through `dsh --profile headless --json` with a per-request temporary `--patch`
+overlay pointing at `KOOKAI_LOCAL_LLM_URL` (supporting Ollama and other
+OpenAI-compatible endpoints):
+
+- **Sandbox target (`--permission-mode workspace-write --approval-policy never`)**:
+  restricts file writes to the workspace directory.
+- **Real target (`--permission-mode danger-full-access --approval-policy never`)**:
+  enables unrestricted workspace and shell access.
+- **Thinking toggle**: models reporting `thinking` (Exo `thinking_toggle` or
+  Ollama `/api/tags` `thinking` capability) map KookAI's Thinking toggle to
+  DeepSeek Harness `reasoningEffort` (`low` by default when on, configurable via
+  `KOOKAI_DSH_REASONING_EFFORT`, and `off` mapped to `"none"` when off).
+- **Session resume**: sessions persist under `local_dsh_<session_id>` and resume
+  via `--session-id` (with canonical history fallback if a prior session cannot
+  be adopted).
+
+- **Fallback / opt-out**: if the selected harness CLI is unavailable or
+  `KOOKAI_LOCAL_HARNESS=none` is set in `.env`, KookAI falls back to direct
+  text-only `chat/completions`.
 
 For another inference server, set `KOOKAI_LOCAL_LLM_URL` in the server's `.env`
-(e.g. `http://127.0.0.1:1234/v1`) and restart KookAI. The endpoint must support
-`GET /v1/models` and `POST /v1/chat/completions` (plus OpenAI tool calling for
-Qwen Code harness actions). Optionally set `KOOKAI_LOCAL_LLM_API_KEY` if the
-server requires authentication. The URL is resolved on the KookAI host,
-including when chatting from a phone.
+(e.g. `http://127.0.0.1:11434/v1` for Ollama or `http://127.0.0.1:1234/v1`) and
+restart KookAI. The endpoint must support `GET /v1/models` and
+`POST /v1/chat/completions` (plus OpenAI tool calling for harness actions).
+Optionally set `KOOKAI_LOCAL_LLM_API_KEY` if the server requires authentication.
+The URL is resolved on the KookAI host, including when chatting from a phone.
 
-Local sessions persist conversation history, resume via Qwen Code `--resume`
-sessions (with canonical history synthesis on fresh fallback), and support
-cancellation. Local request failures stay local instead of automatically
-forwarding prompts to cloud providers; existing cloud-provider failover
-priorities are unchanged. Exo inventory is filtered by active instances; other
-compatible servers determine which models their `/v1/models` endpoint exposes.
-Update the mobile client for support of the new `local` catalog provider.
+Local sessions persist conversation history, resume via harness session flags
+(with canonical history synthesis on fresh fallback), and support cancellation.
+Local request failures stay local instead of automatically forwarding prompts to
+cloud providers; existing cloud-provider failover priorities are unchanged. Exo
+inventory is filtered by active instances; Ollama exposes `/api/tags`
+capabilities (`thinking`), and other compatible servers determine which models
+their `/v1/models` endpoint exposes. Update the mobile client (`1.0.7+`) for
+support of the `local` catalog provider.
 
 For Exo models that advertise a Thinking toggle, KookAI passes the selected
 value to Qwen's OpenAI request as `enable_thinking`. The setting is scoped to

@@ -105,6 +105,13 @@ def _request(path, payload=None, cancel_event=None):
 
 def _local_model_description():
     try:
+        from dsh_backend import should_use_dsh_harness
+
+        if should_use_dsh_harness():
+            return "Local LLM • DeepSeek Harness • workspace tools"
+    except Exception:
+        pass
+    try:
         from qwen_backend import should_use_qwen_harness
 
         if should_use_qwen_harness():
@@ -146,6 +153,24 @@ def discover_local_models(force=False):
                             if isinstance(model_id, str):
                                 running.add(model_id)
                 entries = [m for m in entries if isinstance(m, dict) and m.get("id") in running]
+            ollama_caps = {}
+            if any(m.get("owned_by") == "library" for m in entries if isinstance(m, dict)):
+                try:
+                    tags_payload = next(_request("/api/tags"))
+                    tag_models = tags_payload.get("models", []) if isinstance(tags_payload, dict) else []
+                    if isinstance(tag_models, list):
+                        for tag_entry in tag_models:
+                            if not isinstance(tag_entry, dict):
+                                continue
+                            caps_set = {
+                                c for c in (tag_entry.get("capabilities") or [])
+                                if isinstance(c, str)
+                            }
+                            for key in (tag_entry.get("name"), tag_entry.get("model")):
+                                if isinstance(key, str) and key:
+                                    ollama_caps[key] = caps_set
+                except (OSError, ValueError, RuntimeError, http.client.HTTPException, StopIteration):
+                    pass
             seen = set()
             desc = _local_model_description()
             for entry in entries:
@@ -164,7 +189,10 @@ def discover_local_models(force=False):
                     "provider": "local", "cli_model": "local/" + raw_id,
                     "badge": "Local", "usage_bucket": "local", "enabled": True,
                     "capabilities": {"effort": [], "speed": [],
-                                     "thinking": entry.get("owned_by") == "exo" and "thinking_toggle" in caps,
+                                     "thinking": (
+                                         (entry.get("owned_by") == "exo" and "thinking_toggle" in caps)
+                                         or ("thinking" in ollama_caps.get(raw_id, set()))
+                                     ),
                                      "thinking_required": False},
                 })
         except (OSError, ValueError, RuntimeError, http.client.HTTPException):

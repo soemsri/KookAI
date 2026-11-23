@@ -178,6 +178,19 @@ from qwen_backend import (
     resolve_qwen_executable,
     should_use_qwen_harness,
 )
+from dsh_backend import (
+    DSH_CONVERSATION_PREFIX,
+    build_dsh_command,
+    build_dsh_environment,
+    classify_dsh_progress_line,
+    dsh_patch_file,
+    dsh_session_id,
+    is_dsh_available,
+    make_dsh_conversation_id,
+    parse_dsh_stream_json,
+    resolve_dsh_executable,
+    should_use_dsh_harness,
+)
 from profile_manager import (
     create_profile,
     delete_profile,
@@ -908,24 +921,36 @@ async def connect_local_llm(request: Request):
     verify_cli_admin(request)
     try:
         resolve_qwen_executable.cache_clear()
+        resolve_dsh_executable.cache_clear()
         url = local_llm_base_url()
         # Bypass discovery's cache so a newly started model appears immediately.
         models = await asyncio.to_thread(discover_local_models, force=True)
         catalog = await asyncio.to_thread(load_runtime_model_catalog)
     except (ValueError, ModelCatalogError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    mode = local_harness_mode()
+    if mode == "dsh":
+        harness_info = {
+            "id": "dsh",
+            "name": "DeepSeek Harness",
+            "enabled": should_use_dsh_harness(),
+            "mode": mode,
+            "installed": is_dsh_available(),
+        }
+    else:
+        harness_info = {
+            "id": "qwen",
+            "name": "Qwen Code",
+            "enabled": should_use_qwen_harness(),
+            "mode": mode,
+            "installed": is_qwen_available(),
+        }
     return {
         "url": url,
         "status": "ready" if models else "no_models",
         "models": [{"id": model["id"], "label": model["label"]} for model in models],
         "catalog": public_model_catalog(catalog),
-        "harness": {
-            "id": "qwen",
-            "name": "Qwen Code",
-            "enabled": should_use_qwen_harness(),
-            "mode": local_harness_mode(),
-            "installed": is_qwen_available(),
-        },
+        "harness": harness_info,
     }
 
 
@@ -1004,7 +1029,7 @@ async def update_settings(payload: SettingsUpdate):
 @app.post("/api/cli/{cli_id}/install")
 async def install_cli_requirement(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai", "qwen"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai", "qwen", "dsh"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
     status = await asyncio.to_thread(install_cli, cli_id)
     resolve_codex_executable.cache_clear()
@@ -1015,6 +1040,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
     resolve_deepseek_executable.cache_clear()
     resolve_zai_executable.cache_clear()
     resolve_qwen_executable.cache_clear()
+    resolve_dsh_executable.cache_clear()
     return JSONResponse(
         status_code=200 if status["installed"] else 500,
         content={"cli": status},
@@ -1024,7 +1050,7 @@ async def install_cli_requirement(cli_id: str, request: Request):
 @app.post("/api/cli/{cli_id}/connect")
 async def connect_cli_account(cli_id: str, request: Request):
     verify_cli_admin(request)
-    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai", "qwen"}:
+    if cli_id not in {"agy", "claude", "codex", "kimi", "grok", "muse", "deepseek", "zai", "qwen", "dsh"}:
         raise HTTPException(status_code=404, detail="Unknown CLI")
 
     statuses = {
@@ -4170,7 +4196,7 @@ def is_provider_available(prov: str) -> bool:
     return False
 
 
-def _build_qwen_prompt_with_history(
+def _build_local_prompt_with_history(
     project_id: str,
     cwd_path: str,
     message: str,
@@ -4219,6 +4245,117 @@ def _build_qwen_prompt_with_history(
     )
 
 
+_build_qwen_prompt_with_history = _build_local_prompt_with_history
+
+
+def _make_throttled_progress_classifier(
+    classifier_fn,
+    throttled_messages: set[str],
+    interval_seconds: float = 5.0,
+):
+    last_stream_progress = None
+
+    def classify(source: str, line: str):
+        nonlocal last_stream_progress
+        event = classifier_fn(source, line)
+        if event and event["message"] in throttled_messages:
+            now = time.monotonic()
+            if last_stream_progress is not None and now - last_stream_progress < interval_seconds:
+                return None
+            last_stream_progress = now
+        return event
+
+    return classify
+
+
+def _combine_cli_errors(stderr_text: str, parsed_errors: list[str]) -> str:
+    return "\n".join(
+        part
+        for part in [
+            (stderr_text or "").strip(),
+            "\n".join(parsed_errors).strip(),
+        ]
+        if part
+    )
+
+
+def _run_local_harness_session(
+    *,
+    cli_id: str,
+    cli_label: str,
+    message: str,
+    raw_model_id: str,
+    project_id: str,
+    cwd_path: str,
+    conversation_id: str,
+    actual_cid: str,
+    mapping_key: str,
+    get_session_id,
+    make_conversation_id,
+    recoverable_phrases: tuple[str, ...],
+    fresh_session_notice: str,
+    execute_fn,
+    progress_callback=None,
+):
+    base_prompt = (
+        f"Selected project/workspace: {project_id}\n"
+        f"Workspace directory: {cwd_path}\n\n"
+        f"User message:\n{message}"
+    )
+    try:
+        if get_session_id(actual_cid):
+            result, parsed = execute_fn(actual_cid, base_prompt)
+        else:
+            prompt_with_history = _build_local_prompt_with_history(
+                project_id, cwd_path, message, actual_cid, conversation_id
+            )
+            result, parsed = execute_fn(None, prompt_with_history)
+
+        combined_error = _combine_cli_errors(result.stderr or "", parsed["errors"])
+        recoverable_resume_error = (
+            get_session_id(actual_cid)
+            and (result.returncode != 0 or not parsed["final_message"])
+            and any(phrase in combined_error.lower() for phrase in recoverable_phrases)
+        )
+        if recoverable_resume_error:
+            if progress_callback:
+                progress_callback("progress", fresh_session_notice)
+            prompt_with_history = _build_local_prompt_with_history(
+                project_id, cwd_path, message, actual_cid, conversation_id
+            )
+            result, parsed = execute_fn(None, prompt_with_history)
+            combined_error = _combine_cli_errors(result.stderr or "", parsed["errors"])
+
+        session_id = parsed["session_id"]
+        resolved_cid = (
+            make_conversation_id(session_id)
+            if session_id
+            else (actual_cid or "local_" + uuid.uuid4().hex)
+        )
+        if resolved_cid != conversation_id:
+            convo_id_mapping[mapping_key] = resolved_cid
+
+        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
+            return parsed["final_message"].strip(), resolved_cid
+
+        error_message = combined_error or f"{cli_label} CLI did not return a final response."
+        return (
+            f"⚠️ **{cli_label} CLI Error (Exit Code {result.returncode})**\n\n"
+            f"```\n{error_message}\n```",
+            resolved_cid,
+        )
+    except AgentCommandCancelled:
+        raise
+    except subprocess.TimeoutExpired as exc:
+        return cli_timeout_message(cli_id, exc), actual_cid
+    except Exception as exc:
+        return (
+            f"❌ **Execution Error**: Failed to run {cli_label} CLI for local model `{raw_model_id}`. "
+            f"Details: `{str(exc)}`",
+            actual_cid,
+        )
+
+
 def run_qwen_local_cli(
     message: str,
     model: dict,
@@ -4237,27 +4374,12 @@ def run_qwen_local_cli(
     mapping_key = f"local:{project_id}:{conversation_id}"
     actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
 
-    base_prompt = (
-        f"Selected project/workspace: {project_id}\n"
-        f"Workspace directory: {cwd_path}\n\n"
-        f"User message:\n{message}"
-    )
-
     def execute(run_conversation_id: Optional[str], prompt_text: str):
         stream_result = {"session_id": None, "final_message": "", "errors": []}
-        last_stream_progress = None
-
-        def classify_progress(source: str, line: str):
-            nonlocal last_stream_progress
-            event = classify_qwen_progress_line(source, line)
-            if event and event["message"] in {
-                "Qwen Code is thinking...", "Qwen Code is generating a response...",
-            }:
-                now = time.monotonic()
-                if last_stream_progress is not None and now - last_stream_progress < 5:
-                    return None
-                last_stream_progress = now
-            return event
+        classify_progress = _make_throttled_progress_classifier(
+            classify_qwen_progress_line,
+            {"Qwen Code is thinking...", "Qwen Code is generating a response..."},
+        )
 
         def capture_qwen_line(source: str, line: str):
             if source != "stdout":
@@ -4306,86 +4428,132 @@ def run_qwen_local_cli(
             "errors": parsed["errors"] or stream_result["errors"],
         }
 
-    try:
-        if qwen_session_id(actual_cid):
-            result, parsed = execute(actual_cid, base_prompt)
-        else:
-            prompt_with_history = _build_qwen_prompt_with_history(
-                project_id, cwd_path, message, actual_cid, conversation_id
-            )
-            result, parsed = execute(None, prompt_with_history)
+    return _run_local_harness_session(
+        cli_id="qwen",
+        cli_label="Qwen Code",
+        message=message,
+        raw_model_id=raw_model_id,
+        project_id=project_id,
+        cwd_path=cwd_path,
+        conversation_id=conversation_id,
+        actual_cid=actual_cid,
+        mapping_key=mapping_key,
+        get_session_id=qwen_session_id,
+        make_conversation_id=make_qwen_conversation_id,
+        recoverable_phrases=(
+            "session not found",
+            "no session",
+            "conversation not found",
+            "failed to resume",
+            "unable to resume",
+            "invalid session",
+            "enoent",
+        ),
+        fresh_session_notice="Qwen Code session was unavailable; starting a fresh session.",
+        execute_fn=execute,
+        progress_callback=progress_callback,
+    )
 
-        combined_error = "\n".join(
-            part
-            for part in [
-                (result.stderr or "").strip(),
-                "\n".join(parsed["errors"]).strip(),
-            ]
-            if part
-        )
-        recoverable_resume_error = (
-            qwen_session_id(actual_cid)
-            and (result.returncode != 0 or not parsed["final_message"])
-            and any(
-                phrase in combined_error.lower()
-                for phrase in (
-                    "session not found",
-                    "no session",
-                    "conversation not found",
-                    "failed to resume",
-                    "unable to resume",
-                    "invalid session",
-                    "enoent",
-                )
-            )
-        )
-        if recoverable_resume_error:
-            if progress_callback:
-                progress_callback(
-                    "progress",
-                    "Qwen Code session was unavailable; starting a fresh session.",
-                )
-            prompt_with_history = _build_qwen_prompt_with_history(
-                project_id, cwd_path, message, actual_cid, conversation_id
-            )
-            result, parsed = execute(None, prompt_with_history)
-            combined_error = "\n".join(
-                part
-                for part in [
-                    (result.stderr or "").strip(),
-                    "\n".join(parsed["errors"]).strip(),
-                ]
-                if part
-            )
 
-        session_id = parsed["session_id"]
-        resolved_cid = (
-            make_qwen_conversation_id(session_id)
-            if session_id
-            else (actual_cid or "local_" + uuid.uuid4().hex)
-        )
-        if resolved_cid != conversation_id:
-            convo_id_mapping[mapping_key] = resolved_cid
+def run_dsh_local_cli(
+    message: str,
+    model: dict,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    thinking: bool = False,
+    progress_callback=None,
+    cancel_event=None,
+):
+    project_id = clean_project_name(workspace or "agy")
+    cwd_path = resolve_project_directory(project_id)
+    raw_model_id = model["cli_model"].removeprefix("local/")
+    url = local_llm_base_url()
+    api_key = os.environ.get("KOOKAI_LOCAL_LLM_API_KEY", "").strip()
+    mapping_key = f"local:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
 
-        if result.returncode == 0 and parsed["final_message"] and not parsed["errors"]:
-            return parsed["final_message"].strip(), resolved_cid
+    def execute(run_conversation_id: Optional[str], prompt_text: str):
+        stream_result = {"session_id": None, "final_message": "", "errors": []}
+        classify_progress = _make_throttled_progress_classifier(
+            classify_dsh_progress_line,
+            {
+                "DeepSeek Harness is thinking...",
+                "DeepSeek Harness is generating a response...",
+            },
+        )
 
-        error_message = combined_error or "Qwen Code CLI did not return a final response."
-        return (
-            f"⚠️ **Qwen Code CLI Error (Exit Code {result.returncode})**\n\n"
-            f"```\n{error_message}\n```",
-            resolved_cid,
+        def capture_dsh_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_dsh_stream_json(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["final_message"] = parsed_line["final_message"]
+            for err in parsed_line["errors"]:
+                if err not in stream_result["errors"]:
+                    stream_result["errors"].append(err)
+
+        dsh_path = resolve_dsh_executable()
+        env = build_dsh_environment(url, raw_model_id, api_key=api_key)
+        thinking_control = thinking if model.get("capabilities", {}).get("thinking") else None
+        logging.info(
+            "Executing DeepSeek Harness CLI in %s for local model=%s target=%s resume=%s",
+            cwd_path,
+            raw_model_id,
+            target,
+            bool(dsh_session_id(run_conversation_id)),
         )
-    except AgentCommandCancelled:
-        raise
-    except subprocess.TimeoutExpired as exc:
-        return cli_timeout_message("qwen", exc), actual_cid
-    except Exception as exc:
-        return (
-            f"❌ **Execution Error**: Failed to run Qwen Code CLI for local model `{raw_model_id}`. "
-            f"Details: `{str(exc)}`",
-            actual_cid,
-        )
+        with dsh_patch_file(url, raw_model_id, thinking=thinking_control, env=env) as patch_path:
+            cmd = build_dsh_command(
+                dsh_path,
+                patch_path,
+                target=target,
+                conversation_id=run_conversation_id,
+            )
+            result = run_agent_command(
+                cmd,
+                cwd_path,
+                timeout=AGY_CLI_TIMEOUT,
+                progress_callback=progress_callback,
+                progress_line_classifier=classify_progress,
+                raw_line_callback=capture_dsh_line,
+                stdin_text=prompt_text,
+                env=env,
+                cancel_event=cancel_event,
+            )
+        parsed = parse_dsh_stream_json(result.stdout or "")
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": parsed["final_message"] or stream_result["final_message"],
+            "errors": parsed["errors"] or stream_result["errors"],
+        }
+
+    return _run_local_harness_session(
+        cli_id="dsh",
+        cli_label="DeepSeek Harness",
+        message=message,
+        raw_model_id=raw_model_id,
+        project_id=project_id,
+        cwd_path=cwd_path,
+        conversation_id=conversation_id,
+        actual_cid=actual_cid,
+        mapping_key=mapping_key,
+        get_session_id=dsh_session_id,
+        make_conversation_id=make_dsh_conversation_id,
+        recoverable_phrases=(
+            "does not exist",
+            "session not found",
+            "was recorded in",
+            "cannot be adopted",
+            "is live in this process",
+            "must not be blank",
+        ),
+        fresh_session_notice="DeepSeek Harness session was unavailable; starting a fresh session.",
+        execute_fn=execute,
+        progress_callback=progress_callback,
+    )
 
 
 def run_local_llm(message, model_name, conversation_id, workspace,
@@ -4394,6 +4562,17 @@ def run_local_llm(message, model_name, conversation_id, workspace,
     model = resolve_catalog_model(load_runtime_model_catalog(), model_name)
     if not model or model["provider"] != "local":
         raise ValueError("Local model is unavailable. Start it in your inference server and refresh models.")
+    if should_use_dsh_harness():
+        return run_dsh_local_cli(
+            message,
+            model,
+            conversation_id,
+            target=target,
+            workspace=workspace,
+            thinking=thinking,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
     if should_use_qwen_harness():
         return run_qwen_local_cli(
             message,

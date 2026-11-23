@@ -15,3 +15,4 @@ psutil>=5.9.0
 # kookai-cli: deepseek
 # kookai-cli: zai
 # kookai-cli: qwen
+# kookai-cli: dsh

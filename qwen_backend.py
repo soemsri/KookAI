@@ -24,6 +24,7 @@ from typing import Any, Optional
 QWEN_CONVERSATION_PREFIX = "local_qwen_"
 LOCAL_HARNESS_ENV = "KOOKAI_LOCAL_HARNESS"
 LOCAL_HARNESS_DISABLED_VALUES = {"none", "direct", "off", "0", "false"}
+LOCAL_HARNESS_DSH_VALUES = {"dsh", "deepseek-harness", "deepseek_harness"}
 
 
 def local_harness_mode() -> str:
@@ -31,6 +32,8 @@ def local_harness_mode() -> str:
     raw = os.environ.get(LOCAL_HARNESS_ENV, "qwen").strip().lower()
     if raw in LOCAL_HARNESS_DISABLED_VALUES:
         return "none"
+    if raw in LOCAL_HARNESS_DSH_VALUES:
+        return "dsh"
     return "qwen"
 
 

@@ -2033,10 +2033,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const ready = data.status === "ready" && data.models.length > 0;
         localConnectionStatus.textContent = ready ? "Connected" : "No models";
         localConnectionStatus.className = `cli-status-pill ${ready ? "installed" : "missing"}`;
+        const harnessId = data.harness?.id;
+        const harnessName = data.harness?.name || (harnessId === "dsh" ? "DeepSeek Harness" : "Qwen Code");
+        const harnessModeNote = harnessId === "dsh"
+          ? "Workspace tools enabled via DeepSeek Harness (Sandbox: workspace-write; Real: full access)."
+          : "Workspace tools enabled via Qwen Code harness (Sandbox: file edits; Real: file edits + shell).";
         localConnectionMessage.textContent = ready
           ? (data.harness?.enabled
-            ? `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. Workspace tools enabled via Qwen Code harness (Sandbox: file edits; Real: file edits + shell).`
-            : `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. Text chat only; install Qwen Code CLI below to enable workspace tools.`)
+            ? `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. ${harnessModeNote}`
+            : `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. Text chat only; install ${harnessName} CLI below to enable workspace tools.`)
           : "No models found. Start the local server and load a model, then try Connect again. To use another address, set KOOKAI_LOCAL_LLM_URL in the server’s .env and restart KookAI.";
         localConnectionMessage.classList.toggle("error", !ready);
       }
@@ -2139,7 +2144,8 @@ document.addEventListener("DOMContentLoaded", () => {
     muse: "MU",
     claude: "CL",
     codex: "CX",
-    qwen: "QW"
+    qwen: "QW",
+    dsh: "DH"
   };
 
   function renderCliStatuses(payload) {

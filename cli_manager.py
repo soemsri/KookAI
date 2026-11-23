@@ -139,6 +139,16 @@ CLI_DEFINITIONS: dict[str, CliDefinition] = {
         connect_help="Launches Qwen Code for optional account sign-in. Local LLM models use KookAI's Local LLM endpoint automatically.",
         env_path="QWEN_CLI_PATH",
     ),
+    "dsh": CliDefinition(
+        cli_id="dsh",
+        name="DeepSeek Harness",
+        executable="dsh",
+        install_kind="npm",
+        install_source="@deepseek-ai/dsh",
+        connect_args=(),
+        connect_help="DeepSeek Harness (dsh) runs Local LLM models against KookAI's Local LLM endpoint automatically.",
+        env_path="DSH_CLI_PATH",
+    ),
 }
 
 _install_lock = threading.Lock()
@@ -200,6 +210,7 @@ def _known_cli_candidates(definition: CliDefinition) -> list[str]:
         if os.name != "nt":
             candidates.extend(
                 [
+                    os.path.join("/opt/homebrew/bin", executable_name),
                     os.path.join("/usr/local/bin", executable_name),
                     os.path.join("/usr/bin", executable_name),
                 ]
