@@ -11,7 +11,14 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
+
+try:
+    import tomllib
+except ImportError:  # Python 3.10 can still use seeds and the other providers.
+    tomllib = None
 
 from model_catalog import (
     ModelCatalogError,
@@ -25,6 +32,148 @@ LOGGER = logging.getLogger(__name__)
 
 _sync_lock = threading.Lock()
 _last_auto_sync_time: float = 0.0
+
+DISCOVERY_TIMEOUT_SECONDS = 6
+PUBLIC_MODEL_REGISTRY_URL = "https://models.dev/api.json"
+
+
+def _validated_candidate(candidate: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Do not let one malformed upstream entry invalidate the whole catalog."""
+    try:
+        validate_model_catalog({
+            "schema_version": 1, "catalog_version": "discovery",
+            "default_model": candidate["id"], "models": [candidate],
+        })
+        return candidate
+    except (ModelCatalogError, KeyError, TypeError, ValueError):
+        return None
+
+
+def parse_public_registry_models(payload: Any) -> list[dict[str, Any]]:
+    """Import coding-capable public models, not account availability or credentials.
+
+    Codex and AGY use their CLI catalogs. Kimi requires *configured aliases*,
+    so public API model IDs must not be passed to its --model option.
+    """
+    if not isinstance(payload, dict):
+        return []
+    routes = {
+        "anthropic": ("claude", "Claude", "claude", "claude-", {"low", "medium", "high", "xhigh", "max"}),
+        "meta": ("muse", "Muse", "muse", "muse-", {"low", "medium", "high"}),
+        "deepseek": ("deepseek", "DeepSeek", "deepseek", "deepseek-", set()),
+        "xai": ("xai", "Grok", "xai", "grok-", {"low", "medium", "high"}),
+        "zai-coding-plan": ("zai", "GLM", "zai", "glm-", set()),
+    }
+    result = []
+    for source, (provider, badge, bucket, prefix, supported_efforts) in routes.items():
+        block = payload.get(source)
+        entries = block.get("models") if isinstance(block, dict) else None
+        if not isinstance(entries, dict):
+            continue
+        for key, entry in entries.items():
+            if not isinstance(entry, dict):
+                continue
+            slug = entry.get("id", key)
+            modalities = entry.get("modalities")
+            if (not isinstance(slug, str) or not slug.startswith(prefix)
+                    or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", slug)
+                    or entry.get("status") in ("deprecated", "alpha", "retired")
+                    or entry.get("type") not in (None, "text", "chat", "language")
+                    or entry.get("tool_call") is not True
+                    or not isinstance(modalities, dict)
+                    or not isinstance(modalities.get("output"), list)
+                    or "text" not in modalities["output"]):
+                continue
+            label = entry.get("name") or slug
+            if not isinstance(label, str):
+                continue
+            effort = []
+            options = entry.get("reasoning_options")
+            for option in options if isinstance(options, list) else []:
+                if not isinstance(option, dict) or option.get("type") != "effort":
+                    continue
+                values = option.get("values")
+                for value in values if isinstance(values, list) else []:
+                    if isinstance(value, str) and value in supported_efforts:
+                        mapped = "Extra" if value == "xhigh" else value.title()
+                        if mapped and mapped not in effort:
+                            effort.append(mapped)
+            # Only expose controls actually accepted by this project's adapters.
+            thinking = entry.get("reasoning") is True and provider in {"claude", "xai", "muse"}
+            candidate = _validated_candidate({
+                "id": label, "label": label,
+                "description": f"{badge} model from the public models.dev registry",
+                "provider": provider,
+                "cli_model": f"zai-coding-plan/{slug}" if provider == "zai" else slug,
+                "badge": badge, "usage_bucket": bucket, "enabled": True,
+                "capabilities": {"effort": effort, "speed": [], "thinking": thinking,
+                                 "thinking_required": thinking and provider in {"xai", "muse"}},
+            })
+            if candidate:
+                result.append(candidate)
+    return result
+
+
+def discover_public_registry_models() -> list[dict[str, Any]]:
+    """Fetch a bounded public catalog without transmitting user credentials."""
+    try:
+        request = urllib.request.Request(PUBLIC_MODEL_REGISTRY_URL, headers={
+            "User-Agent": "KookAI/1.0 (model-discovery)", "Accept": "application/json",
+        })
+        with urllib.request.urlopen(request, timeout=DISCOVERY_TIMEOUT_SECONDS) as response:
+            data = response.read(16 * 1024 * 1024 + 1)
+        if len(data) > 16 * 1024 * 1024:
+            raise ValueError("Public model registry exceeds size limit")
+        return parse_public_registry_models(json.loads(data))
+    except Exception as exc:
+        LOGGER.debug("Public model registry unavailable (%s); retaining cached models", type(exc).__name__)
+        return []
+
+
+def discover_codex_live_models() -> list[dict[str, Any]]:
+    """Use the existing read-only app-server transport; never start an AI turn."""
+    from codex_backend import _codex_app_server_exchange, _codex_initialize_message
+
+    models = []
+    cursor = None
+    seen_cursors = set()
+    deadline = time.monotonic() + DISCOVERY_TIMEOUT_SECONDS
+    try:
+        while time.monotonic() < deadline:
+            params = {"limit": 100, "includeHidden": False}
+            if cursor:
+                params["cursor"] = cursor
+            replies = _codex_app_server_exchange([
+                _codex_initialize_message(),
+                {"jsonrpc": "2.0", "method": "initialized", "params": {}},
+                {"jsonrpc": "2.0", "id": "models", "method": "model/list", "params": params},
+            ], {"models"}, timeout_seconds=max(0.01, deadline - time.monotonic()))
+            result = replies.get("models", {}).get("result", {})
+            entries = result.get("data", []) if isinstance(result, dict) else []
+            for entry in entries if isinstance(entries, list) else []:
+                if not isinstance(entry, dict) or entry.get("hidden") is True:
+                    continue
+                efforts = entry.get("supportedReasoningEfforts")
+                parsed = parse_codex_cache_entry({
+                    "slug": entry.get("model"), "display_name": entry.get("displayName") or "",
+                    "description": entry.get("description") or "Codex model from the installed CLI",
+                    "supported_reasoning_levels": [
+                        {"effort": value.get("reasoningEffort")}
+                        for value in (efforts if isinstance(efforts, list) else []) if isinstance(value, dict)
+                    ],
+                })
+                if parsed and _validated_candidate(parsed):
+                    # Missing effort metadata must not invent model capabilities.
+                    if not efforts:
+                        parsed["capabilities"]["effort"] = []
+                    models.append(parsed)
+            cursor = result.get("nextCursor") if isinstance(result, dict) else None
+            if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                break
+            seen_cursors.add(cursor)
+    except Exception as exc:
+        LOGGER.debug("Codex live model listing unavailable (%s); using cache", type(exc).__name__)
+    return models
 
 # ---------------------------------------------------------------------------
 # Seed registries for all supported providers
@@ -1075,7 +1224,9 @@ def discover_codex_models(cache_path: Optional[str] = None) -> list[dict[str, An
     for model in KNOWN_CODEX_MODELS:
         discovered[model["cli_model"]] = copy.deepcopy(model)
 
-    target_path = cache_path or os.path.expanduser("~/.codex/models_cache.json")
+    target_path = cache_path or os.path.join(
+        os.path.expanduser(os.environ.get("CODEX_HOME", "~/.codex")), "models_cache.json"
+    )
     if os.path.isfile(target_path):
         try:
             with open(target_path, "r", encoding="utf-8") as f:
@@ -1313,6 +1464,36 @@ def discover_kimi_models(config_path: Optional[str] = None) -> list[dict[str, An
     for model in KNOWN_KIMI_MODELS:
         discovered[model["cli_model"]] = copy.deepcopy(model)
 
+    target = config_path or os.path.join(
+        os.path.expanduser(os.environ.get("KIMI_CODE_HOME", "~/.kimi-code")), "config.toml"
+    )
+    if tomllib is not None and os.path.isfile(target):
+        try:
+            with open(target, "rb") as handle:
+                config = tomllib.load(handle)
+            # Never copy provider credentials, endpoints, or arbitrary config into the catalog.
+            entries = config.get("models", {})
+            for alias, entry in entries.items() if isinstance(entries, dict) else []:
+                if not isinstance(entry, dict) or not isinstance(alias, str) or alias.startswith("-"):
+                    continue
+                slug = entry.get("model")
+                provider = entry.get("provider", "")
+                if not isinstance(slug, str) or not isinstance(provider, str):
+                    continue
+                if not ("kimi" in provider.lower() or slug.startswith(("kimi-", "k2", "k3"))):
+                    continue
+                candidate = _validated_candidate({
+                    "id": f"Kimi {alias}", "label": f"Kimi {alias}",
+                    "description": "Configured Kimi Code model alias",
+                    "provider": "kimi", "cli_model": alias, "badge": "Kimi",
+                    "usage_bucket": "gpt", "enabled": True,
+                    "capabilities": {"effort": [], "speed": [], "thinking": False, "thinking_required": False},
+                })
+                if candidate:
+                    discovered[alias] = candidate
+        except Exception as exc:
+            LOGGER.debug("Kimi model aliases unavailable (%s)", type(exc).__name__)
+
     return list(discovered.values())
 
 
@@ -1375,14 +1556,18 @@ def discover_all_models() -> list[dict[str, Any]]:
         ("Muse", discover_muse_models),
         ("DeepSeek", discover_deepseek_models),
         ("Z.ai", discover_zai_models),
+        ("Codex live", discover_codex_live_models),
+        ("Public registry", discover_public_registry_models),
     ]
 
-    for name, handler in discovery_handlers:
-        try:
-            items = handler()
-            candidates.extend(items)
-        except Exception as exc:
-            LOGGER.debug("Error discovering %s models: %s", name, exc)
+    # Keep provider/result ordering stable while independent bounded I/O runs in parallel.
+    with ThreadPoolExecutor(max_workers=len(discovery_handlers), thread_name_prefix="model-discovery") as pool:
+        pending = [(name, pool.submit(handler)) for name, handler in discovery_handlers]
+        for name, future in pending:
+            try:
+                candidates.extend(future.result())
+            except Exception as exc:
+                LOGGER.debug("Error discovering %s models (%s)", name, type(exc).__name__)
 
     return candidates
 

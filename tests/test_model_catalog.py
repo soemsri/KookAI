@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import tempfile
@@ -25,6 +26,21 @@ PROJECT_CATALOG_PATH = os.path.join(
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def test_discovery_can_grow_past_legacy_hundred_model_limit(self):
+        catalog = load_model_catalog(PROJECT_CATALOG_PATH)
+        template = catalog["models"][0]
+        catalog["models"] = []
+        for index in range(1001):
+            model = copy.deepcopy(template)
+            model.update(id=f"Model {index}", label=f"Model {index}", cli_model=f"model-{index}")
+            catalog["models"].append(model)
+        catalog["default_model"] = "Model 0"
+        for count in (101, 1000):
+            with self.subTest(count=count):
+                self.assertEqual(len(validate_model_catalog({**catalog, "models": catalog["models"][:count]})["models"]), count)
+        with self.assertRaises(ModelCatalogError):
+            validate_model_catalog(catalog)
+
     def test_shipped_catalog_is_valid_and_has_enabled_default(self):
         catalog = load_model_catalog(PROJECT_CATALOG_PATH)
         default_model = resolve_catalog_model(catalog, catalog["default_model"])
@@ -141,7 +157,9 @@ class ModelCatalogApiTests(unittest.TestCase):
         )
 
     def test_model_catalog_endpoint_returns_enabled_models(self):
-        response = asyncio.run(main.get_models(self.request()))
+        # This schema test must not discover models or write the real host catalog.
+        with mock.patch.object(main, "model_catalog_sync_task", return_value=None):
+            response = asyncio.run(main.get_models(self.request()))
         payload = json.loads(response.body)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(payload["schema_version"], 1)

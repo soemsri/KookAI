@@ -650,17 +650,60 @@ class CreateProjectRequest(BaseModel):
     name: str
 
 
+MODEL_CATALOG_REFRESH_SECONDS = 60
+MODEL_CATALOG_WAIT_SECONDS = 8
+_model_catalog_sync_task: Optional[asyncio.Task] = None
+_model_catalog_sync_path: Optional[str] = None
+_last_models_sync_check_time: float = 0.0
+
+
+def model_catalog_sync_task(*, force: bool = False) -> Optional[asyncio.Task]:
+    """Share discovery across app launches, manual refreshes and server timers.
+
+    The coordinator owns the cooldown, so every actual worker is forced. A
+    manual refresh can therefore never join a worker that merely skips work
+    because of the lower-level discovery cache.
+    """
+    global _model_catalog_sync_task, _model_catalog_sync_path
+    catalog_target = resolve_writable_model_catalog_path()
+    task = _model_catalog_sync_task
+    same_path = _model_catalog_sync_path == catalog_target
+    if same_path and task is not None and not task.done():
+        return task
+    if (
+        not force
+        and same_path
+        and time.monotonic() - _last_models_sync_check_time < MODEL_CATALOG_REFRESH_SECONDS
+    ):
+        return None
+
+    task = asyncio.create_task(asyncio.to_thread(
+        sync_model_catalog, catalog_target, force=True,
+    ))
+    _model_catalog_sync_task = task
+    _model_catalog_sync_path = catalog_target
+
+    def completed(done: asyncio.Task) -> None:
+        global _last_models_sync_check_time
+        if done.cancelled():
+            return
+        if _model_catalog_sync_task is done:
+            _last_models_sync_check_time = time.monotonic()
+        # Retrieve exceptions even if all HTTP callers timed out/disconnected.
+        error = done.exception()
+        if error is not None:
+            logging.warning("Model catalog refresh failed; retaining cached models: %s", error)
+
+    task.add_done_callback(completed)
+    return task
+
+
 async def periodic_model_catalog_sync_loop(interval_seconds: int = 1800):
     """Periodically check for newly released or cached models in the background."""
     while True:
         try:
             await asyncio.sleep(interval_seconds)
-            catalog_target = resolve_writable_model_catalog_path()
-            catalog, updated = await asyncio.to_thread(
-                sync_model_catalog,
-                catalog_target,
-                force=True,
-            )
+            catalog, updated = await asyncio.shield(model_catalog_sync_task(force=True))
             if updated:
                 logging.info(
                     "Background sync updated model catalog to version %s (%d models)",
@@ -676,13 +719,8 @@ async def periodic_model_catalog_sync_loop(interval_seconds: int = 1800):
 @app.on_event("startup")
 async def startup_event():
     # Auto-sync model catalog with newly discovered models from providers on boot
-    catalog_target = resolve_writable_model_catalog_path()
     try:
-        await asyncio.to_thread(
-            sync_model_catalog,
-            catalog_target,
-            force=True,
-        )
+        await asyncio.shield(model_catalog_sync_task(force=True))
     except Exception as exc:
         logging.warning("Initial model catalog sync failed: %s", exc)
 
@@ -1040,9 +1078,6 @@ async def connect_harness_profile_endpoint(profile_id: str, req_raw: Request):
     )
 
 
-_last_models_sync_check_time: float = 0.0
-
-
 @app.get("/api/models")
 async def get_models(request: Request, include_disabled: bool = False):
     verify_authorization(request)
@@ -1052,25 +1087,26 @@ async def get_models(request: Request, include_disabled: bool = False):
             detail="Local access is required to view disabled models",
         )
 
-    # Throttle non-blocking auto-sync check (every 5 minutes)
-    global _last_models_sync_check_time
-    now = time.time()
-    if now - _last_models_sync_check_time > 300:
-        _last_models_sync_check_time = now
-        catalog_target = resolve_writable_model_catalog_path()
-        asyncio.create_task(
-            asyncio.to_thread(
-                sync_model_catalog,
-                catalog_target,
-                force=False,
-            )
-        )
+    # Installed mobile clients already GET this endpoint on launch. Wait for
+    # fresh discovery instead of returning the old list before it completes.
+    # Keep startup bounded, and let the shared worker finish after a timeout.
+    sync_status = "cached"
+    try:
+        task = model_catalog_sync_task()
+        if task is not None:
+            await asyncio.wait_for(asyncio.shield(task), timeout=MODEL_CATALOG_WAIT_SECONDS)
+            sync_status = "complete"
+    except asyncio.TimeoutError:
+        sync_status = "pending"
+    except Exception:
+        sync_status = "failed"
 
     try:
         catalog = load_runtime_model_catalog()
     except ModelCatalogError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return JSONResponse(
+        headers={"Cache-Control": "no-store", "X-KookAI-Model-Sync": sync_status},
         content=public_model_catalog(
             catalog,
             include_disabled=include_disabled,
@@ -1081,13 +1117,8 @@ async def get_models(request: Request, include_disabled: bool = False):
 @app.post("/api/models/sync")
 async def sync_models_endpoint(request: Request):
     verify_authorization(request)
-    catalog_target = resolve_writable_model_catalog_path()
     try:
-        catalog, updated = await asyncio.to_thread(
-            sync_model_catalog,
-            catalog_target,
-            force=True,
-        )
+        catalog, updated = await asyncio.shield(model_catalog_sync_task(force=True))
         return JSONResponse(
             content={
                 "status": "success",

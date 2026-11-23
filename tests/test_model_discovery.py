@@ -24,6 +24,127 @@ from model_catalog import (
 
 
 class ModelDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        # Unit tests must not depend on the current public registry or account.
+        self.urlopen = mock.patch.object(model_discovery.urllib.request, "urlopen", side_effect=TimeoutError)
+        self.exchange = mock.patch.object(codex_backend, "_codex_app_server_exchange", return_value={})
+        self.urlopen.start()
+        self.exchange.start()
+        self.addCleanup(self.urlopen.stop)
+        self.addCleanup(self.exchange.stop)
+
+    @staticmethod
+    def registry_entry(slug, **overrides):
+        return {
+            "id": slug, "name": slug, "tool_call": True,
+            "modalities": {"input": ["text"], "output": ["text"]},
+            **overrides,
+        }
+
+    def test_public_registry_discovers_supported_cli_routes(self):
+        payload = {key: {"models": {slug: self.registry_entry(slug)}} for key, slug in [
+            ("anthropic", "claude-new"), ("meta", "muse-new"),
+            ("deepseek", "deepseek-new"), ("xai", "grok-new"),
+            ("zai-coding-plan", "glm-new"),
+        ]}
+        models = model_discovery.parse_public_registry_models(payload)
+        self.assertEqual({m["provider"] for m in models}, {"claude", "muse", "deepseek", "xai", "zai"})
+        self.assertEqual(next(m for m in models if m["provider"] == "zai")["cli_model"], "zai-coding-plan/glm-new")
+        for model in models:
+            validate_model_catalog({"schema_version": 1, "catalog_version": "test", "default_model": model["id"], "models": [model]})
+
+    def test_public_registry_rejects_non_chat_deprecated_and_malformed_models(self):
+        entries = {
+            "good": self.registry_entry("claude-good"),
+            "old": self.registry_entry("claude-old", status="deprecated"),
+            "alpha": self.registry_entry("claude-alpha", status="alpha"),
+            "image": self.registry_entry("claude-image", modalities={"output": ["image"]}),
+            "realtime": self.registry_entry("claude-realtime", type="realtime"),
+            "tools": self.registry_entry("claude-no-tools", tool_call=False),
+            "bad": self.registry_entry("--bad-model"),
+            "malformed": None,
+        }
+        models = model_discovery.parse_public_registry_models({"anthropic": {"models": entries}, "meta": None})
+        self.assertEqual([m["cli_model"] for m in models], ["claude-good"])
+
+    def test_public_registry_caps_efforts_to_backend_contract(self):
+        models = model_discovery.parse_public_registry_models({"meta": {"models": {"muse-new": self.registry_entry(
+            "muse-new", reasoning=True,
+            reasoning_options=[{"type": "effort", "values": ["minimal", "low", "high", "max"]}],
+        )}}})
+        self.assertEqual(models[0]["capabilities"]["effort"], ["Low", "High"])
+
+    def test_public_claude_efforts_use_mobile_compatible_extra_label(self):
+        models = model_discovery.parse_public_registry_models({"anthropic": {"models": {"claude-new": self.registry_entry(
+            "claude-new", reasoning=True,
+            reasoning_options=[{"type": "effort", "values": ["low", "medium", "high", "xhigh", "max"]}],
+        )}}})
+        self.assertEqual(models[0]["capabilities"]["effort"], ["Low", "Medium", "High", "Extra", "Max"])
+
+    def test_public_registry_network_failure_keeps_seed_discovery_available(self):
+        with mock.patch.object(model_discovery.urllib.request, "urlopen", side_effect=TimeoutError):
+            self.assertEqual(model_discovery.discover_public_registry_models(), [])
+
+    def test_public_registry_fetch_uses_bounded_request_with_user_agent(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"anthropic":{"models":{}}}'
+        with mock.patch.object(model_discovery.urllib.request, "urlopen", return_value=response) as fetch:
+            self.assertEqual(model_discovery.discover_public_registry_models(), [])
+        self.assertEqual(fetch.call_args.kwargs["timeout"], 6)
+        self.assertIn("KookAI", fetch.call_args.args[0].get_header("User-agent"))
+
+    def test_kimi_reads_real_aliases_without_guessing_registry_routes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "config.toml")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('[models."custom-kimi/k3.1-pro"]\nprovider="managed:kimi-code"\nmodel="k3.1-pro"\n')
+            models = model_discovery.discover_kimi_models(config_path=path)
+        self.assertIn("custom-kimi/k3.1-pro", [m["cli_model"] for m in models])
+        self.assertNotIn("kimi-for-coding/k3.1-pro", [m["cli_model"] for m in models])
+
+    def test_codex_live_listing_maps_protocol_and_skips_hidden(self):
+        replies = {"models": {"result": {"data": [
+            {"model": "gpt-new-sol", "displayName": "GPT New Sol", "hidden": False,
+             "supportedReasoningEfforts": [{"reasoningEffort": "high"}]},
+            {"model": "gpt-hidden", "hidden": True},
+        ], "nextCursor": None}}}
+        with mock.patch.object(codex_backend, "_codex_app_server_exchange", return_value=replies) as exchange:
+            models = model_discovery.discover_codex_live_models()
+        self.assertEqual([m["cli_model"] for m in models], ["gpt-new-sol"])
+        self.assertEqual(models[0]["capabilities"]["effort"], ["High"])
+        self.assertTrue(any(m.get("method") == "model/list" for m in exchange.call_args.args[0]))
+        self.assertLessEqual(exchange.call_args.kwargs["timeout_seconds"], 6)
+
+    def test_codex_live_listing_failure_keeps_cache_source_independent(self):
+        with mock.patch.object(codex_backend, "_codex_app_server_exchange", side_effect=OSError):
+            self.assertEqual(model_discovery.discover_codex_live_models(), [])
+        self.assertTrue(model_discovery.discover_codex_models(cache_path="/nonexistent"))
+
+    def test_codex_live_listing_follows_cursor_without_inventing_efforts(self):
+        replies = [
+            {"models": {"result": {"data": [{"model": "gpt-first"}], "nextCursor": "page2"}}},
+            {"models": {"result": {"data": [{"model": "gpt-second"}], "nextCursor": None}}},
+        ]
+        with mock.patch.object(codex_backend, "_codex_app_server_exchange", side_effect=replies) as exchange:
+            models = model_discovery.discover_codex_live_models()
+        self.assertEqual([m["cli_model"] for m in models], ["gpt-first", "gpt-second"])
+        self.assertEqual(models[0]["capabilities"]["effort"], [])
+        self.assertEqual(exchange.call_args.args[0][-1]["params"]["cursor"], "page2")
+
+    def test_kimi_invalid_config_preserves_seed_models(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "config.toml")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("[[broken")
+            self.assertTrue(model_discovery.discover_kimi_models(config_path=path))
+
+    def test_one_discovery_failure_does_not_drop_other_providers(self):
+        with mock.patch.object(model_discovery, "discover_agy_models", side_effect=RuntimeError), \
+                mock.patch.object(model_discovery, "discover_grok_models", return_value=model_discovery.KNOWN_GROK_MODELS):
+            models = model_discovery.discover_all_models()
+        self.assertIn("claude", {m["provider"] for m in models})
+        self.assertIn("xai", {m["provider"] for m in models})
+
     def test_normalize_codex_label(self):
         self.assertEqual(model_discovery.normalize_codex_label("gpt-6.1-sol", "GPT-6.1-Sol"), "6.1 Sol")
         self.assertEqual(model_discovery.normalize_codex_label("gpt-6-sol", "GPT-6-Sol"), "6 Sol")
