@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import time
+import urllib.parse
 from functools import lru_cache
 from typing import Any, Optional
 
@@ -170,6 +171,7 @@ CLAUDE_MODEL_EFFORTS = {
 }
 
 CLAUDE_CONVERSATION_PREFIX = "claude_"
+LOCAL_CLAUDE_CONVERSATION_PREFIX = "local_claude_"
 
 
 def configure_claude_catalog(models: list[dict[str, Any]]) -> None:
@@ -294,6 +296,17 @@ def make_claude_conversation_id(session_id: str) -> str:
     return f"{CLAUDE_CONVERSATION_PREFIX}{session_id}"
 
 
+def local_claude_session_id(conversation_id: Optional[str]) -> Optional[str]:
+    if conversation_id and conversation_id.startswith(LOCAL_CLAUDE_CONVERSATION_PREFIX):
+        session_id = conversation_id[len(LOCAL_CLAUDE_CONVERSATION_PREFIX) :].strip()
+        return session_id or None
+    return None
+
+
+def make_local_claude_conversation_id(session_id: str) -> str:
+    return f"{LOCAL_CLAUDE_CONVERSATION_PREFIX}{session_id}"
+
+
 def _is_runnable_claude(path: str) -> bool:
     if not path:
         return False
@@ -339,6 +352,83 @@ def resolve_claude_executable() -> str:
         "No runnable Claude Code CLI was found. Install it, authenticate it, "
         "or set CLAUDE_CLI_PATH."
     )
+
+
+def is_claude_available() -> bool:
+    try:
+        return bool(resolve_claude_executable())
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def should_use_claude_local_harness() -> bool:
+    from qwen_backend import local_harness_mode
+
+    return local_harness_mode() == "claude" and is_claude_available()
+
+
+def normalize_local_anthropic_base_url(base_url: str) -> str:
+    parsed = urllib.parse.urlsplit((base_url or "").strip())
+    path = parsed.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3].rstrip("/")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def build_local_claude_command(
+    claude_path: str,
+    prompt: str,
+    raw_model_id: str,
+    target: str = "Sandbox",
+    conversation_id: Optional[str] = None,
+) -> list[str]:
+    """Build a headless Claude Code command for a Local LLM server (prompt on stdin)."""
+    del prompt
+    command = [
+        claude_path,
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--model",
+        raw_model_id,
+    ]
+    session_id = local_claude_session_id(conversation_id)
+    if session_id:
+        command.extend(["--resume", session_id])
+    if (target or "Sandbox").strip().lower() in {"real", "unrestricted"}:
+        command.append("--dangerously-skip-permissions")
+    else:
+        command.extend(["--permission-mode", "dontAsk"])
+    return command
+
+
+def build_local_claude_environment(
+    base_url: str,
+    raw_model_id: str,
+    api_key: str = "",
+    thinking: Optional[bool] = None,
+) -> dict[str, str]:
+    """Build subprocess environment pointing Claude Code at a local Anthropic-compatible server."""
+    del raw_model_id
+    env = os.environ.copy()
+    env["ANTHROPIC_BASE_URL"] = normalize_local_anthropic_base_url(base_url)
+    token = (api_key or "").strip() or "local"
+    env["ANTHROPIC_AUTH_TOKEN"] = token
+    env["ANTHROPIC_API_KEY"] = token
+    for var in (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_DISABLE_THINKING",
+    ):
+        env.pop(var, None)
+    env["NO_BROWSER"] = "1"
+    if thinking is False:
+        env["MAX_THINKING_TOKENS"] = "0"
+    elif thinking is True:
+        env.pop("MAX_THINKING_TOKENS", None)
+    return env
 
 
 def build_claude_command(
@@ -578,6 +668,8 @@ def classify_claude_progress_line(source: str, line: str) -> Optional[dict[str, 
     event_type = event.get("type")
     if event_type == "system" and event.get("subtype") == "init":
         return {"type": "progress", "message": "Claude session started."}
+    if event_type == "system" and event.get("subtype") == "thinking_tokens":
+        return {"type": "progress", "message": "Claude is thinking..."}
     if event_type == "assistant":
         message = event.get("message")
         content = message.get("content") if isinstance(message, dict) else []

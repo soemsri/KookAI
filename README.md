@@ -195,6 +195,21 @@ OpenAI-compatible endpoints):
   via `--session-id` (with canonical history fallback if a prior session cannot
   be adopted).
 
+When `KOOKAI_LOCAL_HARNESS=claude` is set in `.env` and **Claude Code**
+(`claude` CLI) is installed, KookAI runs Local LLM models through
+`claude -p --output-format stream-json --verbose --model <raw_model_id>` with
+`ANTHROPIC_BASE_URL` normalized without a trailing `/v1` and both
+`ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` set from
+`KOOKAI_LOCAL_LLM_API_KEY` (or `"local"` when empty) for compatibility with
+vLLM and other Anthropic-compatible local servers:
+
+- **Sandbox target (`--permission-mode dontAsk`)**: allows safe non-interactive
+  operations without prompting.
+- **Real target (`--dangerously-skip-permissions`)**: enables unrestricted
+  workspace and shell access.
+- **Session resume**: sessions persist under `local_claude_<session_id>` and
+  resume via `--resume` (with canonical history fallback if unavailable).
+
 - **Fallback / opt-out**: if the selected harness CLI is unavailable or
   `KOOKAI_LOCAL_HARNESS=none` is set in `.env`, KookAI falls back to direct
   text-only `chat/completions`.

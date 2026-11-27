@@ -75,6 +75,26 @@ class LocalConnectionAPITests(unittest.TestCase):
             },
         )
 
+    def test_connect_reports_claude_harness_when_configured(self):
+        with patch.dict(os.environ, {"KOOKAI_LOCAL_HARNESS": "claude"}), \
+             patch.object(local_backend, "_request", return_value=iter([{"data": [{"id": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp"}]}])), \
+             patch.object(main, "is_claude_available", return_value=True), \
+             patch.object(main, "should_use_claude_local_harness", return_value=True):
+            response = self.client.post("/api/local/connect")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "ready")
+        self.assertEqual(
+            data["harness"],
+            {
+                "id": "claude",
+                "name": "Claude Code",
+                "enabled": True,
+                "mode": "claude",
+                "installed": True,
+            },
+        )
+
     def test_offline_removes_previously_discovered_models(self):
         with patch.object(local_backend, "_request", return_value=iter([{"data": [{"id": "old-model"}]}])):
             self.assertTrue(local_backend.discover_local_models())

@@ -66,16 +66,23 @@ from codex_backend import (
 )
 from claude_backend import (
     CLAUDE_CONVERSATION_PREFIX,
+    LOCAL_CLAUDE_CONVERSATION_PREFIX,
     build_claude_command,
     build_claude_environment,
     build_claude_rate_limits,
+    build_local_claude_command,
+    build_local_claude_environment,
     classify_claude_progress_line,
     claude_session_id,
     configure_claude_catalog,
+    is_claude_available,
+    local_claude_session_id,
     make_claude_conversation_id,
+    make_local_claude_conversation_id,
     normalize_claude_effort,
     parse_claude_stream_json,
     resolve_claude_executable,
+    should_use_claude_local_harness,
 )
 from kimi_backend import (
     KIMI_CONVERSATION_PREFIX,
@@ -920,6 +927,7 @@ async def get_local_connection_status(request: Request):
 async def connect_local_llm(request: Request):
     verify_cli_admin(request)
     try:
+        resolve_claude_executable.cache_clear()
         resolve_qwen_executable.cache_clear()
         resolve_dsh_executable.cache_clear()
         url = local_llm_base_url()
@@ -929,7 +937,15 @@ async def connect_local_llm(request: Request):
     except (ValueError, ModelCatalogError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     mode = local_harness_mode()
-    if mode == "dsh":
+    if mode == "claude":
+        harness_info = {
+            "id": "claude",
+            "name": "Claude Code",
+            "enabled": should_use_claude_local_harness(),
+            "mode": mode,
+            "installed": is_claude_available(),
+        }
+    elif mode == "dsh":
         harness_info = {
             "id": "dsh",
             "name": "DeepSeek Harness",
@@ -1183,7 +1199,7 @@ async def get_models(request: Request, include_disabled: bool = False, include_l
         sync_status = "failed"
 
     try:
-        catalog = load_runtime_model_catalog()
+        catalog = await asyncio.to_thread(load_runtime_model_catalog)
     except ModelCatalogError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     # Older clients reject an unknown provider for the entire catalog.
@@ -4556,12 +4572,125 @@ def run_dsh_local_cli(
     )
 
 
+def run_claude_local_cli(
+    message: str,
+    model: dict,
+    conversation_id: str,
+    target: str = "Sandbox",
+    workspace: str = "agy",
+    thinking: bool = False,
+    progress_callback=None,
+    cancel_event=None,
+):
+    project_id = clean_project_name(workspace or "agy")
+    cwd_path = resolve_project_directory(project_id)
+    raw_model_id = model["cli_model"].removeprefix("local/")
+    url = local_llm_base_url()
+    api_key = os.environ.get("KOOKAI_LOCAL_LLM_API_KEY", "").strip()
+    mapping_key = f"local:{project_id}:{conversation_id}"
+    actual_cid = convo_id_mapping.get(mapping_key, conversation_id)
+
+    def execute(run_conversation_id: Optional[str], prompt_text: str):
+        stream_result = {"session_id": None, "final_message": "", "errors": []}
+        classify_progress = _make_throttled_progress_classifier(
+            classify_claude_progress_line,
+            {"Claude is thinking..."},
+        )
+
+        def capture_claude_line(source: str, line: str):
+            if source != "stdout":
+                return
+            parsed_line = parse_claude_stream_json(line)
+            if parsed_line["session_id"]:
+                stream_result["session_id"] = parsed_line["session_id"]
+            if parsed_line["final_message"]:
+                stream_result["final_message"] = parsed_line["final_message"]
+            for err in parsed_line["errors"]:
+                if err not in stream_result["errors"]:
+                    stream_result["errors"].append(err)
+
+        claude_path = resolve_claude_executable()
+        cmd = build_local_claude_command(
+            claude_path,
+            prompt_text,
+            raw_model_id,
+            target=target,
+            conversation_id=run_conversation_id,
+        )
+        thinking_control = thinking if model.get("capabilities", {}).get("thinking") else None
+        env = build_local_claude_environment(
+            url,
+            raw_model_id,
+            api_key=api_key,
+            thinking=thinking_control,
+        )
+        logging.info(
+            "Executing Claude Code CLI in %s for local model=%s target=%s resume=%s",
+            cwd_path,
+            raw_model_id,
+            target,
+            bool(local_claude_session_id(run_conversation_id)),
+        )
+        result = run_agent_command(
+            cmd,
+            cwd_path,
+            timeout=AGY_CLI_TIMEOUT,
+            progress_callback=progress_callback,
+            progress_line_classifier=classify_progress,
+            raw_line_callback=capture_claude_line,
+            stdin_text=prompt_text,
+            env=env,
+            cancel_event=cancel_event,
+        )
+        parsed = parse_claude_stream_json(result.stdout or "")
+        return result, {
+            "session_id": stream_result["session_id"] or parsed["session_id"],
+            "final_message": parsed["final_message"] or stream_result["final_message"],
+            "errors": parsed["errors"] or stream_result["errors"],
+        }
+
+    return _run_local_harness_session(
+        cli_id="claude",
+        cli_label="Claude Code",
+        message=message,
+        raw_model_id=raw_model_id,
+        project_id=project_id,
+        cwd_path=cwd_path,
+        conversation_id=conversation_id,
+        actual_cid=actual_cid,
+        mapping_key=mapping_key,
+        get_session_id=local_claude_session_id,
+        make_conversation_id=make_local_claude_conversation_id,
+        recoverable_phrases=(
+            "session not found",
+            "no conversation found",
+            "failed to resume",
+            "unable to resume",
+            "invalid session",
+        ),
+        fresh_session_notice="Claude Code session was unavailable; starting a fresh session.",
+        execute_fn=execute,
+        progress_callback=progress_callback,
+    )
+
+
 def run_local_llm(message, model_name, conversation_id, workspace,
                   thinking=False, image_paths=None, progress_callback=None, cancel_event=None,
                   target="Sandbox"):
     model = resolve_catalog_model(load_runtime_model_catalog(), model_name)
     if not model or model["provider"] != "local":
         raise ValueError("Local model is unavailable. Start it in your inference server and refresh models.")
+    if should_use_claude_local_harness():
+        return run_claude_local_cli(
+            message,
+            model,
+            conversation_id,
+            target=target,
+            workspace=workspace,
+            thinking=thinking,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
     if should_use_dsh_harness():
         return run_dsh_local_cli(
             message,

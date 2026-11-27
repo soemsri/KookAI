@@ -10,6 +10,7 @@ the installation details remain allow-listed in this module.
 
 from __future__ import annotations
 
+import concurrent.futures
 import glob
 import logging
 import os
@@ -152,6 +153,9 @@ CLI_DEFINITIONS: dict[str, CliDefinition] = {
 }
 
 _install_lock = threading.Lock()
+_probe_cache_lock = threading.Lock()
+_probe_version_cache: dict[str, tuple[float, str]] = {}
+_PROBE_VERSION_TTL_SECONDS = 5.0
 _runtime_state: dict[str, dict[str, str]] = {}
 
 
@@ -310,6 +314,9 @@ def resolve_cli_executable(cli_id: str) -> Optional[str]:
         except (OSError, subprocess.SubprocessError):
             continue
         if probe.returncode == 0:
+            version_line = _first_output_line(probe)
+            with _probe_cache_lock:
+                _probe_version_cache[normalized] = (time.monotonic(), version_line)
             return normalized
     return None
 
@@ -326,10 +333,19 @@ def inspect_cli(cli_id: str, *, required: bool = True) -> dict[str, Any]:
     executable = resolve_cli_executable(cli_id)
     version = ""
     if executable:
-        try:
-            version = _first_output_line(_run_probe(executable, ("--version",)))
-        except (OSError, subprocess.SubprocessError):
-            executable = None
+        normalized = os.path.abspath(executable)
+        cached_version: Optional[str] = None
+        with _probe_cache_lock:
+            entry = _probe_version_cache.get(normalized)
+            if entry and (time.monotonic() - entry[0]) < _PROBE_VERSION_TTL_SECONDS:
+                cached_version = entry[1]
+        if cached_version is not None:
+            version = cached_version
+        else:
+            try:
+                version = _first_output_line(_run_probe(executable, ("--version",)))
+            except (OSError, subprocess.SubprocessError):
+                executable = None
 
     state = _runtime_state.get(cli_id, {})
     installed = bool(executable)
@@ -352,7 +368,12 @@ def inspect_cli(cli_id: str, *, required: bool = True) -> dict[str, Any]:
 
 def get_cli_statuses(requirements_path: str) -> list[dict[str, Any]]:
     required_ids = parse_cli_requirements(requirements_path)
-    return [inspect_cli(cli_id, required=True) for cli_id in required_ids]
+    if len(required_ids) <= 1:
+        return [inspect_cli(cli_id, required=True) for cli_id in required_ids]
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(8, len(required_ids))
+    ) as executor:
+        return list(executor.map(lambda cid: inspect_cli(cid, required=True), required_ids))
 
 
 def _download_installer(url: str, suffix: str) -> str:

@@ -105,6 +105,13 @@ def _request(path, payload=None, cancel_event=None):
 
 def _local_model_description():
     try:
+        from claude_backend import should_use_claude_local_harness
+
+        if should_use_claude_local_harness():
+            return "Local LLM • Claude Code harness • workspace tools"
+    except Exception:
+        pass
+    try:
         from dsh_backend import should_use_dsh_harness
 
         if should_use_dsh_harness():

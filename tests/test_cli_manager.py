@@ -88,6 +88,8 @@ class AgentCommandTimeoutTests(unittest.TestCase):
 class CliManagerTests(unittest.TestCase):
     def setUp(self):
         cli_manager._runtime_state.clear()
+        with cli_manager._probe_cache_lock:
+            cli_manager._probe_version_cache.clear()
 
     def test_parse_cli_requirements_uses_pip_safe_comments(self):
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as file:
@@ -687,6 +689,38 @@ class CliApiTests(unittest.TestCase):
             self.assertEqual(run_mock.call_args.kwargs.get("timeout"), 25)
             cli_manager._run_probe("/usr/bin/codex", ("--version",))
             self.assertEqual(run_mock.call_args.kwargs.get("timeout"), 8)
+
+    def test_inspect_cli_reuses_probe_version_from_resolve(self):
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as file:
+            fake_exe = file.name
+        try:
+            with (
+                mock.patch.object(cli_manager, "_known_cli_candidates", return_value=[fake_exe]),
+                mock.patch.object(cli_manager, "_run_probe", return_value=completed(0, "tool 2.0")) as run_probe,
+            ):
+                status = cli_manager.inspect_cli("codex")
+            self.assertTrue(status["installed"])
+            self.assertEqual(status["version"], "tool 2.0")
+            run_probe.assert_called_once()
+        finally:
+            os.unlink(fake_exe)
+
+    def test_get_cli_statuses_preserves_order_concurrently(self):
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as file:
+            file.write("# kookai-cli: codex\n# kookai-cli: claude\n# kookai-cli: qwen\n")
+            req_path = file.name
+        try:
+            delays = {"codex": 0.04, "claude": 0.01, "qwen": 0.02}
+
+            def fake_inspect(cli_id, *, required=True):
+                time.sleep(delays[cli_id])
+                return {"id": cli_id, "required": required, "installed": True, "status": "installed"}
+
+            with mock.patch.object(cli_manager, "inspect_cli", side_effect=fake_inspect):
+                results = cli_manager.get_cli_statuses(req_path)
+            self.assertEqual([item["id"] for item in results], ["codex", "claude", "qwen"])
+        finally:
+            os.unlink(req_path)
 
 
 if __name__ == "__main__":

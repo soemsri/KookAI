@@ -2034,10 +2034,16 @@ document.addEventListener("DOMContentLoaded", () => {
         localConnectionStatus.textContent = ready ? "Connected" : "No models";
         localConnectionStatus.className = `cli-status-pill ${ready ? "installed" : "missing"}`;
         const harnessId = data.harness?.id;
-        const harnessName = data.harness?.name || (harnessId === "dsh" ? "DeepSeek Harness" : "Qwen Code");
-        const harnessModeNote = harnessId === "dsh"
-          ? "Workspace tools enabled via DeepSeek Harness (Sandbox: workspace-write; Real: full access)."
-          : "Workspace tools enabled via Qwen Code harness (Sandbox: file edits; Real: file edits + shell).";
+        const harnessName = data.harness?.name || (
+          harnessId === "claude"
+            ? "Claude Code"
+            : (harnessId === "dsh" ? "DeepSeek Harness" : "Qwen Code")
+        );
+        const harnessModeNote = harnessId === "claude"
+          ? "Workspace tools enabled via Claude Code harness (Sandbox: dontAsk; Real: full access)."
+          : (harnessId === "dsh"
+            ? "Workspace tools enabled via DeepSeek Harness (Sandbox: workspace-write; Real: full access)."
+            : "Workspace tools enabled via Qwen Code harness (Sandbox: file edits; Real: file edits + shell).");
         localConnectionMessage.textContent = ready
           ? (data.harness?.enabled
             ? `Found ${data.models.length} model${data.models.length === 1 ? "" : "s"}: ${data.models.map(model => model.label).join(", ")}. Choose a model under Local LLM in chat. ${harnessModeNote}`

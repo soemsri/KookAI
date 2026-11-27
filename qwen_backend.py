@@ -25,6 +25,7 @@ QWEN_CONVERSATION_PREFIX = "local_qwen_"
 LOCAL_HARNESS_ENV = "KOOKAI_LOCAL_HARNESS"
 LOCAL_HARNESS_DISABLED_VALUES = {"none", "direct", "off", "0", "false"}
 LOCAL_HARNESS_DSH_VALUES = {"dsh", "deepseek-harness", "deepseek_harness"}
+LOCAL_HARNESS_CLAUDE_VALUES = {"claude", "claude-code", "claude_code"}
 
 
 def local_harness_mode() -> str:
@@ -34,6 +35,8 @@ def local_harness_mode() -> str:
         return "none"
     if raw in LOCAL_HARNESS_DSH_VALUES:
         return "dsh"
+    if raw in LOCAL_HARNESS_CLAUDE_VALUES:
+        return "claude"
     return "qwen"
 
 

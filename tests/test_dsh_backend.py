@@ -263,7 +263,7 @@ class DshBackendUnitTests(unittest.TestCase):
 class DshIntegrationAndRoutingTests(unittest.TestCase):
     def setUp(self):
         local_backend._cache.clear()
-        env_patch = mock.patch.dict(os.environ, {"KOOKAI_LOCAL_HARNESS": "dsh"})
+        env_patch = mock.patch.dict(os.environ, {"KOOKAI_LOCAL_HARNESS": "dsh", "KOOKAI_LOCAL_LLM_API_KEY": ""})
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.local_model = {

@@ -108,6 +108,7 @@ class LocalChatIntegrationTests(unittest.TestCase):
              patch.object(main, 'CONVERSATION_METADATA_FILE', tmp + '/metadata.json'), \
              patch.object(main, 'get_workspace_alignment_context', return_value=''), \
              patch.object(main, 'in_memory_chats', {}), \
+             patch.object(main, 'should_use_claude_local_harness', return_value=False), \
              patch.object(main, 'should_use_dsh_harness', return_value=False), \
              patch.object(main, 'should_use_qwen_harness', return_value=False), \
              patch.object(main, 'complete_local', return_value='local reply') as complete, \
@@ -149,6 +150,7 @@ class LocalChatIntegrationTests(unittest.TestCase):
              patch.object(main, 'get_workspace_alignment_context', return_value=''), \
              patch.object(main, 'in_memory_chats', {}), \
              patch.object(main, 'convo_id_mapping', {}), \
+             patch.object(main, 'should_use_claude_local_harness', return_value=False), \
              patch.object(main, 'should_use_dsh_harness', return_value=False), \
              patch.object(main, 'should_use_qwen_harness', return_value=True), \
              patch.object(main, 'resolve_qwen_executable', return_value='/usr/local/bin/qwen'), \
