@@ -163,6 +163,23 @@ class DshBackendUnitTests(unittest.TestCase):
             self.assertTrue(os.path.exists(first))
         self.assertFalse(os.path.exists(first))
 
+    def test_dsh_patch_document_vision_input_and_overrides(self):
+        def model_input(raw_model_id, *, vision=None, env=None):
+            rows = dsh_backend.build_dsh_patch_document(
+                "http://192.168.1.200:8000/v1",
+                raw_model_id,
+                vision=vision,
+                env=env,
+            )
+            return rows[1]["config"]["providers"][dsh_backend.DSH_LOCAL_PROVIDER_ID]["models"][0]["input"]
+
+        self.assertEqual(model_input("deepseek-ai/DeepSeek-V4-Flash-Vision-Exp"), ["text", "image"])
+        self.assertEqual(model_input("inkling-2-mini:latest"), ["text"])
+        self.assertEqual(model_input("plain-model:latest", vision=True), ["text", "image"])
+        self.assertEqual(model_input("deepseek-ai/DeepSeek-V4-Flash-Vision-Exp", vision=False), ["text"])
+        self.assertEqual(model_input("plain-model:latest", vision=False, env={"KOOKAI_LOCAL_VISION": "1"}), ["text", "image"])
+        self.assertEqual(model_input("deepseek-ai/DeepSeek-V4-Flash-Vision-Exp", vision=True, env={"KOOKAI_LOCAL_VISION": "0"}), ["text"])
+
     def test_parse_dsh_stream_json_events_fallbacks_and_error_dedupe(self):
         output = "\n".join([
             "not json line",

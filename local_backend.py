@@ -10,10 +10,12 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import socket
 import threading
 import time
 import urllib.parse
+from typing import Optional
 
 _cache_lock = threading.Lock()
 _cache = {}
@@ -101,6 +103,38 @@ def _request(path, payload=None, cancel_event=None):
         conn.close()
         if watcher:
             watcher.join(timeout=0.2)
+
+
+def resolve_local_vision_override(env: Optional[dict[str, str]] = None) -> Optional[bool]:
+    source_env = env if env is not None else os.environ
+    raw = str(source_env.get("KOOKAI_LOCAL_VISION", "") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def model_id_suggests_vision(raw_id: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:^|[-_/:\.])(vision|vl|vlm|llava|pixtral|internvl|minicpm-v)(?:$|[-_/:\.\d])",
+            (raw_id or "").lower(),
+        )
+    )
+
+
+def _detect_local_vision(raw_id: str, entry_caps, ollama_caps_set: set[str]) -> bool:
+    override = resolve_local_vision_override()
+    if override is not None:
+        return override
+    normalized_entry_caps = {str(c).strip().lower() for c in (entry_caps or []) if isinstance(c, str)}
+    if "vision" in normalized_entry_caps or "image" in normalized_entry_caps:
+        return True
+    normalized_ollama_caps = {str(c).strip().lower() for c in (ollama_caps_set or set()) if isinstance(c, str)}
+    if "vision" in normalized_ollama_caps:
+        return True
+    return model_id_suggests_vision(raw_id)
 
 
 def _local_model_description():
@@ -200,7 +234,8 @@ def discover_local_models(force=False):
                                          (entry.get("owned_by") == "exo" and "thinking_toggle" in caps)
                                          or ("thinking" in ollama_caps.get(raw_id, set()))
                                      ),
-                                     "thinking_required": False},
+                                     "thinking_required": False,
+                                     "vision": _detect_local_vision(raw_id, caps, ollama_caps.get(raw_id, set()))},
                 })
         except (OSError, ValueError, RuntimeError, http.client.HTTPException):
             models = []

@@ -63,6 +63,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const codexSpeedBtn = document.getElementById("codexSpeedBtn");
   const targetBtn = document.getElementById("targetBtn");
   const projectPickerBtn = document.getElementById("projectPickerBtn");
+  const multiProjectModeBtn = document.getElementById("multiProjectModeBtn");
+  const multiProjectModeLabel = document.getElementById("multiProjectModeLabel");
+  const activeTasksHeaderBtn = document.getElementById("activeTasksHeaderBtn");
+  const activeTasksCountText = document.getElementById("activeTasksCountText");
+  const activeTasksDropdown = document.getElementById("activeTasksDropdown");
+  const activeTasksList = document.getElementById("activeTasksList");
+  const stopAllActiveTasksBtn = document.getElementById("stopAllActiveTasksBtn");
+  const multiProjectTargetBar = document.getElementById("multiProjectTargetBar");
+  const kookaiToastContainer = document.getElementById("kookaiToastContainer");
 
   // Dropdown Menus
   const workspaceDropdown = document.getElementById("workspaceDropdown");
@@ -90,11 +99,18 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentTarget = "Sandbox";
   let currentThemeMode = "system";
   let activeConversationId = ""; // Current chat session ID
+  let viewSessionEpoch = 0; // Monotonic counter invalidating stale async conversation loads
+  let loadingConvoId = null; // Conversation ID currently fetching history
   let workspaceFiles = [];
   let projectsList = [];
   let conversationsList = [];
   let isRecording = false;
   let recognition = null;
+  let multiProjectMode = false;
+  const selectedBatchProjects = new Set();
+  const activeTasksMap = new Map(); // taskId -> task runtime record
+  let taskPollerTimer = null;
+  let taskPollInFlight = false;
 
   let CODEX_MODELS = {
     "6 Astra": { ultra: true, fast: true },
@@ -594,7 +610,9 @@ document.addEventListener("DOMContentLoaded", () => {
   function loadProtectedWorkspaceData() {
     fetchUsageLimits();
     refreshUsageDisplay();
-    loadProjectsAndConversations();
+    loadProjectsAndConversations().then(() => {
+      syncServerActiveTasks();
+    });
     fetchWorkspaceFiles();
   }
 
@@ -609,10 +627,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // --- Fetch Data ---
-  async function fetchWorkspaceFiles() {
+  async function fetchWorkspaceFiles(workspaceOverride = null) {
     if (!canUseProtectedWorkspaceApis()) return;
+    const targetWs = workspaceOverride || currentWorkspace || "";
     try {
-      const res = await fetch("/api/files");
+      const query = targetWs ? `?workspace=${encodeURIComponent(targetWs)}` : "";
+      const res = await fetch(`/api/files${query}`);
       if (res.status === 401) {
         workspaceFiles = [];
         handleProtectedApiUnauthorized();
@@ -718,52 +738,81 @@ document.addEventListener("DOMContentLoaded", () => {
       const isAgy = project === "agy";
       const isVO = project === "VirtualOffice";
       const projectConversations = convoByProject[project] || [];
+      const runningInProject = getRunningTasksForWorkspace(project);
+      const shouldExpand = isAgy || isVO || project === currentWorkspace || runningInProject.length > 0;
 
       const node = document.createElement("div");
       node.className = "project-node";
 
       // Folder Row
       const folderRow = document.createElement("div");
-      folderRow.className = "project-folder-row";
+      folderRow.className = `project-folder-row ${runningInProject.length > 0 ? "has-running" : ""}`;
       folderRow.setAttribute("data-project-name", project);
 
       folderRow.innerHTML = `
         <div class="project-folder-row-left">
-          <svg viewBox="0 0 24 24" class="icon-chevron ${isAgy || isVO ? 'expanded' : ''}" id="chevron-${project}">
+          <svg viewBox="0 0 24 24" class="icon-chevron ${shouldExpand ? 'expanded' : ''}" id="chevron-${escapeHtml(project)}">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
           <svg viewBox="0 0 24 24" class="icon-folder">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
           </svg>
-          <span>${project}</span>
+          <span>${escapeHtml(project)}</span>
         </div>
         <div class="project-folder-row-right">
-          <!-- Add / Edit items -->
-          <svg viewBox="0 0 24 24" width="10" height="10" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l-.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-          <svg viewBox="0 0 24 24" width="10" height="10" stroke="currentColor" stroke-width="2" fill="none"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          ${runningInProject.length > 0 ? `<span class="project-running-badge" title="${runningInProject.length} active task(s)"><span class="task-spinner-dot"></span>${runningInProject.length}</span>` : ""}
+          <button type="button" class="action-btn project-new-chat-btn" title="New conversation in ${escapeHtml(project)}" aria-label="New conversation in ${escapeHtml(project)}">
+            <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
         </div>
       `;
 
+      const quickNewBtn = folderRow.querySelector(".project-new-chat-btn");
+      if (quickNewBtn) {
+        quickNewBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          currentWorkspace = project;
+          if (headerProject) headerProject.textContent = project;
+          saveAppPreferences();
+          fetchWorkspaceFiles(project);
+          renderWorkspaceDropdown();
+          startNewConversation();
+        });
+      }
+
       // Conversations Nested List
       const listContainer = document.createElement("div");
-      listContainer.className = `project-convo-list ${isAgy || isVO ? '' : 'hidden'}`;
+      listContainer.className = `project-convo-list ${shouldExpand ? '' : 'hidden'}`;
       listContainer.id = `list-${project}`;
 
+      // Include any in-flight temporary conversations not yet persisted in /api/conversations
+      const knownIds = new Set(projectConversations.map(c => c.id));
+      const liveExtras = runningInProject
+        .filter(t => t.conversationId && !knownIds.has(t.conversationId))
+        .map(t => ({
+          id: t.conversationId,
+          title: (t.message || "Running task...").slice(0, 40),
+          project,
+          time: "active"
+        }));
+      const mergedProjectConvos = [...liveExtras, ...projectConversations];
+
       // Populate conversations for this project (limit to first 6 items)
-      const displayedConvos = projectConversations.slice(0, 6);
+      const displayedConvos = mergedProjectConvos.slice(0, 6);
       displayedConvos.forEach(c => {
         const item = document.createElement("div");
         const isActive = c.id === activeConversationId;
+        const isTaskRunning = Boolean(getRunningTaskForConversation(c.id));
         const hasActiveDot = c.title.includes("Analyzing Risk") || c.title.includes("Debugging Production");
 
         item.className = `project-convo-item ${isActive ? 'active' : ''}`;
         item.setAttribute("data-convo-id", c.id);
 
         item.innerHTML = `
-          <span class="project-convo-title" title="${c.title}">${c.title}</span>
+          <span class="project-convo-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</span>
           <div class="project-convo-meta">
-            ${c.time && c.time !== "active" ? `<span class="time-badge">${c.time}</span>` : ""}
-            ${hasActiveDot || isActive ? `<span class="active-dot"></span>` : ""}
+            ${isTaskRunning ? `<span class="task-spinner-dot" title="Task running"></span>` : (c.time && c.time !== "active" ? `<span class="time-badge">${escapeHtml(c.time)}</span>` : "")}
+            ${!isTaskRunning && (hasActiveDot || isActive) ? `<span class="active-dot"></span>` : ""}
           </div>
         `;
 
@@ -811,8 +860,25 @@ document.addEventListener("DOMContentLoaded", () => {
   // --- Render Top Picker Workspace list ---
   function renderWorkspaceDropdown() {
     if (!workspaceDropdown) return;
-    workspaceDropdown.innerHTML = `<div class="dropdown-header">Workspaces</div>`;
     const projects = Array.isArray(projectsList) ? projectsList : [];
+    const allSelected = projects.length > 0 && projects.every(p => selectedBatchProjects.has(p));
+
+    workspaceDropdown.innerHTML = `
+      <div class="dropdown-header">Workspaces</div>
+      ${projects.length > 1 ? `
+        <div class="workspace-dropdown-toolbar">
+          <button type="button" class="workspace-mode-switch-btn ${multiProjectMode ? 'active' : ''}" data-ws-action="toggle-multi">
+            ${multiProjectMode ? '✓ Multi-Select On' : 'Multi-Select'}
+          </button>
+          ${multiProjectMode ? `
+            <button type="button" class="workspace-select-all-btn" data-ws-action="select-all">
+              ${allSelected ? 'Clear All' : 'Select All'}
+            </button>
+          ` : ''}
+        </div>
+      ` : ''}
+    `;
+
     if (projects.length === 0) {
       const item = document.createElement("div");
       item.className = "dropdown-item disabled";
@@ -822,11 +888,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     projects.forEach(project => {
       const item = document.createElement("div");
-      item.className = `dropdown-item ${project === currentWorkspace ? 'active' : ''}`;
+      const runningCount = getRunningTasksForWorkspace(project).length;
+      const isChecked = selectedBatchProjects.has(project);
+      const isActive = multiProjectMode ? isChecked : (project === currentWorkspace);
+      item.className = `dropdown-item ${isActive ? 'active' : ''}`;
       item.setAttribute("data-value", project);
       item.innerHTML = `
-        <svg viewBox="0 0 24 24" class="icon-folder"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-        <span>${project}</span>
+        ${multiProjectMode
+          ? `<span class="workspace-checkbox ${isChecked ? 'checked' : ''}">${isChecked ? '✓' : ''}</span>`
+          : `<svg viewBox="0 0 24 24" class="icon-folder"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`}
+        <span>${escapeHtml(project)}</span>
+        ${runningCount > 0 ? `<small class="project-running-badge"><span class="task-spinner-dot"></span>${runningCount}</small>` : ""}
       `;
       workspaceDropdown.appendChild(item);
     });
@@ -839,15 +911,23 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     autoCloseMobileSidebar();
+    const myEpoch = ++viewSessionEpoch;
+    const requestedCid = cid;
+    loadingConvoId = requestedCid;
     activeConversationId = cid;
     if (project) {
       currentWorkspace = project;
       if (headerProject) headerProject.textContent = project;
       saveAppPreferences();
+      fetchWorkspaceFiles(project);
+      renderWorkspaceDropdown();
     }
 
     const convoObj = conversationsList.find(c => c.id === cid);
-    const convoTitle = convoObj ? convoObj.title : "Building Python Web App";
+    const runningForConvo = getRunningTaskForConversation(cid);
+    const convoTitle = convoObj
+      ? convoObj.title
+      : (runningForConvo?.message ? runningForConvo.message.slice(0, 40) : "Conversation");
     if (headerConvo) headerConvo.textContent = convoTitle;
 
     // Highlights
@@ -864,11 +944,14 @@ document.addEventListener("DOMContentLoaded", () => {
     showChatTab();
     messagesContainer.innerHTML = "";
     welcomeScreen.classList.add("hidden");
+    syncPromptInputLockState();
 
     // Fetch messages
-    fetch(`/api/conversation/${cid}`)
+    fetch(`/api/conversation/${encodeURIComponent(cid)}`)
       .then(res => res.json())
       .then(data => {
+        if (myEpoch !== viewSessionEpoch || activeConversationId !== requestedCid) return;
+        loadingConvoId = null;
         if (data.model) {
           if (data.effort) {
             if (["Light", "Medium", "High", "Extra High", "Ultra"].includes(data.effort)) {
@@ -889,21 +972,45 @@ document.addEventListener("DOMContentLoaded", () => {
           applyModelSelection(defaultCatalogModel, false);
         }
         const messages = data.messages || [];
-        if (messages.length === 0) {
+        const liveTask = getRunningTaskForConversation(requestedCid);
+        if (messages.length === 0 && !liveTask) {
           welcomeScreen.classList.remove("hidden");
         } else {
           messages.forEach((m, idx) => {
-            const isLastMessage = (idx === messages.length - 1);
+            const isLastMessage = (idx === messages.length - 1) && !liveTask;
             appendMessage(m.role, m.content, !isLastMessage);
           });
+          if (liveTask) {
+            const hasUserPrompt = messages.some(
+              m => m.role === "user" && m.content && m.content.includes(liveTask.message)
+            );
+            if (!hasUserPrompt && liveTask.message) {
+              appendMessage("user", liveTask.message, true);
+            }
+            const indicator = appendTypingIndicator(liveTask.isPendingStart ? null : liveTask.taskId);
+            if (Array.isArray(liveTask.events) && liveTask.events.length) {
+              updateTypingProgress(indicator, liveTask.events, liveTask.isPendingStart ? null : liveTask.taskId);
+            }
+          }
         }
+        syncPromptInputLockState();
       })
-      .catch(err => console.error("Error loading chat details:", err));
+      .catch(err => {
+        if (myEpoch === viewSessionEpoch && loadingConvoId === requestedCid) {
+          loadingConvoId = null;
+        }
+        console.error("Error loading chat details:", err);
+      });
   }
 
   // --- Start New Conversation ---
-  function startNewConversation() {
+  function startNewConversation(options = {}) {
     autoCloseMobileSidebar();
+    ++viewSessionEpoch;
+    loadingConvoId = null;
+    if (!options?.preserveMultiProject && multiProjectMode) {
+      toggleMultiProjectMode(false);
+    }
     activeConversationId = generateUUID();
     messagesContainer.innerHTML = "";
     welcomeScreen.classList.remove("hidden");
@@ -919,9 +1026,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // De-activate all selected sidebar conversation items
     document.querySelectorAll(".project-convo-item").forEach(el => el.classList.remove("active"));
+    syncPromptInputLockState();
     showChatTab();
   }
-  newConvoBtn.addEventListener("click", startNewConversation);
+  newConvoBtn.addEventListener("click", () => startNewConversation());
 
   // --- Switch Tabs ---
   let activePanelId = "chatPanel";
@@ -1001,17 +1109,18 @@ document.addEventListener("DOMContentLoaded", () => {
         filtered.forEach(c => {
           const item = document.createElement("div");
           const isActive = c.id === activeConversationId;
+          const isTaskRunning = Boolean(c.active || getRunningTaskForConversation(c.id));
           const hasActiveDot = c.title.includes("Analyzing Risk") || c.title.includes("Debugging Production");
 
           item.className = "history-item";
           item.innerHTML = `
             <div class="history-item-left">
-              <span class="history-item-title" title="${c.title}">${c.title}</span>
-              <span class="history-item-project">${c.project}</span>
+              <span class="history-item-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</span>
+              <span class="history-item-project">${escapeHtml(c.project)}</span>
             </div>
             <div class="history-item-right">
-              ${c.time && c.time !== "active" ? `<span>${c.time}</span>` : ""}
-              ${hasActiveDot || isActive ? `<span class="active-dot"></span>` : ""}
+              ${isTaskRunning ? `<span class="task-spinner-dot" title="Task running"></span>` : (c.time && c.time !== "active" ? `<span>${escapeHtml(c.time)}</span>` : "")}
+              ${!isTaskRunning && (hasActiveDot || isActive) ? `<span class="active-dot"></span>` : ""}
             </div>
           `;
 
@@ -1030,67 +1139,586 @@ document.addEventListener("DOMContentLoaded", () => {
     renderHistoryList(e.target.value);
   });
 
-  // --- Send Messages ---
+  // --- Parallel Multi-Project Task Orchestration & Send Messages ---
   const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-  let currentRunningTaskId = null;
-  let isPromptRunning = false;
-
-  function setPromptRunningState(running, taskId = null) {
-    isPromptRunning = running;
-    currentRunningTaskId = running ? taskId : null;
-    sendBtn.disabled = running;
+  function showKookaiToast(message, onClick = null) {
+    if (!kookaiToastContainer) return;
+    const toast = document.createElement("div");
+    toast.className = "kookai-toast";
+    toast.innerHTML = `<span>${escapeHtml(message)}</span>`;
+    if (typeof onClick === "function") {
+      toast.addEventListener("click", () => {
+        onClick();
+        toast.remove();
+      });
+    } else {
+      toast.addEventListener("click", () => toast.remove());
+    }
+    kookaiToastContainer.appendChild(toast);
+    setTimeout(() => {
+      if (toast.isConnected) toast.remove();
+    }, 6000);
   }
 
-  async function cancelActivePrompt() {
-    const taskId = currentRunningTaskId;
-    if (!taskId) {
-      if (activeConversationId) {
-        try {
-          await fetch("/api/chat-tasks/cancel", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ conversation_id: activeConversationId })
-          });
-        } catch (err) {
-          console.error("Error cancelling task by conversation:", err);
-        }
+  function isActiveStatus(status) {
+    return status === "running" || status === "queued";
+  }
+
+  function getRunningTaskForConversation(cid) {
+    if (!cid) return null;
+    for (const task of activeTasksMap.values()) {
+      if (!isActiveStatus(task.status)) continue;
+      if (task.conversationId === cid || task.originalConversationId === cid) {
+        return task;
       }
+    }
+    return null;
+  }
+
+  function getRunningTasksForWorkspace(project) {
+    if (!project) return [];
+    const result = [];
+    for (const task of activeTasksMap.values()) {
+      if (isActiveStatus(task.status) && task.workspace === project) {
+        result.push(task);
+      }
+    }
+    return result;
+  }
+
+  function isCurrentViewLocked() {
+    if (multiProjectMode && selectedBatchProjects.size >= 1) {
+      return false;
+    }
+    return Boolean(getRunningTaskForConversation(activeConversationId));
+  }
+
+  function syncPromptInputLockState() {
+    const locked = isCurrentViewLocked();
+    if (sendBtn) sendBtn.disabled = locked;
+    if (promptTextarea) {
+      if (multiProjectMode && selectedBatchProjects.size >= 1) {
+        promptTextarea.placeholder = `Send command to ${selectedBatchProjects.size} selected project(s) simultaneously...`;
+      } else if (locked) {
+        promptTextarea.placeholder = "Task running in this conversation — switch project or click + New Conversation to run another in parallel";
+      } else {
+        promptTextarea.placeholder = "Ask anything, @ to mention, / for actions (/multi for parallel projects)";
+      }
+    }
+  }
+
+  function renderMultiProjectTargetBar() {
+    if (multiProjectModeBtn) {
+      multiProjectModeBtn.classList.toggle("active", multiProjectMode);
+    }
+    if (multiProjectModeLabel) {
+      multiProjectModeLabel.textContent = multiProjectMode && selectedBatchProjects.size > 0
+        ? `Multi-Project (${selectedBatchProjects.size})`
+        : "Multi-Project";
+    }
+    if (!multiProjectTargetBar) return;
+    if (!multiProjectMode) {
+      multiProjectTargetBar.classList.add("hidden");
+      multiProjectTargetBar.innerHTML = "";
+      syncPromptInputLockState();
       return;
     }
+
+    const targets = Array.from(selectedBatchProjects);
+    const chipsHtml = targets.map(proj => `
+      <span class="multi-project-chip">
+        <span>${escapeHtml(proj)}</span>
+        <button type="button" data-remove-proj="${escapeHtml(proj)}" aria-label="Remove ${escapeHtml(proj)}">&times;</button>
+      </span>
+    `).join("");
+
+    multiProjectTargetBar.innerHTML = `
+      <span class="multi-project-target-label">
+        ${targets.length > 0 ? `Dispatch simultaneously (${targets.length}):` : "Select projects from the folder picker above:"}
+      </span>
+      ${chipsHtml}
+      <button type="button" class="multi-project-clear-btn" data-mp-action="exit">Single Project Mode</button>
+    `;
+    multiProjectTargetBar.classList.remove("hidden");
+    syncPromptInputLockState();
+  }
+
+  function toggleMultiProjectMode(forceValue = null) {
+    multiProjectMode = typeof forceValue === "boolean" ? forceValue : !multiProjectMode;
+    if (multiProjectMode && selectedBatchProjects.size === 0 && currentWorkspace) {
+      selectedBatchProjects.add(currentWorkspace);
+    }
+    renderMultiProjectTargetBar();
+    renderWorkspaceDropdown();
+  }
+
+  if (multiProjectModeBtn) {
+    multiProjectModeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMultiProjectMode();
+      if (multiProjectMode && workspaceDropdown && projectPickerBtn) {
+        positionDropdown(projectPickerBtn, workspaceDropdown, "down");
+      }
+    });
+  }
+
+  if (multiProjectTargetBar) {
+    multiProjectTargetBar.addEventListener("click", (e) => {
+      const remBtn = e.target.closest("[data-remove-proj]");
+      if (remBtn) {
+        selectedBatchProjects.delete(remBtn.getAttribute("data-remove-proj"));
+        renderMultiProjectTargetBar();
+        renderWorkspaceDropdown();
+        return;
+      }
+      if (e.target.closest('[data-mp-action="exit"]')) {
+        toggleMultiProjectMode(false);
+      }
+    });
+  }
+
+  function renderActiveTasksHeader() {
+    const runningList = Array.from(activeTasksMap.values()).filter(t => isActiveStatus(t.status));
+    if (activeTasksHeaderBtn) {
+      activeTasksHeaderBtn.classList.toggle("hidden", runningList.length === 0);
+      if (activeTasksCountText) {
+        const projSet = new Set(runningList.map(t => t.workspace));
+        activeTasksCountText.textContent = `${runningList.length} Running · ${projSet.size} Project${projSet.size === 1 ? "" : "s"}`;
+      }
+    }
+    if (runningList.length === 0 && activeTasksDropdown) {
+      activeTasksDropdown.classList.add("hidden");
+    }
+    if (activeTasksList) {
+      activeTasksList.innerHTML = runningList.map(t => {
+        const lastEvent = t.events && t.events.length ? t.events[t.events.length - 1].message : (t.status === "queued" ? "Queued..." : "Thinking...");
+        return `
+          <div class="active-task-item" data-jump-task="${escapeHtml(t.taskId)}">
+            <div class="active-task-info">
+              <div class="active-task-proj">
+                <span class="task-spinner-dot"></span>
+                <span>${escapeHtml(t.workspace || "agy")}</span>
+              </div>
+              <div class="active-task-msg" title="${escapeHtml(t.message || "")}">${escapeHtml(lastEvent)}</div>
+            </div>
+            <button type="button" class="typing-cancel-btn" data-stop-task="${escapeHtml(t.taskId)}">■ Stop</button>
+          </div>
+        `;
+      }).join("");
+    }
+  }
+
+  if (activeTasksHeaderBtn && activeTasksDropdown) {
+    activeTasksHeaderBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      activeTasksDropdown.classList.toggle("hidden");
+    });
+  }
+
+  if (activeTasksList) {
+    activeTasksList.addEventListener("click", (e) => {
+      const stopBtn = e.target.closest("[data-stop-task]");
+      if (stopBtn) {
+        e.stopPropagation();
+        cancelTaskById(stopBtn.getAttribute("data-stop-task"));
+        return;
+      }
+      const item = e.target.closest("[data-jump-task]");
+      if (item) {
+        const task = activeTasksMap.get(item.getAttribute("data-jump-task"));
+        if (task) {
+          activeTasksDropdown?.classList.add("hidden");
+          loadConversation(task.conversationId || task.originalConversationId, task.workspace);
+        }
+      }
+    });
+  }
+
+  if (stopAllActiveTasksBtn) {
+    stopAllActiveTasksBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await fetch("/api/chat-tasks/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        await pollAllActiveTasksTick();
+      } catch (err) {
+        console.error("Error stopping all active tasks:", err);
+      }
+    });
+  }
+
+  async function cancelTaskById(taskId) {
+    if (!taskId) return;
     try {
-      const res = await fetch(`/api/chat-tasks/${taskId}/cancel`, {
+      const res = await fetch(`/api/chat-tasks/${encodeURIComponent(taskId)}/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" }
       });
       if (!res.ok) {
         console.warn("Failed to cancel chat task:", res.status);
       }
+      await pollAllActiveTasksTick();
     } catch (err) {
       console.error("Error cancelling chat task:", err);
     }
   }
 
-  function applyChatResponse(data, originalMessage) {
-    if (data.status === "success") {
-      appendMessage("assistant", data.reply);
+  async function cancelActivePrompt() {
+    const task = getRunningTaskForConversation(activeConversationId);
+    if (task?.taskId) {
+      await cancelTaskById(task.taskId);
+      return;
+    }
+    if (activeConversationId) {
+      try {
+        await fetch("/api/chat-tasks/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversation_id: activeConversationId })
+        });
+      } catch (err) {
+        console.error("Error cancelling task by conversation:", err);
+      }
+    }
+  }
 
-      // CRITICAL: Update active session conversation ID if mapped/resolved by backend
-      if (data.conversation_id && data.conversation_id !== activeConversationId) {
-        activeConversationId = data.conversation_id;
-        console.log("Session updated with resolved conversation ID:", activeConversationId);
-        let displayTitle = originalMessage;
-        if (displayTitle.length > 40) displayTitle = displayTitle.slice(0, 40) + "...";
-        if (headerConvo) headerConvo.textContent = displayTitle;
+  function renderBatchDispatchCard(batchId, message, tasks) {
+    const row = document.createElement("div");
+    row.className = "message-row assistant";
+    row.setAttribute("data-batch-card-id", batchId);
+
+    const avatar = document.createElement("div");
+    avatar.className = "avatar assistant";
+    avatar.textContent = "G";
+
+    const card = document.createElement("div");
+    card.className = "batch-dispatch-card";
+    card.innerHTML = `
+      <div class="batch-dispatch-header">
+        <div>
+          <div class="batch-dispatch-title">Multi-Project Parallel Execution (${tasks.length} Projects)</div>
+          <div class="batch-dispatch-subtitle">${escapeHtml(message.length > 90 ? message.slice(0, 90) + "..." : message)}</div>
+        </div>
+        <button type="button" class="typing-cancel-btn" data-cancel-batch="${escapeHtml(batchId)}">■ Stop All</button>
+      </div>
+      <div class="batch-task-rows">
+        ${tasks.map(t => `
+          <div class="batch-task-row" data-batch-task-row="${escapeHtml(t.task_id)}">
+            <div class="batch-task-left">
+              <div class="batch-task-top">
+                <span class="batch-task-project">${escapeHtml(t.workspace)}</span>
+                <span class="batch-status-pill running" data-batch-status="${escapeHtml(t.task_id)}">Running</span>
+              </div>
+              <div class="batch-task-progress" data-batch-progress="${escapeHtml(t.task_id)}">Starting in ${escapeHtml(t.workspace)}...</div>
+            </div>
+            <div class="batch-task-actions">
+              <button type="button" class="batch-open-btn" data-open-task="${escapeHtml(t.task_id)}">Open Chat</button>
+              <button type="button" class="typing-cancel-btn" data-stop-batch-task="${escapeHtml(t.task_id)}">■</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+
+    card.addEventListener("click", async (e) => {
+      const stopBatchBtn = e.target.closest("[data-cancel-batch]");
+      if (stopBatchBtn) {
+        await fetch("/api/chat-tasks/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ batch_id: stopBatchBtn.getAttribute("data-cancel-batch") })
+        });
+        await pollAllActiveTasksTick();
+        return;
+      }
+      const stopOneBtn = e.target.closest("[data-stop-batch-task]");
+      if (stopOneBtn) {
+        await cancelTaskById(stopOneBtn.getAttribute("data-stop-batch-task"));
+        return;
+      }
+      const openBtn = e.target.closest("[data-open-task]");
+      if (openBtn) {
+        const tId = openBtn.getAttribute("data-open-task");
+        const rec = activeTasksMap.get(tId);
+        const targetCid = openBtn.getAttribute("data-resolved-cid") || rec?.conversationId || rec?.originalConversationId;
+        const targetWs = openBtn.getAttribute("data-workspace") || rec?.workspace;
+        if (targetCid && targetWs) {
+          toggleMultiProjectMode(false);
+          loadConversation(targetCid, targetWs);
+        }
+      }
+    });
+
+    row.appendChild(avatar);
+    row.appendChild(card);
+    messagesContainer.appendChild(row);
+    chatScroll.scrollTop = chatScroll.scrollHeight;
+  }
+
+  function updateBatchCardTaskUI(taskRecord, finalData = null) {
+    const rowEl = document.querySelector(`[data-batch-task-row="${CSS.escape(taskRecord.taskId)}"]`);
+    if (!rowEl) return;
+    const statusEl = rowEl.querySelector(`[data-batch-status="${CSS.escape(taskRecord.taskId)}"]`);
+    const progEl = rowEl.querySelector(`[data-batch-progress="${CSS.escape(taskRecord.taskId)}"]`);
+    const stopBtn = rowEl.querySelector(`[data-stop-batch-task="${CSS.escape(taskRecord.taskId)}"]`);
+    const openBtn = rowEl.querySelector(`[data-open-task="${CSS.escape(taskRecord.taskId)}"]`);
+
+    const resolvedCid = finalData?.conversation_id || taskRecord.conversationId || taskRecord.originalConversationId;
+    if (openBtn) {
+      openBtn.setAttribute("data-resolved-cid", resolvedCid || "");
+      openBtn.setAttribute("data-workspace", taskRecord.workspace || "");
+    }
+
+    const status = taskRecord.status;
+    if (statusEl) {
+      statusEl.className = `batch-status-pill ${status}`;
+      statusEl.textContent = status === "success"
+        ? "Completed"
+        : status === "queued"
+          ? "Queued"
+          : status === "cancelled"
+            ? "Cancelled"
+            : status === "error"
+              ? "Failed"
+              : "Running";
+    }
+    if (progEl) {
+      if (finalData?.reply) {
+        const summaryLine = String(finalData.reply).replace(/\s+/g, " ").trim().slice(0, 140);
+        progEl.textContent = summaryLine || "Finished";
+      } else if (taskRecord.events && taskRecord.events.length) {
+        progEl.textContent = taskRecord.events[taskRecord.events.length - 1].message;
+      }
+    }
+    if (!isActiveStatus(status) && stopBtn) {
+      stopBtn.remove();
+    }
+    if (taskRecord.batchId) {
+      const cardEl = document.querySelector(`[data-batch-card-id="${CSS.escape(taskRecord.batchId)}"]`);
+      if (cardEl) {
+        const anyStillActive = Array.from(activeTasksMap.values()).some(
+          t => t.batchId === taskRecord.batchId && isActiveStatus(t.status)
+        );
+        if (!anyStillActive) {
+          cardEl.querySelector("[data-cancel-batch]")?.remove();
+        }
+      }
+    }
+  }
+
+  function applyFinishedTaskToUI(taskRecord, resultPayload) {
+    const data = resultPayload || { status: taskRecord.status, reply: "⏹️ **Prompt cancelled by user**" };
+    const resolvedCid = data.conversation_id || taskRecord.conversationId || taskRecord.originalConversationId;
+    const isViewingThisConversation = (
+      activeConversationId === taskRecord.originalConversationId
+      || activeConversationId === taskRecord.conversationId
+      || (resolvedCid && activeConversationId === resolvedCid)
+    );
+
+    updateBatchCardTaskUI(taskRecord, data);
+
+    if (isViewingThisConversation) {
+      if (loadingConvoId && loadingConvoId === activeConversationId) {
+        loadConversation(resolvedCid || activeConversationId, taskRecord.workspace);
+        loadProjectsAndConversations();
+        fetchUsageLimits();
+        return;
+      }
+      welcomeScreen.classList.add("hidden");
+      const indicator = messagesContainer.querySelector(`.typing-row[data-task-id="${CSS.escape(taskRecord.taskId)}"]`)
+        || messagesContainer.querySelector(".typing-row");
+      if (indicator) indicator.remove();
+
+      if (data.status === "success") {
+        appendMessage("assistant", data.reply);
+        if (resolvedCid && resolvedCid !== activeConversationId) {
+          activeConversationId = resolvedCid;
+          let displayTitle = taskRecord.message || "Conversation";
+          if (displayTitle.length > 40) displayTitle = displayTitle.slice(0, 40) + "...";
+          if (headerConvo) headerConvo.textContent = displayTitle;
+        }
+      } else if (data.status === "cancelled") {
+        appendMessage("assistant", data.reply || "⏹️ **Prompt cancelled by user**");
+      } else {
+        appendMessage("assistant", data.reply || "⚠️ Error processing your prompt. Please try again.");
+      }
+    } else {
+      const statusPrefix = data.status === "success" ? "✓" : (data.status === "cancelled" ? "⏹" : "⚠️");
+      const preview = (taskRecord.message || "Task").slice(0, 36);
+      showKookaiToast(
+        `${statusPrefix} [${taskRecord.workspace}] ${data.status === "success" ? "Completed" : "Finished"}: "${preview}" — Click to view`,
+        () => {
+          if (resolvedCid) {
+            toggleMultiProjectMode(false);
+            loadConversation(resolvedCid, taskRecord.workspace);
+          }
+        }
+      );
+    }
+
+    loadProjectsAndConversations();
+    fetchUsageLimits();
+  }
+
+  async function pollAllActiveTasksTick() {
+    if (taskPollInFlight || !canUseProtectedWorkspaceApis()) return;
+    taskPollInFlight = true;
+    try {
+      const activeIds = Array.from(activeTasksMap.keys());
+      await Promise.all(activeIds.map(async (taskId) => {
+        const record = activeTasksMap.get(taskId);
+        if (!record || record.isPendingStart) return;
+        try {
+          const pollRes = await fetch(`/api/chat-tasks/${encodeURIComponent(taskId)}?after=${record.lastSeq}`);
+          if (pollRes.status === 404) {
+            activeTasksMap.delete(taskId);
+            return;
+          }
+          if (!pollRes.ok) return;
+          const taskData = await pollRes.json();
+          record.status = taskData.status || record.status;
+          if (taskData.conversation_id) {
+            record.conversationId = taskData.conversation_id;
+          }
+          if (Array.isArray(taskData.events) && taskData.events.length) {
+            taskData.events.forEach(ev => {
+              record.events.push(ev);
+              record.lastSeq = Math.max(record.lastSeq, ev.seq);
+            });
+            const indicator = messagesContainer.querySelector(`.typing-row[data-task-id="${CSS.escape(taskId)}"]`);
+            if (indicator) {
+              updateTypingProgress(indicator, record.events, taskId);
+            }
+          }
+          updateBatchCardTaskUI(record);
+
+          if (taskData.status === "success" || taskData.status === "error" || taskData.status === "cancelled") {
+            activeTasksMap.delete(taskId);
+            applyFinishedTaskToUI(record, taskData.result || {
+              status: taskData.status,
+              reply: taskData.status === "cancelled" ? "⏹️ **Prompt cancelled by user**" : "⚠️ Task ended.",
+              conversation_id: taskData.conversation_id
+            });
+          }
+        } catch (err) {
+          console.warn("Error polling task", taskId, err);
+        }
+      }));
+
+      renderActiveTasksHeader();
+      renderProjectsTree();
+      renderWorkspaceDropdown();
+      syncPromptInputLockState();
+
+      if (activeTasksMap.size === 0 && taskPollerTimer) {
+        clearInterval(taskPollerTimer);
+        taskPollerTimer = null;
+      }
+    } finally {
+      taskPollInFlight = false;
+    }
+  }
+
+  function ensureTaskPollerRunning() {
+    renderActiveTasksHeader();
+    renderProjectsTree();
+    renderWorkspaceDropdown();
+    syncPromptInputLockState();
+    if (!taskPollerTimer && activeTasksMap.size > 0) {
+      taskPollerTimer = setInterval(pollAllActiveTasksTick, 1200);
+    }
+  }
+
+  async function syncServerActiveTasks() {
+    if (!canUseProtectedWorkspaceApis()) return;
+    try {
+      const res = await fetch("/api/chat-tasks?active_only=true");
+      if (!res.ok) return;
+      const data = await res.json();
+      const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      tasks.forEach(t => {
+        if (!t.task_id || activeTasksMap.has(t.task_id)) return;
+        const events = Array.isArray(t.events) ? t.events : [];
+        const lastSeq = events.reduce((acc, ev) => Math.max(acc, ev.seq ?? -1), -1);
+        activeTasksMap.set(t.task_id, {
+          taskId: t.task_id,
+          batchId: t.batch_id || null,
+          workspace: t.workspace || "agy",
+          conversationId: t.conversation_id,
+          originalConversationId: t.original_conversation_id || t.conversation_id,
+          message: t.message || "",
+          status: t.status || "running",
+          events,
+          lastSeq,
+        });
+      });
+      if (activeTasksMap.size > 0) {
+        ensureTaskPollerRunning();
+        const currentLive = getRunningTaskForConversation(activeConversationId);
+        if (currentLive && !messagesContainer.querySelector(`.typing-row[data-task-id="${CSS.escape(currentLive.taskId)}"]`)) {
+          const indicator = appendTypingIndicator(currentLive.taskId);
+          if (currentLive.events.length) {
+            updateTypingProgress(indicator, currentLive.events, currentLive.taskId);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Could not sync active tasks:", err);
+    }
+  }
+
+  async function sendBatchMessage(message, targetProjects) {
+    if (!canUseProtectedWorkspaceApis()) {
+      handleProtectedApiUnauthorized();
+      return;
+    }
+    if (!welcomeScreen.classList.contains("hidden")) {
+      welcomeScreen.classList.add("hidden");
+    }
+
+    appendMessage("user", `[Multi-Project → ${targetProjects.join(", ")}]\n\n${message}`);
+    try {
+      const res = await fetch("/api/chat-tasks/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          model: currentModel,
+          provider: currentProvider,
+          effort: ["claude", "xai", "muse"].includes(currentProvider) ? currentClaudeEffort : currentCodexEffort,
+          speed: currentCodexSpeed,
+          thinking: currentClaudeThinking,
+          workspaces: targetProjects,
+          target: currentTarget,
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data.tasks)) {
+        throw new Error(data.detail || "Failed to start multi-project batch");
       }
 
-      // Refresh list on sidebar tree
-      loadProjectsAndConversations();
-    } else if (data.status === "cancelled") {
-      appendMessage("assistant", data.reply || "⏹️ **Prompt cancelled by user**");
-      loadProjectsAndConversations();
-    } else {
-      appendMessage("assistant", data.reply || "⚠️ Error processing your prompt. Please try again.");
+      renderBatchDispatchCard(data.batch_id, message, data.tasks);
+      data.tasks.forEach(t => {
+        activeTasksMap.set(t.task_id, {
+          taskId: t.task_id,
+          batchId: data.batch_id,
+          workspace: t.workspace,
+          conversationId: t.conversation_id,
+          originalConversationId: t.conversation_id,
+          message,
+          status: t.status || "running",
+          events: [],
+          lastSeq: -1,
+        });
+      });
+      ensureTaskPollerRunning();
+    } catch (err) {
+      console.error("Batch task error:", err);
+      appendMessage("assistant", `⚠️ ${err.message || "Failed to dispatch multi-project tasks."}`);
     }
   }
 
@@ -1104,10 +1732,30 @@ document.addEventListener("DOMContentLoaded", () => {
       welcomeScreen.classList.add("hidden");
     }
 
+    const requestConvoId = activeConversationId || generateUUID();
+    activeConversationId = requestConvoId;
+    const requestWorkspace = currentWorkspace || "agy";
+    const pendingKey = `pending_${generateUUID()}`;
+
     appendMessage("user", message);
     const typingIndicator = appendTypingIndicator();
-    const progressEvents = [];
-    let lastSeq = -1;
+
+    activeTasksMap.set(pendingKey, {
+      taskId: pendingKey,
+      isPendingStart: true,
+      batchId: null,
+      workspace: requestWorkspace,
+      conversationId: requestConvoId,
+      originalConversationId: requestConvoId,
+      message,
+      status: "running",
+      events: [],
+      lastSeq: -1,
+    });
+    renderActiveTasksHeader();
+    renderProjectsTree();
+    renderWorkspaceDropdown();
+    syncPromptInputLockState();
 
     try {
       const startResponse = await fetch("/api/chat-tasks", {
@@ -1122,53 +1770,120 @@ document.addEventListener("DOMContentLoaded", () => {
           effort: ["claude", "xai", "muse"].includes(currentProvider) ? currentClaudeEffort : currentCodexEffort,
           speed: currentCodexSpeed,
           thinking: currentClaudeThinking,
-          workspace: currentWorkspace,
+          workspace: requestWorkspace,
           target: currentTarget,
-          conversation_id: activeConversationId
+          conversation_id: requestConvoId
         })
       });
       const startData = await startResponse.json();
+      activeTasksMap.delete(pendingKey);
+      const stillViewingRequestConvo = (activeConversationId === requestConvoId);
+
+      if (startResponse.status === 409) {
+        if (stillViewingRequestConvo && typingIndicator.isConnected) {
+          typingIndicator.remove();
+        }
+        showKookaiToast(`⚠️ ${startData.detail || "This conversation is already running a task."}`);
+        renderActiveTasksHeader();
+        renderProjectsTree();
+        syncPromptInputLockState();
+        return;
+      }
       if (!startResponse.ok || !startData.task_id) {
         throw new Error(startData.detail || "Failed to start chat task");
       }
 
-      setPromptRunningState(true, startData.task_id);
-
-      while (true) {
-        await wait(1500);
-        const pollResponse = await fetch(`/api/chat-tasks/${startData.task_id}?after=${lastSeq}`);
-        const taskData = await pollResponse.json();
-        if (!pollResponse.ok) {
-          throw new Error(taskData.detail || "Failed to poll chat task");
-        }
-
-        if (Array.isArray(taskData.events) && taskData.events.length) {
-          taskData.events.forEach(event => {
-            progressEvents.push(event);
-            lastSeq = Math.max(lastSeq, event.seq);
-          });
-          updateTypingProgress(typingIndicator, progressEvents);
-        }
-
-        if (taskData.status === "success" || taskData.status === "error" || taskData.status === "cancelled") {
-          typingIndicator.remove();
-          applyChatResponse(taskData.result || { status: taskData.status, reply: "⏹️ **Prompt cancelled by user**" }, message);
-          break;
-        }
+      if (stillViewingRequestConvo) {
+        const targetIndicator = typingIndicator.isConnected
+          ? typingIndicator
+          : (messagesContainer.querySelector(".typing-row") || appendTypingIndicator(startData.task_id));
+        targetIndicator.setAttribute("data-task-id", startData.task_id);
+        bindTypingCancelButton(targetIndicator, startData.task_id);
       }
+
+      activeTasksMap.set(startData.task_id, {
+        taskId: startData.task_id,
+        batchId: null,
+        workspace: requestWorkspace,
+        conversationId: requestConvoId,
+        originalConversationId: requestConvoId,
+        message,
+        status: startData.status || "running",
+        events: [],
+        lastSeq: -1,
+      });
+      ensureTaskPollerRunning();
     } catch (err) {
+      activeTasksMap.delete(pendingKey);
       console.error("Chat task error:", err);
-      typingIndicator.remove();
-      appendMessage("assistant", "⚠️ Network or server error. Please try again.");
-    } finally {
-      setPromptRunningState(false, null);
+      if (activeConversationId === requestConvoId) {
+        if (typingIndicator.isConnected) typingIndicator.remove();
+        appendMessage("assistant", `⚠️ ${err.message || "Network or server error. Please try again."}`);
+      } else {
+        showKookaiToast(`⚠️ [${requestWorkspace}] ${err.message || "Failed to start task."}`);
+      }
+      renderActiveTasksHeader();
+      renderProjectsTree();
+      renderWorkspaceDropdown();
+      syncPromptInputLockState();
     }
   }
 
   function sendMessage() {
-    if (isPromptRunning) return;
+    if (isCurrentViewLocked()) return;
     const message = promptTextarea.value.trim();
     if (!message) return;
+
+    // Support inline `/multi projA,projB <prompt>` or `/multi` toggle
+    if (message.toLowerCase() === "/multi") {
+      promptTextarea.value = "";
+      adjustTextareaHeight();
+      toggleMultiProjectMode(true);
+      if (workspaceDropdown && projectPickerBtn) {
+        positionDropdown(projectPickerBtn, workspaceDropdown, "down");
+      }
+      return;
+    }
+    const multiMatch = message.match(/^\/multi\s+([^\s]+)\s+([\s\S]+)$/i);
+    if (multiMatch) {
+      const parsedProjects = multiMatch[1]
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+      const actualPrompt = multiMatch[2].trim();
+      if (parsedProjects.length > 0 && actualPrompt) {
+        promptTextarea.value = "";
+        adjustTextareaHeight();
+        autocompletePopup.classList.add("hidden");
+        isSuggesting = false;
+        sendBatchMessage(actualPrompt, parsedProjects);
+        return;
+      }
+    }
+
+    if (multiProjectMode) {
+      const targets = Array.from(selectedBatchProjects);
+      if (targets.length === 0) {
+        showKookaiToast("Select at least one project in the folder picker first.");
+        if (workspaceDropdown && projectPickerBtn) {
+          positionDropdown(projectPickerBtn, workspaceDropdown, "down");
+        }
+        return;
+      }
+      promptTextarea.value = "";
+      adjustTextareaHeight();
+      autocompletePopup.classList.add("hidden");
+      isSuggesting = false;
+      if (targets.length === 1) {
+        currentWorkspace = targets[0];
+        if (headerProject) headerProject.textContent = currentWorkspace;
+        startNewConversation({ preserveMultiProject: true });
+        sendDirectMessage(message);
+      } else {
+        sendBatchMessage(message, targets);
+      }
+      return;
+    }
 
     promptTextarea.value = "";
     adjustTextareaHeight();
@@ -1236,6 +1951,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Autocomplete Tags & Commands System ---
   const slashCommands = [
+    { name: "/multi", desc: "Command multiple projects simultaneously (e.g. /multi projA,projB <task>)", type: "Command" },
     { name: "/watch", desc: "Watch & analyze video (URL or local path)", type: "Command" },
     { name: "/fable5", desc: "Fable-5 high-reliability 8-step framework", type: "Command" },
     { name: "/impeccable", desc: "Craft out-of-distribution UI design & polish", type: "Command" },
@@ -1360,9 +2076,9 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (isPromptRunning) return;
+        if (isCurrentViewLocked()) return;
         sendMessage();
-      } else if (e.key === "Escape" && isPromptRunning) {
+      } else if (e.key === "Escape" && getRunningTaskForConversation(activeConversationId)) {
         e.preventDefault();
         cancelActivePrompt();
       }
@@ -1370,7 +2086,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && isPromptRunning) {
+    if (e.key === "Escape" && getRunningTaskForConversation(activeConversationId)) {
       cancelActivePrompt();
     }
   });
@@ -1627,9 +2343,27 @@ document.addEventListener("DOMContentLoaded", () => {
     container.appendChild(card);
   }
 
-  function appendTypingIndicator() {
+  function bindTypingCancelButton(row, taskId = null) {
+    const cancelBtn = row?.querySelector(".typing-cancel-btn");
+    if (!cancelBtn) return;
+    cancelBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const resolvedTaskId = taskId || row.getAttribute("data-task-id");
+      if (resolvedTaskId) {
+        cancelTaskById(resolvedTaskId);
+      } else {
+        cancelActivePrompt();
+      }
+    };
+  }
+
+  function appendTypingIndicator(taskId = null) {
     const row = document.createElement("div");
     row.className = "message-row assistant typing-row";
+    if (taskId) {
+      row.setAttribute("data-task-id", taskId);
+    }
 
     const avatar = document.createElement("div");
     avatar.className = "avatar assistant";
@@ -1650,14 +2384,7 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
     `;
 
-    const cancelBtn = bubble.querySelector(".typing-cancel-btn");
-    if (cancelBtn) {
-      cancelBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        cancelActivePrompt();
-      });
-    }
+    bindTypingCancelButton(row, taskId);
 
     row.appendChild(avatar);
     row.appendChild(bubble);
@@ -1667,7 +2394,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return row;
   }
 
-  function updateTypingProgress(row, events) {
+  function updateTypingProgress(row, events, taskId = null) {
     if (!row || !events.length) return;
     const bubble = row.querySelector(".message-bubble");
     if (!bubble) return;
@@ -1689,14 +2416,7 @@ document.addEventListener("DOMContentLoaded", () => {
       <div>${parsedHtml}</div>
     `;
 
-    const cancelBtn = bubble.querySelector(".typing-cancel-btn");
-    if (cancelBtn) {
-      cancelBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        cancelActivePrompt();
-      });
-    }
+    bindTypingCancelButton(row, taskId || row.getAttribute("data-task-id"));
 
     chatScroll.scrollTop = chatScroll.scrollHeight;
   }
@@ -1728,8 +2448,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   window.addEventListener("click", (e) => {
-    if (workspaceDropdown && !workspaceDropdown.contains(e.target) && (!projectPickerBtn || !projectPickerBtn.contains(e.target))) {
+    if (workspaceDropdown && !workspaceDropdown.contains(e.target) && (!projectPickerBtn || !projectPickerBtn.contains(e.target)) && (!multiProjectModeBtn || !multiProjectModeBtn.contains(e.target))) {
       workspaceDropdown.classList.add("hidden");
+    }
+    if (activeTasksDropdown && !activeTasksDropdown.contains(e.target) && (!activeTasksHeaderBtn || !activeTasksHeaderBtn.contains(e.target))) {
+      activeTasksDropdown.classList.add("hidden");
     }
     if (!modelBtn.contains(e.target) && !modelDropdown.contains(e.target)) {
       modelDropdown.classList.add("hidden");
@@ -1823,15 +2546,49 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   workspaceDropdown.addEventListener("click", (e) => {
+    const actionBtn = e.target.closest("[data-ws-action]");
+    if (actionBtn) {
+      e.stopPropagation();
+      const action = actionBtn.getAttribute("data-ws-action");
+      if (action === "toggle-multi") {
+        toggleMultiProjectMode();
+      } else if (action === "select-all") {
+        const projects = Array.isArray(projectsList) ? projectsList : [];
+        const allSelected = projects.length > 0 && projects.every(p => selectedBatchProjects.has(p));
+        selectedBatchProjects.clear();
+        if (!allSelected) {
+          projects.forEach(p => selectedBatchProjects.add(p));
+        }
+        renderMultiProjectTargetBar();
+        renderWorkspaceDropdown();
+      }
+      return;
+    }
+
     const item = e.target.closest(".dropdown-item");
-    if (!item) return;
+    if (!item || item.classList.contains("disabled")) return;
+    const val = item.getAttribute("data-value");
+    if (!val) return;
+
+    if (multiProjectMode) {
+      e.stopPropagation();
+      if (selectedBatchProjects.has(val)) {
+        selectedBatchProjects.delete(val);
+      } else {
+        selectedBatchProjects.add(val);
+      }
+      renderMultiProjectTargetBar();
+      renderWorkspaceDropdown();
+      return;
+    }
+
     workspaceDropdown.querySelectorAll(".dropdown-item").forEach(el => el.classList.remove("active"));
     item.classList.add("active");
-    const val = item.getAttribute("data-value");
     currentWorkspace = val;
     if (headerProject) headerProject.textContent = val;
     workspaceDropdown.classList.add("hidden");
     saveAppPreferences();
+    fetchWorkspaceFiles(val);
     startNewConversation();
   });
 
@@ -1912,9 +2669,11 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     const file = mediaFileInput.files[0];
+    const uploadConvoId = activeConversationId;
+    const uploadWorkspace = currentWorkspace;
 
     try {
-      const response = await fetch(`/api/upload-media?conversation_id=${activeConversationId}&filename=${encodeURIComponent(file.name)}`, {
+      const response = await fetch(`/api/upload-media?conversation_id=${encodeURIComponent(uploadConvoId)}&filename=${encodeURIComponent(file.name)}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/octet-stream"
@@ -1928,8 +2687,10 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       if (res.status === "success") {
-        // Successfully uploaded! Reload conversation details to show the attachment
-        loadConversation(activeConversationId, currentWorkspace);
+        // Reload conversation details only if the user is still viewing that conversation
+        if (activeConversationId === uploadConvoId) {
+          loadConversation(uploadConvoId, uploadWorkspace);
+        }
       } else {
         alert("Upload failed: " + res.detail);
       }

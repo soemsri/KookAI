@@ -2961,3 +2961,477 @@ body {
     z-index: 1100;
   }
 }
+
+/* ==========================================================================
+   Multi-Project Orchestration & Parallel Task Controls
+   ========================================================================== */
+
+.chat-header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.header-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.multi-project-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.multi-project-toggle-btn:hover {
+  background-color: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.multi-project-toggle-btn.active {
+  background-color: var(--accent-light);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .multi-project-toggle-btn.active {
+    background-color: rgba(59, 130, 246, 0.16);
+  }
+}
+
+:root[data-theme="dark"] .multi-project-toggle-btn.active {
+  background-color: rgba(59, 130, 246, 0.16);
+}
+
+.active-tasks-header-wrap {
+  position: relative;
+}
+
+.active-tasks-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 9999px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.active-tasks-pill-btn:hover {
+  background-color: var(--bg-active);
+}
+
+.task-spinner-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  animation: taskSpin 0.85s linear infinite;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+@keyframes taskSpin {
+  to { transform: rotate(360deg); }
+}
+
+.active-tasks-dropdown {
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 320px;
+  max-width: min(92vw, 380px);
+  max-height: 400px;
+  overflow-y: auto;
+  z-index: 220;
+}
+
+.active-tasks-dropdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 4px;
+}
+
+.text-link-danger {
+  background: transparent;
+  border: none;
+  color: var(--status-red);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.text-link-danger:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.active-tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.active-task-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.active-task-item:hover {
+  background-color: var(--bg-active);
+}
+
+.active-task-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.active-task-proj {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.active-task-msg {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-running-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 9999px;
+  background-color: var(--accent-light);
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .project-running-badge {
+    background-color: rgba(59, 130, 246, 0.18);
+  }
+}
+
+:root[data-theme="dark"] .project-running-badge {
+  background-color: rgba(59, 130, 246, 0.18);
+}
+
+.project-folder-row.has-running .project-folder-row-right {
+  opacity: 1;
+}
+
+/* Workspace Dropdown Multi-Select */
+.workspace-dropdown-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 4px;
+}
+
+.workspace-mode-switch-btn,
+.workspace-select-all-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workspace-mode-switch-btn.active {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background-color: var(--accent-light);
+}
+
+.workspace-checkbox {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1.5px solid var(--border-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffffff;
+  flex-shrink: 0;
+}
+
+.workspace-checkbox.checked {
+  background-color: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+/* Multi-project target chips bar above prompt */
+.multi-project-target-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px 8px 8px;
+  font-size: 12px;
+}
+
+.multi-project-target-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
+
+.multi-project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.multi-project-chip button {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 1px;
+}
+
+.multi-project-chip button:hover {
+  color: var(--status-red);
+}
+
+.multi-project-clear-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.multi-project-clear-btn:hover {
+  color: var(--text-primary);
+  background-color: rgba(128, 128, 128, 0.1);
+}
+
+/* Multi-Project Batch Dispatch Card in Chat Stream */
+.batch-dispatch-card {
+  width: 100%;
+  max-width: 780px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background-color: var(--bg-primary);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.batch-dispatch-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.batch-dispatch-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.batch-dispatch-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.batch-task-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.batch-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.batch-task-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.batch-task-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-task-project {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.batch-status-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 9999px;
+}
+
+.batch-status-pill.running,
+.batch-status-pill.queued {
+  background-color: var(--accent-light);
+  color: var(--accent-color);
+}
+
+.batch-status-pill.success {
+  background-color: rgba(16, 185, 129, 0.14);
+  color: var(--status-green);
+}
+
+.batch-status-pill.error,
+.batch-status-pill.cancelled {
+  background-color: rgba(239, 68, 68, 0.14);
+  color: var(--status-red);
+}
+
+.batch-task-progress {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.batch-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.batch-open-btn {
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.batch-open-btn:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+/* Toast Notifications */
+.kookai-toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1500;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(92vw, 360px);
+  pointer-events: none;
+}
+
+.kookai-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  animation: slideUp var(--transition-fast);
+}
+
+.kookai-toast:hover {
+  border-color: var(--accent-color);
+}
+
+@media (max-width: 600px) {
+  .multi-project-toggle-btn span {
+    display: none;
+  }
+}

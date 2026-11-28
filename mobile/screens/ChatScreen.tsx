@@ -86,8 +86,22 @@ conversationId: string;
 
 interface ChatTaskEvent {
 seq: number;
-type: 'progress' | 'error';
+type: 'progress' | 'error' | 'info' | 'warning' | string;
 message: string;
+}
+
+interface RunningProjectTask {
+  taskId: string;
+  isPendingStart?: boolean;
+  batchId?: string | null;
+  workspace: string;
+  conversationId: string;
+  originalConversationId: string;
+  message: string;
+  status: string;
+  events: ChatTaskEvent[];
+  lastSeq: number;
+  provider?: AgentProvider;
 }
 
 interface HarnessProfile {
@@ -571,8 +585,14 @@ const parseQuestionPayload = (content: string): QuestionPayload | null => {
 };
 
 const getBadgeStyles = (modelName: string, isDark: boolean) => {
-  const catalogBadge = getModelOption(modelName)?.badge;
+  const option = getModelOption(modelName);
+  const catalogBadge = option?.badge;
   const name = getModelLabel(modelName).toLowerCase();
+  if (option?.provider === 'local') {
+    return isDark
+      ? { text: catalogBadge || 'Local', bg: 'rgba(20, 184, 166, 0.16)', color: '#2dd4bf' }
+      : { text: catalogBadge || 'Local', bg: '#ccfbf1', color: '#0f766e' };
+  }
   if (isCodexModel(modelName)) {
     return isDark
       ? { text: catalogBadge || 'Codex', bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }
@@ -1295,6 +1315,9 @@ const [isEffortModalOpen, setIsEffortModalOpen] = useState(false);
 const [isSpeedModalOpen, setIsSpeedModalOpen] = useState(false);
 const [isTargetModalOpen, setIsTargetModalOpen] = useState(false);
 const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+const [isMultiProjectMode, setIsMultiProjectMode] = useState(false);
+const [selectedBatchProjects, setSelectedBatchProjects] = useState<string[]>([]);
+const [runningTasks, setRunningTasks] = useState<RunningProjectTask[]>([]);
 const [isNewProjectFormOpen, setIsNewProjectFormOpen] = useState(false);
 const [newProjectName, setNewProjectName] = useState('');
 const [newProjectError, setNewProjectError] = useState('');
@@ -1341,6 +1364,10 @@ const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const selectedProfileIdRef = useRef<string | null>(selectedProfileId);
   const didMountProfileUsageRef = useRef(false);
   const activeTaskIdRef = useRef<string | null>(null);
+  const runningTasksRef = useRef<Record<string, RunningProjectTask>>({});
+  const taskPollerTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const taskPollBusyRef = useRef(false);
+  const convoViewSeqRef = useRef(0);
   const savedConvoIdRef = useRef<string | null>(null);
 
   // Sidebar expand/collapse state & animation
@@ -1549,6 +1576,15 @@ activeConvoProviderRef.current = activeConvoProvider;
 useEffect(() => {
 selectedProjectRef.current = selectedProject;
 }, [selectedProject]);
+
+useEffect(() => {
+  return () => {
+    if (taskPollerTimerRef.current) {
+      clearInterval(taskPollerTimerRef.current);
+      taskPollerTimerRef.current = null;
+    }
+  };
+}, []);
 
   const loadSavedPreferences = async () => {
     try {
@@ -1923,11 +1959,13 @@ fetchUsageLimits();
     await refreshServerList();
 
     // Context Reset (Task 5.1 & 5.2)
+    convoViewSeqRef.current += 1;
     setMessages([]);
     setLocalAttachments([]);
     setQueuedPrompts([]);
     setTaskProgressEvents([]);
     setActiveConvoId('');
+    activeConvoIdRef.current = '';
     setSelectedProfileId(null);
     setHarnessProfiles([]);
 
@@ -1960,11 +1998,20 @@ fetchUsageLimits();
   };
 
   const handleSelectWorkspace = async (workspaceId: string) => {
+    convoViewSeqRef.current += 1;
+    setIsMultiProjectMode(false);
+    setSelectedBatchProjects([]);
     setSelectedProject(workspaceId);
     selectedProjectRef.current = workspaceId;
+    activeConvoIdRef.current = '';
+    setActiveConvoId('');
     setActiveConvoProject(workspaceId);
     activeConvoProjectRef.current = workspaceId;
+    updateMessages([]);
+    syncActiveViewTaskState('');
+    checkAndAttachActiveTask('', workspaceId);
     SecureStore.setItemAsync(PREFERENCE_KEYS.project, workspaceId).catch(() => {});
+    SecureStore.deleteItemAsync(PREFERENCE_KEYS.convoId).catch(() => {});
     showToast(`Switched workspace to "${workspaceId}"`);
     setIsServerSwitcherOpen(false);
   };
@@ -2347,6 +2394,7 @@ const loadConversations = async (autoSelect = true) => {
 };
 
 const selectConversation = async (cid: string, projectName?: string, updateModelPreference = false) => {
+  const mySeq = ++convoViewSeqRef.current;
   const selectedConversation = conversations.find((convo) => convo.id === cid);
   const conversationProject = projectName || selectedConversation?.project;
   const conversationProvider = selectedConversation?.provider
@@ -2378,10 +2426,14 @@ const selectConversation = async (cid: string, projectName?: string, updateModel
       SecureStore.setItemAsync(PREFERENCE_KEYS.convoId, cid).catch(() => {});
     }
   }
-  setQueuedPromptList([]);
+  updateMessages([]);
+  syncActiveViewTaskState(cid);
   setLoadingState(true);
   try {
     const data = await callHostApi(`/api/conversation/${cid}`);
+    if (convoViewSeqRef.current !== mySeq || activeConvoIdRef.current !== cid) {
+      return;
+    }
     const resolvedProject = data.project || conversationProject;
     const resolvedProvider: AgentProvider = ['codex', 'claude', 'kimi', 'xai', 'muse', 'deepseek', 'zai', 'local'].includes(data.provider)
       ? data.provider
@@ -2427,29 +2479,50 @@ const selectConversation = async (cid: string, projectName?: string, updateModel
     updateMessages(data.messages || []);
     setTimeout(() => scrollMessagesToBottom(false), 250);
   } catch (err: any) {
-    Alert.alert("Error", "Failed to load chat logs.");
+    if (convoViewSeqRef.current === mySeq && activeConvoIdRef.current === cid) {
+      Alert.alert("Error", "Failed to load chat logs.");
+    }
   } finally {
-    setLoadingState(false);
-    checkAndAttachActiveTask(cid, conversationProject);
+    if (convoViewSeqRef.current === mySeq && activeConvoIdRef.current === cid) {
+      syncActiveViewTaskState(cid);
+      checkAndAttachActiveTask(cid, conversationProject);
+    }
   }
 };
 
-const startNewChat = async () => {
-  try {
-    const savedModel = await SecureStore.getItemAsync(PREFERENCE_KEYS.model);
-    if (savedModel && activeModelsList.some((m) => m.value === savedModel)) {
-      setSelectedModel(savedModel);
-    }
-  } catch {}
+  const startNewChat = async () => {
+  const mySeq = ++convoViewSeqRef.current;
+  setIsMultiProjectMode(false);
+  setSelectedBatchProjects([]);
   const project = selectedProjectRef.current || selectedProject;
   const newId = `temp_${project}_${Math.random().toString(36).substring(2, 11)}`;
   updateActiveConversation(newId, project, getModelOption(selectedModel)?.provider || 'agy');
-  setQueuedPromptList([]);
   updateMessages([]);
-  checkAndAttachActiveTask(newId, project);
+  syncActiveViewTaskState(newId);
+  try {
+    const savedModel = await SecureStore.getItemAsync(PREFERENCE_KEYS.model);
+    if (
+      convoViewSeqRef.current === mySeq
+      && activeConvoIdRef.current === newId
+      && savedModel
+      && activeModelsList.some((m) => m.value === savedModel)
+    ) {
+      setSelectedModel(savedModel);
+      const savedProvider = getModelOption(savedModel)?.provider || 'agy';
+      activeConvoProviderRef.current = savedProvider;
+      setActiveConvoProvider(savedProvider);
+    }
+  } catch {}
 };
 
 const handleSelectProject = (project: string) => {
+  if (isMultiProjectMode) {
+    setSelectedBatchProjects((prev) =>
+      prev.includes(project) ? prev.filter((p) => p !== project) : [...prev, project]
+    );
+    return;
+  }
+  convoViewSeqRef.current += 1;
   setSelectedProject(project);
   selectedProjectRef.current = project;
   activeConvoIdRef.current = '';
@@ -2458,8 +2531,8 @@ const handleSelectProject = (project: string) => {
   setActiveConvoId('');
   setActiveConvoProject(project);
   setActiveConvoProvider(activeConvoProviderRef.current);
-  setQueuedPromptList([]);
   updateMessages([]);
+  syncActiveViewTaskState('');
   setIsProjectModalOpen(false);
   checkAndAttachActiveTask('', project);
   SecureStore.setItemAsync(PREFERENCE_KEYS.project, project).catch(() => {});
@@ -2669,126 +2742,253 @@ item.conversationId === oldConversationId ? { ...item, conversationId: nextConve
 setQueuedPromptList(nextQueue);
 };
 
-const processNextQueuedPrompt = () => {
-if (loadingRef.current || queuedPromptsRef.current.length === 0) return;
+  const getRunningTaskForConversation = (convoId?: string | null): RunningProjectTask | null => {
+    if (!convoId) return null;
+    const all = Object.values(runningTasksRef.current);
+    return (
+      all.find(
+        (t) =>
+          (t.status === 'running' || t.status === 'queued') &&
+          (t.conversationId === convoId || t.originalConversationId === convoId)
+      ) || null
+    );
+  };
 
-const [nextPrompt, ...remainingQueue] = queuedPromptsRef.current;
-setQueuedPromptList(remainingQueue);
-sendChatMessage(nextPrompt.content, messagesRef.current, false, {
-attachments: nextPrompt.attachments,
-model: nextPrompt.model,
-provider: nextPrompt.provider,
-effort: nextPrompt.effort,
-speed: nextPrompt.speed,
-thinking: nextPrompt.thinking,
-target: nextPrompt.target,
-project: nextPrompt.project,
-conversationId: nextPrompt.conversationId,
-allowQueue: false,
-});
-};
+  const syncRunningTasksListState = () => {
+    const active = Object.values(runningTasksRef.current).filter(
+      (t) => t.status === 'running' || t.status === 'queued'
+    );
+    setRunningTasks(active);
+  };
 
-  const pollActiveTask = async (
-    taskId: string,
-    targetConvoId: string,
-    initialEvents: ChatTaskEvent[] = []
-  ) => {
-    if (activeTaskIdRef.current === taskId) return;
-    activeTaskIdRef.current = taskId;
-
-    setLoadingState(true);
-    const progressEvents: ChatTaskEvent[] = [...initialEvents];
-    let lastSeq = initialEvents.reduce((max, ev) => Math.max(max, ev.seq), -1);
-    if (initialEvents.length > 0) {
-      setTaskProgressEvents([...progressEvents]);
-    }
-
-    let response: any = null;
-
-    try {
-      while (activeTaskIdRef.current === taskId) {
-        await wait(1500);
-        if (activeTaskIdRef.current !== taskId) break;
-
-        const taskResponse = await callHostApi(`/api/chat-tasks/${taskId}?after=${lastSeq}`);
-        if (!taskResponse) break;
-
-        if (Array.isArray(taskResponse.events) && taskResponse.events.length > 0) {
-          taskResponse.events.forEach((event: ChatTaskEvent) => {
-            progressEvents.push(event);
-            lastSeq = Math.max(lastSeq, event.seq);
-          });
-          setTaskProgressEvents([...progressEvents]);
-          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
-        }
-
-        if (taskResponse.status === 'success' || taskResponse.status === 'error' || taskResponse.status === 'cancelled') {
-          response = taskResponse.result;
-          break;
-        }
-      }
-
-      if (response && response.reply) {
-        setMessages((prevMsgs) => {
-          const lastMsg = prevMsgs[prevMsgs.length - 1];
-          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === response.reply) {
-            return prevMsgs;
-          }
-          const updated: Message[] = [
-            ...prevMsgs,
-            { role: 'assistant', content: String(response.reply) },
-          ];
-          messagesRef.current = updated;
-          return updated;
-        });
-
-        loadConversations(false);
-        fetchUsageLimits();
-        if (response.conversation_id && response.conversation_id !== targetConvoId) {
-          updateActiveConversation(response.conversation_id, selectedProjectRef.current, activeConvoProviderRef.current);
-          replaceQueuedConversationId(targetConvoId, response.conversation_id);
-        }
-      }
-    } catch (err: any) {
-      console.error("Error polling active task:", err);
-    } finally {
-      if (activeTaskIdRef.current === taskId) {
-        activeTaskIdRef.current = null;
-      }
-      setTaskProgressEvents([]);
+  const syncActiveViewTaskState = (convoIdOverride?: string) => {
+    const targetCid = convoIdOverride !== undefined ? convoIdOverride : activeConvoIdRef.current;
+    const currentTask = getRunningTaskForConversation(targetCid);
+    if (currentTask) {
+      activeTaskIdRef.current = currentTask.taskId;
+      setLoadingState(true);
+      setTaskProgressEvents([...currentTask.events]);
+    } else {
+      activeTaskIdRef.current = null;
       setLoadingState(false);
-      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
-      setTimeout(processNextQueuedPrompt, 0);
+      setTaskProgressEvents([]);
     }
   };
 
+  const processNextQueuedPrompt = (targetConversationId?: string) => {
+    if (queuedPromptsRef.current.length === 0) return;
+    const candidateIdx = queuedPromptsRef.current.findIndex((item) => {
+      if (targetConversationId && item.conversationId !== targetConversationId) return false;
+      return !getRunningTaskForConversation(item.conversationId);
+    });
+    if (candidateIdx === -1) return;
+
+    const nextPrompt = queuedPromptsRef.current[candidateIdx];
+    const remainingQueue = queuedPromptsRef.current.filter((_, idx) => idx !== candidateIdx);
+    setQueuedPromptList(remainingQueue);
+    const isCurrentView = activeConvoIdRef.current === nextPrompt.conversationId;
+    sendChatMessage(nextPrompt.content, isCurrentView ? messagesRef.current : [], false, {
+      attachments: nextPrompt.attachments,
+      model: nextPrompt.model,
+      provider: nextPrompt.provider,
+      effort: nextPrompt.effort,
+      speed: nextPrompt.speed,
+      thinking: nextPrompt.thinking,
+      target: nextPrompt.target,
+      project: nextPrompt.project,
+      conversationId: nextPrompt.conversationId,
+      allowQueue: false,
+    });
+  };
+
+  const pollAllRunningTasksTick = async () => {
+    if (taskPollBusyRef.current) return;
+    const activeIds = Object.keys(runningTasksRef.current);
+    if (activeIds.length === 0) {
+      if (taskPollerTimerRef.current) {
+        clearInterval(taskPollerTimerRef.current);
+        taskPollerTimerRef.current = null;
+      }
+      return;
+    }
+
+    taskPollBusyRef.current = true;
+    try {
+      await Promise.all(
+        activeIds.map(async (taskId) => {
+          const rec = runningTasksRef.current[taskId];
+          if (!rec || rec.isPendingStart) return;
+          try {
+            const taskResponse = await callHostApi(`/api/chat-tasks/${taskId}?after=${rec.lastSeq}`);
+            if (!taskResponse) return;
+
+            rec.status = taskResponse.status || rec.status;
+            if (taskResponse.conversation_id) {
+              rec.conversationId = taskResponse.conversation_id;
+            }
+            if (Array.isArray(taskResponse.events) && taskResponse.events.length > 0) {
+              taskResponse.events.forEach((ev: ChatTaskEvent) => {
+                rec.events.push(ev);
+                rec.lastSeq = Math.max(rec.lastSeq, ev.seq);
+              });
+              const viewingThis =
+                activeConvoIdRef.current === rec.conversationId ||
+                activeConvoIdRef.current === rec.originalConversationId;
+              if (viewingThis) {
+                setTaskProgressEvents([...rec.events]);
+                setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+              }
+            }
+
+            if (
+              taskResponse.status === 'success' ||
+              taskResponse.status === 'error' ||
+              taskResponse.status === 'cancelled'
+            ) {
+              delete runningTasksRef.current[taskId];
+              const response = taskResponse.result || {
+                status: taskResponse.status,
+                reply:
+                  taskResponse.status === 'cancelled'
+                    ? '⏹️ **Prompt cancelled by user**'
+                    : '⚠️ Task ended.',
+                conversation_id: rec.conversationId,
+              };
+              const resolvedCid = response.conversation_id || rec.conversationId || rec.originalConversationId;
+              const isViewingThisConvo =
+                activeConvoIdRef.current === rec.originalConversationId ||
+                activeConvoIdRef.current === rec.conversationId ||
+                (Boolean(resolvedCid) && activeConvoIdRef.current === resolvedCid);
+
+              if (resolvedCid && resolvedCid !== rec.originalConversationId) {
+                replaceQueuedConversationId(rec.originalConversationId, resolvedCid);
+              }
+
+              if (isViewingThisConvo) {
+                if (response && response.reply) {
+                  setMessages((prevMsgs) => {
+                    const lastMsg = prevMsgs[prevMsgs.length - 1];
+                    if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === response.reply) {
+                      return prevMsgs;
+                    }
+                    const updated: Message[] = [
+                      ...prevMsgs,
+                      { role: 'assistant', content: String(response.reply) },
+                    ];
+                    messagesRef.current = updated;
+                    return updated;
+                  });
+                }
+                if (resolvedCid && resolvedCid !== activeConvoIdRef.current) {
+                  updateActiveConversation(
+                    resolvedCid,
+                    rec.workspace || selectedProjectRef.current,
+                    rec.provider || activeConvoProviderRef.current
+                  );
+                }
+                syncActiveViewTaskState(resolvedCid);
+                setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+              } else {
+                const icon = taskResponse.status === 'success' ? '✓' : taskResponse.status === 'cancelled' ? '⏹' : '⚠️';
+                showToast(`${icon} [${rec.workspace}] ${taskResponse.status === 'success' ? 'Task completed' : 'Task finished'}`);
+              }
+
+              loadConversations(false);
+              fetchUsageLimits();
+              setTimeout(() => processNextQueuedPrompt(resolvedCid), 0);
+            }
+          } catch (err) {
+            console.warn('Error polling task', taskId, err);
+          }
+        })
+      );
+
+      syncRunningTasksListState();
+      syncActiveViewTaskState();
+
+      if (Object.keys(runningTasksRef.current).length === 0 && taskPollerTimerRef.current) {
+        clearInterval(taskPollerTimerRef.current);
+        taskPollerTimerRef.current = null;
+      }
+    } finally {
+      taskPollBusyRef.current = false;
+    }
+  };
+
+  const ensureRunningTaskPoller = () => {
+    syncRunningTasksListState();
+    syncActiveViewTaskState();
+    if (!taskPollerTimerRef.current && Object.keys(runningTasksRef.current).length > 0) {
+      taskPollerTimerRef.current = setInterval(pollAllRunningTasksTick, 1300);
+    }
+  };
+
+  const registerRunningTask = (task: RunningProjectTask) => {
+    runningTasksRef.current[task.taskId] = task;
+    ensureRunningTaskPoller();
+  };
+
   const checkAndAttachActiveTask = async (currentConvoId?: string, currentProject?: string) => {
+    const expectedSeq = convoViewSeqRef.current;
     const convoId = currentConvoId !== undefined ? currentConvoId : activeConvoIdRef.current;
     const project = currentProject !== undefined ? currentProject : selectedProjectRef.current;
 
     try {
       const res = await callHostApi('/api/chat-tasks?active_only=true');
-      if (!res || !Array.isArray(res.tasks) || res.tasks.length === 0) {
+      if (!res || !Array.isArray(res.tasks)) {
+        if (convoViewSeqRef.current === expectedSeq && activeConvoIdRef.current === convoId) {
+          syncActiveViewTaskState(convoId);
+        }
         return;
       }
 
-      const activeTask = res.tasks.find((t: any) => {
-        if (convoId && t.conversation_id === convoId) return true;
-        if (project && t.workspace === project) {
-          if (!convoId || convoId.startsWith('temp_') || !t.conversation_id || t.conversation_id.startsWith('temp_')) {
-            return true;
-          }
+      res.tasks.forEach((t: any) => {
+        if (!t.task_id || runningTasksRef.current[t.task_id]) return;
+        const evs: ChatTaskEvent[] = Array.isArray(t.events) ? t.events : [];
+        const lastSeq = evs.reduce((max, ev) => Math.max(max, ev.seq ?? -1), -1);
+        runningTasksRef.current[t.task_id] = {
+          taskId: t.task_id,
+          batchId: t.batch_id || null,
+          workspace: t.workspace || 'agy',
+          conversationId: t.conversation_id || '',
+          originalConversationId: t.original_conversation_id || t.conversation_id || '',
+          message: t.message || '',
+          status: t.status || 'running',
+          events: evs,
+          lastSeq,
+          provider: t.provider || 'agy',
+        };
+      });
+
+      syncRunningTasksListState();
+      if (Object.keys(runningTasksRef.current).length > 0) {
+        ensureRunningTaskPoller();
+      }
+
+      // If the user switched to a New Conversation or another chat while this request was in flight,
+      // never inject the previous working conversation's messages or loading state into the new view.
+      if (convoViewSeqRef.current !== expectedSeq || activeConvoIdRef.current !== convoId) {
+        syncActiveViewTaskState();
+        return;
+      }
+
+      const activeTask = Object.values(runningTasksRef.current).find((t) => {
+        if (convoId && (t.conversationId === convoId || t.originalConversationId === convoId)) {
+          return true;
         }
         return false;
       });
 
-      if (!activeTask) return;
-
-      const taskId = activeTask.task_id;
-      if (activeTaskIdRef.current === taskId) return;
+      if (!activeTask) {
+        syncActiveViewTaskState(convoId);
+        return;
+      }
 
       if (activeTask.message) {
         setMessages((prevMsgs) => {
+          if (activeConvoIdRef.current !== convoId && activeConvoIdRef.current !== activeTask.conversationId) {
+            return prevMsgs;
+          }
           const hasUserMsg = prevMsgs.some(
             (m) => m.role === 'user' && (m.content === activeTask.message || m.content.includes(activeTask.message))
           );
@@ -2804,14 +3004,70 @@ allowQueue: false,
         });
       }
 
-      if (activeTask.conversation_id && activeTask.conversation_id !== convoId && !activeTask.conversation_id.startsWith('temp_')) {
-        updateActiveConversation(activeTask.conversation_id, project || activeTask.workspace || 'agy', activeTask.provider || 'agy');
+      if (activeTask.conversationId && activeTask.conversationId !== convoId && !activeTask.conversationId.startsWith('temp_')) {
+        updateActiveConversation(activeTask.conversationId, project || activeTask.workspace || 'agy', activeTask.provider || 'agy');
       }
-
-      pollActiveTask(taskId, activeTask.conversation_id || convoId, activeTask.events || []);
-
+      syncActiveViewTaskState(activeTask.conversationId || convoId);
     } catch (err) {
       console.error("Error checking active task:", err);
+    }
+  };
+
+  const sendBatchProjectsMessage = async (
+    userMsg: string,
+    targetProjects: string[],
+    requestModel: string,
+    requestProvider: AgentProvider,
+    requestEffort: string,
+    requestSpeed: string,
+    requestThinking: boolean,
+    requestTarget: string,
+  ) => {
+    const summaryPrompt = `[Multi-Project → ${targetProjects.join(', ')}]\n\n${userMsg}`;
+    const updatedMessages = [...messagesRef.current, { role: 'user', content: summaryPrompt } as Message];
+    updateMessages(updatedMessages);
+    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+
+    try {
+      const batchRes = await callHostApi('/api/chat-tasks/batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: userMsg,
+          model: requestModel,
+          provider: requestProvider,
+          effort: requestEffort,
+          speed: requestSpeed,
+          thinking: requestThinking,
+          workspaces: targetProjects,
+          target: requestTarget,
+          profile_id: selectedProfileId || undefined,
+        }),
+      });
+      if (!batchRes || !Array.isArray(batchRes.tasks)) {
+        throw new Error('Failed to start multi-project batch tasks');
+      }
+      batchRes.tasks.forEach((t: any) => {
+        runningTasksRef.current[t.task_id] = {
+          taskId: t.task_id,
+          batchId: batchRes.batch_id,
+          workspace: t.workspace,
+          conversationId: t.conversation_id,
+          originalConversationId: t.conversation_id,
+          message: userMsg,
+          status: t.status || 'running',
+          events: [],
+          lastSeq: -1,
+          provider: requestProvider,
+        };
+      });
+      ensureRunningTaskPoller();
+      const statusCard = `🚀 **Dispatched simultaneously to ${batchRes.tasks.length} projects**: ${batchRes.tasks
+        .map((t: any) => `\`${t.workspace}\``)
+        .join(', ')}\n\nTap any running project chip above to inspect its live progress or switch workspaces freely.`;
+      updateMessages([...updatedMessages, { role: 'assistant', content: statusCard }]);
+      showToast(`Running across ${batchRes.tasks.length} projects`);
+    } catch (err: any) {
+      Alert.alert('Multi-Project Dispatch Failed', err.message || 'Could not start parallel tasks.');
     }
   };
 
@@ -2830,11 +3086,6 @@ allowQueue: false,
       setInputText('');
     }
 
-    if (loadingRef.current && options?.allowQueue !== false) {
-      enqueuePrompt(userMsg, attachmentsForPrompt);
-      return;
-    }
-
     const requestModel = options?.model || selectedModel;
     const requestProvider = options?.provider || getModelOption(requestModel)?.provider || 'agy';
     const requestEffort = options?.effort
@@ -2842,36 +3093,108 @@ allowQueue: false,
     const requestSpeed = options?.speed || selectedCodexSpeed;
     const requestThinking = options?.thinking ?? selectedClaudeThinking;
     const requestTarget = options?.target || selectedTarget;
-    const rawProject = options?.project || selectedProjectRef.current;
-    const requestProject = (rawProject && rawProject.length <= 50 && !rawProject.includes('\n') && !rawProject.includes(' ')) ? rawProject : 'agy';
+
+    // Support `/multi proj1,proj2 <prompt>` or Multi-Project Mode selection
+    const multiCmdMatch = !options?.conversationId ? userMsg.match(/^\/multi\s+([^\s]+)\s+([\s\S]+)$/i) : null;
+    if (multiCmdMatch) {
+      const cmdProjects = multiCmdMatch[1].split(',').map((s) => s.trim()).filter(Boolean);
+      const cmdPrompt = multiCmdMatch[2].trim();
+      if (cmdProjects.length > 0 && cmdPrompt) {
+        await sendBatchProjectsMessage(
+          cmdPrompt,
+          cmdProjects,
+          requestModel,
+          requestProvider,
+          requestEffort,
+          requestSpeed,
+          requestThinking,
+          requestTarget
+        );
+        return;
+      }
+    }
+
+    if (!options?.conversationId && isMultiProjectMode && selectedBatchProjects.length > 1) {
+      await sendBatchProjectsMessage(
+        userMsg,
+        selectedBatchProjects,
+        requestModel,
+        requestProvider,
+        requestEffort,
+        requestSpeed,
+        requestThinking,
+        requestTarget
+      );
+      return;
+    }
+
+    const effectiveSelectedProject =
+      !options?.project && isMultiProjectMode && selectedBatchProjects.length === 1
+        ? selectedBatchProjects[0]
+        : (options?.project || selectedProjectRef.current);
+    const requestProject = (effectiveSelectedProject && effectiveSelectedProject.length <= 100 && !effectiveSelectedProject.includes('\n'))
+      ? effectiveSelectedProject
+      : 'agy';
     const safeProj = requestProject.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 30) || 'agy';
 
-    // Add user message to display instantly (including local preview)
+    const shouldReuseConversation = activeConvoIdRef.current
+      && activeConvoProjectRef.current === requestProject
+      && activeConvoProviderRef.current === requestProvider;
+    const candidateConvoId = options?.conversationId || (shouldReuseConversation
+      ? activeConvoIdRef.current
+      : `temp_${safeProj}_${Math.random().toString(36).substring(2, 11)}`);
+
+    // Only queue if THIS specific conversation already has a running task!
+    // Other projects/conversations execute immediately in parallel.
+    if (getRunningTaskForConversation(candidateConvoId) && options?.allowQueue !== false) {
+      enqueuePrompt(userMsg, attachmentsForPrompt);
+      return;
+    }
+
+    const isSendingForCurrentView =
+      !options?.conversationId || options.conversationId === activeConvoIdRef.current;
+
+    // Add user message to display instantly when viewing this conversation
     const displayMsg = hasAttachments
       ? (attachmentsForPrompt.map(a => `![Attached Image](${a.uri}?type=${a.type})`).join('\n') + '\n\n' + userMsg).trim()
       : userMsg;
 
-    const updatedMessages = [...baseMessages, { role: 'user', content: displayMsg } as Message];
-    updateMessages(updatedMessages);
-    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+    if (isSendingForCurrentView) {
+      const updatedMessages = [...baseMessages, { role: 'user', content: displayMsg } as Message];
+      updateMessages(updatedMessages);
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+    }
 
-    setLoadingState(true);
     const attachmentsToUpload = [...attachmentsForPrompt];
     // A queued send must not clear attachments being composed for a later prompt.
     if (options?.attachments === undefined) {
       setLocalAttachments([]);
     }
 
-    let startedTaskId: string | null = null;
+    const pendingTaskKey = `pending_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     try {
-      const shouldReuseConversation = activeConvoIdRef.current
-        && activeConvoProjectRef.current === requestProject
-        && activeConvoProviderRef.current === requestProvider;
-      const convoId = options?.conversationId || (shouldReuseConversation
-      ? activeConvoIdRef.current
-      : `temp_${safeProj}_${Math.random().toString(36).substring(2, 11)}`);
-      if (!shouldReuseConversation || activeConvoIdRef.current !== convoId) {
+      const convoId = candidateConvoId;
+      if (isSendingForCurrentView && (!shouldReuseConversation || activeConvoIdRef.current !== convoId)) {
         updateActiveConversation(convoId, requestProject, requestProvider);
+      }
+
+      runningTasksRef.current[pendingTaskKey] = {
+        taskId: pendingTaskKey,
+        isPendingStart: true,
+        batchId: null,
+        workspace: requestProject,
+        conversationId: convoId,
+        originalConversationId: convoId,
+        message: userMsg,
+        status: 'running',
+        events: [{ seq: -1, type: 'progress', message: `Starting in ${requestProject}...` }],
+        lastSeq: -1,
+        provider: requestProvider,
+      };
+      syncRunningTasksListState();
+      if (activeConvoIdRef.current === convoId) {
+        setLoadingState(true);
+        setTaskProgressEvents([{ seq: -1, type: 'progress', message: `Starting in ${requestProject}...` }]);
       }
 
       // Upload local attachments if any right before posting task
@@ -2882,15 +3205,15 @@ allowQueue: false,
             await uploadMedia(attachment.uri, attachment.name, convoId);
           }
         } catch (uploadErr: any) {
-          // Restore local attachments so they can try again on failure
-          setLocalAttachments(attachmentsToUpload);
+          if (activeConvoIdRef.current === convoId) {
+            setLocalAttachments(attachmentsToUpload);
+          }
           throw uploadErr;
         } finally {
           setUploadingMedia(false);
         }
       }
 
-      setTaskProgressEvents([{ seq: -1, type: 'progress', message: 'Preparing workspace...' }]);
       const startResponse = await callHostApi('/api/chat-tasks', {
         method: 'POST',
         body: JSON.stringify({
@@ -2911,63 +3234,44 @@ allowQueue: false,
         throw new Error('Failed to start chat task');
       }
 
-      startedTaskId = startResponse.task_id;
-      activeTaskIdRef.current = startResponse.task_id;
-
-      const progressEvents: ChatTaskEvent[] = [];
-      let lastSeq = -1;
-      let response: any = null;
-
-      while (true) {
-        await wait(1500);
-        const taskResponse = await callHostApi(`/api/chat-tasks/${startResponse.task_id}?after=${lastSeq}`);
-
-        if (Array.isArray(taskResponse.events) && taskResponse.events.length > 0) {
-          taskResponse.events.forEach((event: ChatTaskEvent) => {
-            progressEvents.push(event);
-            lastSeq = Math.max(lastSeq, event.seq);
-          });
-          setTaskProgressEvents([...progressEvents]);
-          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
-        }
-
-        if (taskResponse.status === 'success' || taskResponse.status === 'error' || taskResponse.status === 'cancelled') {
-          response = taskResponse.result;
-          break;
-        }
-      }
-
-      if (response && response.reply) {
-        updateMessages([...updatedMessages, { role: 'assistant', content: response.reply }]);
-
-        // Refresh conversation history list without changing current project.
-        loadConversations(false);
-        fetchUsageLimits();
-        if (response.conversation_id && response.conversation_id !== convoId) {
-          updateActiveConversation(response.conversation_id, requestProject, requestProvider);
-          replaceQueuedConversationId(convoId, response.conversation_id);
-        } else {
-          updateActiveConversation(convoId, requestProject, requestProvider);
-        }
-      }
+      delete runningTasksRef.current[pendingTaskKey];
+      registerRunningTask({
+        taskId: startResponse.task_id,
+        batchId: null,
+        workspace: requestProject,
+        conversationId: convoId,
+        originalConversationId: convoId,
+        message: userMsg,
+        status: startResponse.status || 'running',
+        events: [],
+        lastSeq: -1,
+        provider: requestProvider,
+      });
     } catch (err: any) {
+      delete runningTasksRef.current[pendingTaskKey];
+      syncRunningTasksListState();
+      syncActiveViewTaskState();
       Alert.alert("Failed to send", err.message || "Failed to submit message to host.");
-      if (clearPrompt) {
-        setInputText(userMsg); // Restore prompt text on failure
+      if (clearPrompt && activeConvoIdRef.current === candidateConvoId) {
+        setInputText(userMsg); // Restore prompt text only if still viewing the same conversation
       }
-    } finally {
-      if (startedTaskId && activeTaskIdRef.current === startedTaskId) {
-        activeTaskIdRef.current = null;
-      }
-      setTaskProgressEvents([]);
-      setLoadingState(false);
-      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
-      setTimeout(processNextQueuedPrompt, 0);
+    }
+  };
+
+  const handleCancelTaskById = async (taskId: string) => {
+    try {
+      await callHostApi(`/api/chat-tasks/${taskId}/cancel`, {
+        method: 'POST',
+      });
+      await pollAllRunningTasksTick();
+    } catch (err: any) {
+      console.warn('Failed to cancel task:', err);
     }
   };
 
   const handleCancelPrompt = async () => {
-    const taskId = activeTaskIdRef.current;
+    const currentTask = getRunningTaskForConversation(activeConvoIdRef.current || activeConvoId);
+    const taskId = currentTask?.taskId || activeTaskIdRef.current;
     if (!taskId) {
       const convoId = activeConvoIdRef.current || activeConvoId;
       if (convoId) {
@@ -2976,19 +3280,14 @@ allowQueue: false,
             method: 'POST',
             body: JSON.stringify({ conversation_id: convoId })
           });
+          await pollAllRunningTasksTick();
         } catch (err) {
           console.warn("Error cancelling chat task by conversation:", err);
         }
       }
       return;
     }
-    try {
-      await callHostApi(`/api/chat-tasks/${taskId}/cancel`, {
-        method: 'POST'
-      });
-    } catch (err: any) {
-      console.warn("Failed to cancel active task:", err);
-    }
+    await handleCancelTaskById(taskId);
   };
 
   const handleSend = async () => {
@@ -3444,15 +3743,26 @@ allowQueue: false,
     setIsUsageModalOpen(false);
   };
 
-  // Group conversations by project, mirroring desktop sidebar grouping
-  const groupedConversations = conversations.reduce((acc, convo) => {
+  // Group conversations by project, including any in-flight conversations not yet persisted
+  const knownConversationIds = new Set(conversations.map((c) => c.id));
+  const liveRunningConversations: Conversation[] = runningTasks
+    .filter((rt) => rt.conversationId && !knownConversationIds.has(rt.conversationId))
+    .map((rt) => ({
+      id: rt.conversationId,
+      title: (rt.message || 'Running task...').slice(0, 40),
+      project: rt.workspace || 'agy',
+      provider: rt.provider || 'agy',
+    }));
+  const mergedSidebarConversations = [...liveRunningConversations, ...conversations];
+  const groupedConversations = mergedSidebarConversations.reduce((acc, convo) => {
     const proj = convo.project || 'Other';
     if (!acc[proj]) acc[proj] = [];
     acc[proj].push(convo);
     return acc;
   }, {} as { [key: string]: Conversation[] });
-  const activeConversation = conversations.find((convo) => convo.id === activeConvoId);
+  const activeConversation = mergedSidebarConversations.find((convo) => convo.id === activeConvoId);
   const headerConversationTitle = activeConversation?.title || "Untitled Conversation";
+  const activeQueuedPrompts = queuedPrompts.filter((item) => item.conversationId === activeConvoId);
   const isPromptDisabled = isInitializingChat;
 
   const renderMessageContent = (content: string, role: 'user' | 'assistant') => {
@@ -3758,7 +4068,9 @@ allowQueue: false,
                 {activeServer?.name || 'Primary Server'}
               </Text>
               <Text style={[styles.headerWorkspaceSub, { color: theme.textSecondary }]} numberOfLines={1}>
-                {selectedProject}
+                {isMultiProjectMode && selectedBatchProjects.length > 1
+                  ? `${selectedBatchProjects.length} Projects Selected`
+                  : selectedProject}
               </Text>
             </View>
             <Text style={[styles.headerChevron, { color: theme.textSecondary }]}>▼</Text>
@@ -3769,6 +4081,54 @@ allowQueue: false,
           <Text style={{ fontSize: 20 }}>{selectedThemeMode === 'light' ? '🌙' : '☀️'}</Text>
         </TouchableOpacity>
       </View>
+
+      {runningTasks.length > 0 && (
+        <View style={{ borderBottomWidth: 1, borderBottomColor: theme.borderColor, backgroundColor: theme.bgPrimary, paddingVertical: 6 }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, gap: 8, alignItems: 'center' }}>
+            <Text style={{ fontSize: 11, fontWeight: '700', color: theme.textSecondary }}>
+              Running ({runningTasks.length}):
+            </Text>
+            {runningTasks.map((rt) => {
+              const isCurrent = activeConvoId === rt.conversationId || activeConvoId === rt.originalConversationId;
+              return (
+                <View
+                  key={rt.taskId}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6,
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: isCurrent ? theme.accent : theme.borderColor,
+                    backgroundColor: isCurrent ? (isDark ? 'rgba(59, 130, 246, 0.16)' : 'rgba(37, 99, 235, 0.08)') : theme.bgSecondary,
+                  }}
+                >
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
+                    onPress={() => {
+                      setIsMultiProjectMode(false);
+                      selectConversation(rt.conversationId || rt.originalConversationId, rt.workspace);
+                    }}
+                  >
+                    <ActivityIndicator size="small" color={theme.accent} style={{ transform: [{ scale: 0.65 }] }} />
+                    <Text style={{ fontSize: 11, fontWeight: '600', color: theme.textPrimary }} numberOfLines={1}>
+                      {rt.workspace}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    onPress={() => handleCancelTaskById(rt.taskId)}
+                  >
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: theme.statusRed }}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
 
       <KeyboardAvoidingView
         style={styles.chatArea}
@@ -3794,7 +4154,7 @@ allowQueue: false,
               <Text style={[styles.initializingTitle, { color: theme.textPrimary }]}>Preparing workspace</Text>
               <Text style={[styles.initializingSubtitle, { color: theme.textSecondary }]}>Loading your latest conversation...</Text>
             </View>
-          ) : messages.length === 0 && queuedPrompts.length === 0 ? (
+          ) : messages.length === 0 && activeQueuedPrompts.length === 0 ? (
             <View style={styles.emptyView}>
               <Text style={[styles.emptyTitle, { color: theme.textPrimary }]}>What should we build today?</Text>
               <Text style={[styles.emptySubtitle, { color: theme.textSecondary }]}>Interact with your desktop files, run workspace tasks, or audit goals directly from your mobile device.</Text>
@@ -3932,7 +4292,7 @@ allowQueue: false,
               </View>
             )
           )}
-          {queuedPrompts.map((item, index) => (
+          {activeQueuedPrompts.map((item, index) => (
             <View
               key={item.id}
               style={[
@@ -4221,8 +4581,18 @@ allowQueue: false,
                 onPress={openProjectModal}
                 disabled={isPromptDisabled}
               >
-                <Text style={{ marginRight: 4 }}>▣</Text>
-                <Text style={[styles.projectPickerText, { color: theme.textSecondary }]} numberOfLines={1}>{selectedProject}</Text>
+                <Text style={{ marginRight: 4, color: isMultiProjectMode && selectedBatchProjects.length > 1 ? theme.accent : theme.textSecondary }}>▣</Text>
+                <Text
+                  style={[
+                    styles.projectPickerText,
+                    { color: isMultiProjectMode && selectedBatchProjects.length > 1 ? theme.accent : theme.textSecondary },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {isMultiProjectMode && selectedBatchProjects.length > 1
+                    ? `${selectedBatchProjects.length} Projects`
+                    : selectedProject}
+                </Text>
                 <Text style={{ color: theme.textSecondary, fontSize: 8, marginLeft: 4 }}>▼</Text>
               </TouchableOpacity>
             </View>
@@ -4662,13 +5032,67 @@ allowQueue: false,
                   </View>
                 </TouchableOpacity>
               )}
+              {projects.length > 1 && !isNewProjectFormOpen && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, gap: 8 }}>
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      paddingVertical: 8,
+                      paddingHorizontal: 12,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: isMultiProjectMode ? theme.accent : theme.borderColor,
+                      backgroundColor: isMultiProjectMode ? (isDark ? 'rgba(59, 130, 246, 0.16)' : 'rgba(37, 99, 235, 0.08)') : theme.bgSecondary,
+                    }}
+                    onPress={() => {
+                      const nextMode = !isMultiProjectMode;
+                      setIsMultiProjectMode(nextMode);
+                      if (nextMode && selectedBatchProjects.length === 0 && selectedProject) {
+                        setSelectedBatchProjects([selectedProject]);
+                      }
+                    }}
+                  >
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: isMultiProjectMode ? theme.accent : theme.textPrimary }}>
+                      {isMultiProjectMode ? `✓ Multi-Project Mode (${selectedBatchProjects.length})` : '⇄ Multi-Project Parallel Mode'}
+                    </Text>
+                  </TouchableOpacity>
+                  {isMultiProjectMode && (
+                    <TouchableOpacity
+                      style={{
+                        paddingVertical: 8,
+                        paddingHorizontal: 12,
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: theme.borderColor,
+                        backgroundColor: theme.bgSecondary,
+                      }}
+                      onPress={() => {
+                        if (selectedBatchProjects.length === projects.length) {
+                          setSelectedBatchProjects([]);
+                        } else {
+                          setSelectedBatchProjects([...projects]);
+                        }
+                      }}
+                    >
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: theme.textSecondary }}>
+                        {selectedBatchProjects.length === projects.length ? 'Clear' : 'All'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
             </View>
             <ScrollView style={styles.bottomSheetList}>
               {loadingProjects ? (
                 <ActivityIndicator size="small" color={theme.accent} style={{ marginVertical: 18 }} />
               ) : projects.length > 0 ? (
                 projects.map((project) => {
-                  const isActive = selectedProject === project;
+                  const isChecked = selectedBatchProjects.includes(project);
+                  const isActive = isMultiProjectMode ? isChecked : (selectedProject === project);
+                  const runningCount = runningTasks.filter((t) => t.workspace === project).length;
                   return (
                     <TouchableOpacity
                       key={project}
@@ -4681,8 +5105,12 @@ allowQueue: false,
                       onPress={() => handleSelectProject(project)}
                     >
                       <View style={styles.modelInfo}>
-                        <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>{project}</Text>
-                        <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>Run new messages in this workspace</Text>
+                        <Text style={[styles.modelName, { color: theme.textPrimary }, isActive && { fontWeight: '700' }]}>
+                          {project}{runningCount > 0 ? `  •  ${runningCount} running` : ''}
+                        </Text>
+                        <Text style={[styles.modelDesc, { color: theme.textSecondary }]}>
+                          {isMultiProjectMode ? 'Tap to include in parallel dispatch' : 'Run new messages in this workspace'}
+                        </Text>
                       </View>
                       {isActive && <Text style={{ color: theme.accent, fontSize: 16, fontWeight: '700' }}>✓</Text>}
                     </TouchableOpacity>
@@ -4694,6 +5122,27 @@ allowQueue: false,
                 </Text>
               )}
             </ScrollView>
+            {isMultiProjectMode && (
+              <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: theme.accent,
+                    borderRadius: 10,
+                    paddingVertical: 12,
+                    alignItems: 'center',
+                    opacity: selectedBatchProjects.length === 0 ? 0.5 : 1,
+                  }}
+                  disabled={selectedBatchProjects.length === 0}
+                  onPress={closeProjectModal}
+                >
+                  <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700' }}>
+                    {selectedBatchProjects.length > 1
+                      ? `Command ${selectedBatchProjects.length} Projects Simultaneously`
+                      : 'Done'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </KeyboardAvoidingView>
       </Modal>

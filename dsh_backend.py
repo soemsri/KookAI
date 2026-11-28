@@ -199,9 +199,12 @@ def build_dsh_patch_document(
     raw_model_id: str,
     *,
     thinking: Optional[bool] = None,
+    vision: Optional[bool] = None,
     env: Optional[dict[str, str]] = None,
 ) -> list[dict[str, Any]]:
     """Build the DeepSeek Harness `--patch` overlay for a local OpenAI-compatible model."""
+    from local_backend import model_id_suggests_vision, resolve_local_vision_override
+
     source_env = env if env is not None else os.environ
     context_window = _positive_int_env(
         source_env, "KOOKAI_DSH_CONTEXT_WINDOW", DEFAULT_DSH_CONTEXT_WINDOW
@@ -221,13 +224,20 @@ def build_dsh_patch_document(
         else DEFAULT_DSH_REASONING_EFFORT
     )
 
+    vision_override = resolve_local_vision_override(source_env)
+    supports_image = (
+        vision_override
+        if vision_override is not None
+        else (bool(vision) if vision is not None else model_id_suggests_vision(raw_model_id))
+    )
+
     compat: dict[str, Any] = {"supportsStore": False}
     model_entry: dict[str, Any] = {
         "id": raw_model_id,
         "name": f"{raw_model_id} (Local)",
         "contextWindow": context_window,
         "maxTokens": max_tokens,
-        "input": ["text"],
+        "input": ["text", "image"] if supports_image else ["text"],
     }
     default_model: dict[str, Any] = {
         "provider": DSH_LOCAL_PROVIDER_ID,
@@ -273,6 +283,7 @@ def dsh_patch_file(
     raw_model_id: str,
     *,
     thinking: Optional[bool] = None,
+    vision: Optional[bool] = None,
     env: Optional[dict[str, str]] = None,
 ):
     """Write a temporary JSON-in-YAML `--patch` file and clean it up after invocation."""
@@ -280,6 +291,7 @@ def dsh_patch_file(
         base_url,
         raw_model_id,
         thinking=thinking,
+        vision=vision,
         env=env,
     )
     with tempfile.TemporaryDirectory(prefix="kookai-dsh-patch-") as directory:

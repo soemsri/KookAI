@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
   <div class="app-layout">
@@ -150,6 +150,30 @@
             <span class="header-separator">/</span>
             <span class="header-convo" id="headerConvo">Building Python Web App</span>
           </div>
+          <div class="header-actions-right">
+            <button type="button" class="multi-project-toggle-btn" id="multiProjectModeBtn" title="Select multiple projects to command simultaneously">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+                <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+                <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+                <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+              </svg>
+              <span id="multiProjectModeLabel">Multi-Project</span>
+            </button>
+            <div class="active-tasks-header-wrap">
+              <button type="button" class="active-tasks-pill-btn hidden" id="activeTasksHeaderBtn" title="View active background tasks across projects">
+                <span class="task-spinner-dot" aria-hidden="true"></span>
+                <span id="activeTasksCountText">0 Running</span>
+              </button>
+              <div class="dropdown-menu active-tasks-dropdown hidden" id="activeTasksDropdown">
+                <div class="dropdown-header active-tasks-dropdown-header">
+                  <span>Active Project Tasks</span>
+                  <button type="button" class="text-link-danger" id="stopAllActiveTasksBtn">Stop All</button>
+                </div>
+                <div class="active-tasks-list" id="activeTasksList"></div>
+              </div>
+            </div>
+          </div>
         </header>
 
         <!-- Messages scroll zone -->
@@ -167,6 +191,7 @@
         <!-- Prompt card fixed at bottom -->
         <div class="prompt-section">
           <div class="prompt-outer-container">
+            <div class="multi-project-target-bar hidden" id="multiProjectTargetBar"></div>
 
             <!-- Input text area wrapper -->
             <div class="prompt-input-card">
@@ -1095,8 +1120,10 @@
     </div>
   </div>
 
+  <div id="kookaiToastContainer" class="kookai-toast-container" aria-live="polite"></div>
+
   <!-- Markdown parser library -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="script.js?v=12"></script>
+  <script src="script.js?v=14"></script>
 </body>
 </html>

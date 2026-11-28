@@ -156,10 +156,16 @@ from provider_usage import (
     read_windows_antigravity_credential,
 )
 from cli_manager import (
+    acquire_session_lock,
     auto_install_missing,
+    get_active_session_locks,
     get_cli_statuses,
+    get_session_lock_info,
     install_cli,
     launch_cli_login,
+    release_session_lock,
+    release_session_lock_by_task,
+    reset_session_locks,
     resolve_cli_executable as resolve_managed_cli_executable,
 )
 from model_catalog import (
@@ -367,6 +373,7 @@ TUNNEL_ALLOWED_EXACT_PATHS = {
     "/api/chat-history",
     "/api/chat",
     "/api/chat-tasks",
+    "/api/chat-tasks/batch",
     "/api/chat-tasks/cancel",
     "/api/upload-media",
     "/api/usage-limits",
@@ -1292,9 +1299,11 @@ def verify_chat_model_request(request: ChatRequest) -> None:
 
 # Temp UUID to actual conversation ID mapping
 convo_id_mapping = {}
+convo_id_mapping_lock = threading.RLock()
 
 # In-memory session message cache (stores active tab sessions)
 in_memory_chats = {}
+in_memory_chats_lock = threading.RLock()
 
 # Persistent metadata/history for conversations started through each CLI.
 #
@@ -1473,7 +1482,27 @@ class AgentCommandCancelled(Exception):
 class CancelTaskRequest(BaseModel):
     task_id: Optional[str] = None
     conversation_id: Optional[str] = None
+    workspace: Optional[str] = None
+    batch_id: Optional[str] = None
 
+
+class BatchChatTaskRequest(BaseModel):
+    message: str
+    model: str
+    workspaces: List[str]
+    target: str = "Sandbox"
+    provider: Optional[str] = None
+    effort: Optional[str] = "Medium"
+    speed: Optional[str] = "Standard"
+    thinking: Optional[bool] = True
+    profile_id: Optional[str] = None
+    conversation_ids: Optional[dict[str, str]] = None
+
+
+MAX_CONCURRENT_CHAT_TASKS = max(
+    1, int(os.environ.get("KOOKAI_MAX_CONCURRENT_TASKS", "8"))
+)
+chat_task_semaphore = threading.Semaphore(MAX_CONCURRENT_CHAT_TASKS)
 
 # Background chat task state for polling progress while agy is still running.
 chat_tasks = {}
@@ -1484,12 +1513,16 @@ chat_task_active_procs_lock = threading.Lock()
 current_task_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "current_task_id_var", default=None
 )
+_claimed_agy_cids: set[str] = set()
+_claimed_agy_cids_lock = threading.Lock()
 
 # Multi-step interview logic for /grill-me
 interview_states = {} # conversation_id -> current_question_index
+interview_states_lock = threading.RLock()
 
 # Pending media uploads for the next message (actual_cid -> list of absolute file paths)
 pending_media = {}
+pending_media_lock = threading.RLock()
 
 DEFAULT_INTERVIEW_QUESTIONS = [
     {
@@ -3142,26 +3175,118 @@ def run_agy_cli(
     cmd += ["--print", message_with_context]
         
     logging.info(f"Executing agy CLI in {cwd_path}: {' '.join(cmd)}")
+    agy_launch_wall_time = time.time()
+    prompt_needle = message.strip()[:200]
+
+    def _read_transcript_first_input(cid: str) -> str:
+        for base_dir in ALL_ANTIGRAVITY_CLI_DIRS:
+            for rel_log in (
+                ".system_generated/logs/transcript.jsonl",
+                ".system_generated/logs/transcript_full.jsonl",
+            ):
+                tpath = os.path.join(base_dir, "brain", cid, rel_log)
+                if not os.path.isfile(tpath):
+                    continue
+                try:
+                    with open(tpath, "r", encoding="utf-8", errors="ignore") as tf:
+                        chunks = []
+                        for idx, raw_line in enumerate(tf):
+                            if idx > 25:
+                                break
+                            try:
+                                entry = json.loads(raw_line)
+                                text_blob = str(entry.get("content") or "")
+                            except Exception:
+                                text_blob = raw_line
+                            if text_blob:
+                                chunks.append(text_blob)
+                        if chunks:
+                            return "\n".join(chunks)
+                except OSError:
+                    continue
+        return ""
+
+    def _transcript_matches_project(cid: str) -> bool:
+        proj = get_conversation_project(cid)
+        if proj:
+            return proj == project_id
+        marker_re = re.compile(
+            r"Selected KookAI project/workspace:\s*([^\r\n\\]+)"
+        )
+        text_blob = _read_transcript_first_input(cid)
+        if text_blob:
+            m = marker_re.search(text_blob)
+            if m and clean_project_name(m.group(1).strip()) == project_id:
+                return True
+        return False
+
+    def _transcript_matches_prompt(cid: str) -> bool:
+        if not prompt_needle:
+            return False
+        text_blob = _read_transcript_first_input(cid)
+        if not text_blob:
+            return False
+        return (
+            f"User message:\n{prompt_needle}" in text_blob
+            or prompt_needle in text_blob
+        )
+
+    def _db_Timestamps(cid: str) -> tuple[float, float]:
+        best_ctime = -1.0
+        best_mtime = -1.0
+        for base_dir in ALL_ANTIGRAVITY_CLI_DIRS:
+            p = os.path.join(base_dir, f"conversations/{cid}.db")
+            if os.path.exists(p):
+                try:
+                    ct = os.path.getctime(p)
+                    mt = os.path.getmtime(p)
+                    if mt > best_mtime:
+                        best_mtime = mt
+                        best_ctime = ct
+                except OSError:
+                    pass
+        return best_ctime, best_mtime
 
     def select_newest_cid(candidate_ids):
         if not candidate_ids:
             return conversation_id
-        if len(candidate_ids) == 1:
-            return list(candidate_ids)[0]
-        newest = list(candidate_ids)[0]
-        newest_mtime = -1.0
-        for cid in candidate_ids:
-            for base_dir in ALL_ANTIGRAVITY_CLI_DIRS:
-                p = os.path.join(base_dir, f"conversations/{cid}.db")
-                if os.path.exists(p):
-                    try:
-                        mt = os.path.getmtime(p)
-                        if mt > newest_mtime:
-                            newest_mtime = mt
-                            newest = cid
-                    except OSError:
-                        pass
-        return newest
+        with _claimed_agy_cids_lock:
+            unclaimed = [cid for cid in candidate_ids if cid not in _claimed_agy_cids]
+            if not unclaimed:
+                # Never reuse a DB already claimed by another concurrent conversation;
+                # keep this conversation isolated under its own ID instead of merging transcripts.
+                return conversation_id
+            pool = unclaimed
+            project_matched = [cid for cid in pool if _transcript_matches_project(cid)]
+            if project_matched:
+                pool = project_matched
+            prompt_matched = [cid for cid in pool if _transcript_matches_prompt(cid)]
+            if prompt_matched:
+                pool = prompt_matched
+            if len(pool) == 1:
+                chosen = pool[0]
+                _claimed_agy_cids.add(chosen)
+                return chosen
+            # Disambiguate identical concurrent prompts in the same project by DB creation time closest to launch
+            post_launch = []
+            for cid in pool:
+                ct, mt = _db_Timestamps(cid)
+                if ct >= agy_launch_wall_time - 1.0:
+                    post_launch.append((abs(ct - agy_launch_wall_time), -mt, cid))
+            if post_launch:
+                post_launch.sort(key=lambda item: (item[0], item[1]))
+                chosen = post_launch[0][2]
+                _claimed_agy_cids.add(chosen)
+                return chosen
+            newest = pool[0]
+            newest_mtime = -1.0
+            for cid in pool:
+                _, mt = _db_Timestamps(cid)
+                if mt > newest_mtime:
+                    newest_mtime = mt
+                    newest = cid
+            _claimed_agy_cids.add(newest)
+            return newest
     
     extra_agy_kwargs = {"profile_id": profile_id} if profile_id else {}
     try:
@@ -3175,7 +3300,6 @@ def run_agy_cli(
                 kill_processes_locking_db(actual_cid)
                 
                 # Wait 500ms for lock to clear
-                import time
                 time.sleep(0.5)
                 
                 logging.info(f"Retrying command after clearing conversation lock: {' '.join(cmd)}")
@@ -4514,6 +4638,8 @@ def run_dsh_local_cli(
         dsh_path = resolve_dsh_executable()
         env = build_dsh_environment(url, raw_model_id, api_key=api_key)
         thinking_control = thinking if model.get("capabilities", {}).get("thinking") else None
+        raw_vision = model.get("capabilities", {}).get("vision")
+        vision_control = raw_vision if isinstance(raw_vision, bool) else None
         logging.info(
             "Executing DeepSeek Harness CLI in %s for local model=%s target=%s resume=%s",
             cwd_path,
@@ -4521,7 +4647,13 @@ def run_dsh_local_cli(
             target,
             bool(dsh_session_id(run_conversation_id)),
         )
-        with dsh_patch_file(url, raw_model_id, thinking=thinking_control, env=env) as patch_path:
+        with dsh_patch_file(
+            url,
+            raw_model_id,
+            thinking=thinking_control,
+            vision=vision_control,
+            env=env,
+        ) as patch_path:
             cmd = build_dsh_command(
                 dsh_path,
                 patch_path,
@@ -5016,10 +5148,15 @@ def run_selected_cli(
 # --- Endpoints ---
 
 @app.get("/api/files")
-async def get_files(request: Request):
+async def get_files(request: Request, workspace: Optional[str] = None):
     verify_authorization(request)
     files = []
     workspace_path = APP_DIR
+    if workspace:
+        try:
+            workspace_path = resolve_project_directory(clean_project_name(workspace))
+        except Exception:
+            workspace_path = APP_DIR
     if os.path.exists(workspace_path):
         for root, dirs, filenames in os.walk(workspace_path):
             dirs[:] = [d for d in dirs if not d.startswith('.') and d not in IGNORED_SYSTEM_DIRS]
@@ -5085,6 +5222,50 @@ async def create_project(request: Request, project_request: CreateProjectRequest
     )
 
 
+def _resolve_mapped_conversation_id(cid: str) -> str:
+    if not cid:
+        return cid
+    with convo_id_mapping_lock:
+        direct = convo_id_mapping.get(cid)
+        if direct:
+            return direct
+        suffix = f":{cid}"
+        for key, mapped in convo_id_mapping.items():
+            if isinstance(key, str) and key.endswith(suffix) and mapped:
+                return mapped
+    return cid
+
+
+def _get_active_task_conversations() -> List[dict]:
+    now_ts = datetime.datetime.now().timestamp()
+    active_convos: List[dict] = []
+    seen_cids: set[str] = set()
+    with chat_tasks_lock:
+        for task in chat_tasks.values():
+            if task.get("status") not in ("running", "queued"):
+                continue
+            cid = (task.get("resolved_conversation_id") or task.get("conversation_id") or "").strip()
+            if not cid or cid in seen_cids:
+                continue
+            seen_cids.add(cid)
+            raw_msg = (task.get("message") or "").strip()
+            clean_title = re.sub(r"!\[.*?\]\(.*?\)", "", raw_msg).strip() or "Running task..."
+            if len(clean_title) > 40:
+                clean_title = clean_title[:40] + "..."
+            active_convos.append({
+                "id": cid,
+                "title": clean_title,
+                "project": clean_project_name(task.get("workspace") or "agy"),
+                "provider": task.get("provider") or "agy",
+                "model": task.get("model"),
+                "timestamp": task.get("created_at") or now_ts,
+                "time": "active",
+                "active": True,
+            })
+    active_convos.sort(key=lambda item: item.get("timestamp", 0), reverse=True)
+    return active_convos
+
+
 @app.get("/api/conversations")
 async def get_conversations(request: Request, project: Optional[str] = None):
     verify_authorization(request)
@@ -5099,6 +5280,7 @@ async def get_conversations(request: Request, project: Optional[str] = None):
     muse_convos = get_muse_conversations()
     deepseek_convos = get_deepseek_conversations()
     zai_convos = get_zai_conversations()
+    active_convos = _get_active_task_conversations()
     merged = merge_conversation_sources(
         canonical_convos,
         real_convos,
@@ -5109,6 +5291,7 @@ async def get_conversations(request: Request, project: Optional[str] = None):
         muse_convos,
         deepseek_convos,
         zai_convos,
+        active_convos,
     )
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
@@ -5137,6 +5320,7 @@ async def get_chat_history(request: Request):
     muse_convos = get_muse_conversations()
     deepseek_convos = get_deepseek_conversations()
     zai_convos = get_zai_conversations()
+    active_convos = _get_active_task_conversations()
     merged = merge_conversation_sources(
         canonical_convos,
         real_convos,
@@ -5147,6 +5331,7 @@ async def get_chat_history(request: Request):
         muse_convos,
         deepseek_convos,
         zai_convos,
+        active_convos,
     )
     seen_ids = {c["id"] for c in merged}
     for c in SEED_CONVERSATIONS:
@@ -5160,6 +5345,12 @@ async def get_chat_history(request: Request):
 @app.get("/api/conversation/{cid}")
 async def get_conversation_details(cid: str, request: Request):
     verify_authorization(request)
+    lookup_cid = cid
+    if lookup_cid not in in_memory_chats and not get_canonical_conversation(lookup_cid):
+        mapped_cid = _resolve_mapped_conversation_id(lookup_cid)
+        if mapped_cid and mapped_cid != lookup_cid:
+            lookup_cid = mapped_cid
+
     messages = []
     project = None
     provider = "agy"
@@ -5167,18 +5358,18 @@ async def get_conversation_details(cid: str, request: Request):
     effort = None
     speed = None
     thinking = None
-    canonical_record = get_canonical_conversation(cid)
-    codex_record = get_codex_conversation(cid)
-    claude_record = get_claude_conversation(cid)
-    kimi_record = get_kimi_conversation(cid)
-    grok_record = get_grok_conversation(cid)
-    muse_record = get_muse_conversation(cid)
-    deepseek_record = get_deepseek_conversation(cid)
-    zai_record = get_zai_conversation(cid)
+    canonical_record = get_canonical_conversation(lookup_cid)
+    codex_record = get_codex_conversation(lookup_cid)
+    claude_record = get_claude_conversation(lookup_cid)
+    kimi_record = get_kimi_conversation(lookup_cid)
+    grok_record = get_grok_conversation(lookup_cid)
+    muse_record = get_muse_conversation(lookup_cid)
+    deepseek_record = get_deepseek_conversation(lookup_cid)
+    zai_record = get_zai_conversation(lookup_cid)
 
     # First check memory cache
-    if cid in in_memory_chats:
-        messages = in_memory_chats[cid]
+    if lookup_cid in in_memory_chats:
+        messages = in_memory_chats[lookup_cid]
         if canonical_record:
             project = canonical_record.get("project")
             provider = canonical_record.get("provider", "agy")
@@ -5230,7 +5421,7 @@ async def get_conversation_details(cid: str, request: Request):
         effort = canonical_record.get("effort")
         speed = canonical_record.get("speed")
         thinking = canonical_record.get("thinking")
-        in_memory_chats[cid] = messages
+        in_memory_chats[lookup_cid] = messages
     elif codex_record:
         messages = codex_record.get("messages", [])
         project = codex_record.get("project")
@@ -5238,7 +5429,7 @@ async def get_conversation_details(cid: str, request: Request):
         model = codex_record.get("model")
         effort = codex_record.get("effort")
         speed = codex_record.get("speed")
-        in_memory_chats[cid] = messages
+        in_memory_chats[lookup_cid] = messages
     elif claude_record:
         messages = claude_record.get("messages", [])
         project = claude_record.get("project")
@@ -5246,45 +5437,45 @@ async def get_conversation_details(cid: str, request: Request):
         model = claude_record.get("model")
         effort = claude_record.get("effort")
         thinking = claude_record.get("thinking", True)
-        in_memory_chats[cid] = messages
+        in_memory_chats[lookup_cid] = messages
     elif kimi_record:
         messages = kimi_record.get("messages", [])
         project = kimi_record.get("project")
         provider = "kimi"
         model = kimi_record.get("model")
         thinking = True
-        in_memory_chats[cid] = messages
+        in_memory_chats[lookup_cid] = messages
     elif grok_record:
         messages = grok_record.get("messages", [])
         project = grok_record.get("project")
         provider = "xai"
         model = grok_record.get("model")
         effort = grok_record.get("effort")
-        in_memory_chats[cid] = messages
+        in_memory_chats[lookup_cid] = messages
     elif muse_record:
         messages = muse_record.get("messages", [])
         project = muse_record.get("project")
         provider = "muse"
         model = muse_record.get("model")
         effort = muse_record.get("effort")
-        in_memory_chats[cid] = messages
+        in_memory_chats[lookup_cid] = messages
     elif deepseek_record:
         messages = deepseek_record.get("messages", [])
         project = deepseek_record.get("project")
         provider = "deepseek"
         model = deepseek_record.get("model")
-        in_memory_chats[cid] = messages
+        in_memory_chats[lookup_cid] = messages
     elif zai_record:
         messages = zai_record.get("messages", [])
         project = zai_record.get("project")
         provider = "zai"
         model = zai_record.get("model")
         thinking = True
-        in_memory_chats[cid] = messages
+        in_memory_chats[lookup_cid] = messages
     else:
         # Check seed conversations
         for c in SEED_CONVERSATIONS:
-            if c["id"] == cid:
+            if c["id"] == lookup_cid:
                 messages = c["messages"]
                 project = c.get("project")
                 break
@@ -5292,8 +5483,8 @@ async def get_conversation_details(cid: str, request: Request):
             # Parse actual transcript from folder
             real_convos = get_real_conversations()
             for c in real_convos:
-                if c["id"] == cid:
-                    in_memory_chats[cid] = c["messages"]
+                if c["id"] == lookup_cid:
+                    in_memory_chats[lookup_cid] = c["messages"]
                     messages = c["messages"]
                     project = c.get("project")
                     model = c.get("model")
@@ -5303,7 +5494,8 @@ async def get_conversation_details(cid: str, request: Request):
                     thinking = c.get("thinking")
                     break
 
-    meta = _load_conversation_metadata().get(cid, {})
+    meta_all = _load_conversation_metadata()
+    meta = meta_all.get(lookup_cid) or meta_all.get(cid) or {}
     if meta:
         if not model:
             model = meta.get("model")
@@ -5318,7 +5510,7 @@ async def get_conversation_details(cid: str, request: Request):
 
     if not project:
         for c in get_real_conversations():
-            if c["id"] == cid:
+            if c["id"] in {cid, lookup_cid}:
                 project = c.get("project")
                 break
 
@@ -5341,7 +5533,7 @@ async def get_conversation_details(cid: str, request: Request):
         })
 
     # Add virtual messages for pending media that have been uploaded but not yet sent in a prompt
-    actual_cid = convo_id_mapping.get(cid, cid)
+    actual_cid = _resolve_mapped_conversation_id(cid)
     pending_list = pending_media.get(actual_cid, [])
     for p in pending_list:
         token_part = f"token={token}&" if token else ""
@@ -5349,6 +5541,35 @@ async def get_conversation_details(cid: str, request: Request):
             "role": "user",
             "content": f"![Attached Image](/api/media?{token_part}path={urllib.parse.quote(p)})"
         })
+
+    # Include in-flight user message if this exact conversation is currently running/queued
+    with chat_tasks_lock:
+        matching_active = next(
+            (
+                t for t in chat_tasks.values()
+                if t.get("status") in ("running", "queued")
+                and (
+                    t.get("conversation_id") in {cid, lookup_cid, actual_cid}
+                    or t.get("resolved_conversation_id") in {cid, lookup_cid, actual_cid}
+                )
+            ),
+            None,
+        )
+    if matching_active:
+        if not project and matching_active.get("workspace"):
+            project = clean_project_name(matching_active["workspace"])
+        if not model and matching_active.get("model"):
+            model = matching_active["model"]
+        if (not provider or provider == "agy") and matching_active.get("provider"):
+            provider = matching_active["provider"]
+        inflight_msg = (matching_active.get("message") or "").strip()
+        if inflight_msg:
+            already_present = any(
+                m.get("role") == "user" and inflight_msg in (m.get("content") or "")
+                for m in processed_messages[-2:]
+            )
+            if not already_present:
+                processed_messages.append({"role": "user", "content": inflight_msg})
 
     return JSONResponse(content={
         "messages": processed_messages,
@@ -5460,7 +5681,8 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
         )
     
     # Prepend any pending media files to the message
-    attached_media = pending_media.pop(actual_cid, [])
+    with pending_media_lock:
+        attached_media = pending_media.pop(actual_cid, [])
     
     # Check for video sources (either /watch command, attached video files, or direct video URL)
     msg_strip = message.strip()
@@ -5880,20 +6102,23 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
         reply, resolved_cid = execute_selected(message)
 
     if resolved_cid != actual_cid:
-        if actual_cid in interview_states:
-            interview_states[resolved_cid] = interview_states.pop(actual_cid)
-        if actual_cid in in_memory_chats:
-            existing_chats = in_memory_chats.pop(actual_cid)
-            if resolved_cid not in in_memory_chats:
-                in_memory_chats[resolved_cid] = existing_chats
-            else:
-                in_memory_chats[resolved_cid] = existing_chats + in_memory_chats[resolved_cid]
+        with interview_states_lock:
+            if actual_cid in interview_states:
+                interview_states[resolved_cid] = interview_states.pop(actual_cid)
+        with in_memory_chats_lock:
+            if actual_cid in in_memory_chats:
+                existing_chats = in_memory_chats.pop(actual_cid)
+                if resolved_cid not in in_memory_chats:
+                    in_memory_chats[resolved_cid] = existing_chats
+                else:
+                    in_memory_chats[resolved_cid] = existing_chats + in_memory_chats[resolved_cid]
 
-    if resolved_cid not in in_memory_chats:
-        in_memory_chats[resolved_cid] = []
-
-    in_memory_chats[resolved_cid].append({"role": "user", "content": user_visible_message})
-    in_memory_chats[resolved_cid].append({"role": "assistant", "content": reply})
+    with in_memory_chats_lock:
+        if resolved_cid not in in_memory_chats:
+            in_memory_chats[resolved_cid] = []
+        in_memory_chats[resolved_cid].append({"role": "user", "content": user_visible_message})
+        in_memory_chats[resolved_cid].append({"role": "assistant", "content": reply})
+        chat_snapshot = list(in_memory_chats[resolved_cid])
 
     persist_conversation_metadata(
         resolved_cid,
@@ -5914,7 +6139,7 @@ def build_chat_response(request: ChatRequest, progress_callback=None, cancel_eve
             project_id,
             model,
             provider,
-            in_memory_chats[resolved_cid],
+            chat_snapshot,
         )
 
     if provider == "codex":
@@ -6033,7 +6258,18 @@ def finish_chat_task(task_id: str, status: str, result: dict):
         task["completed_at"] = datetime.datetime.now().timestamp()
 
 
+def _build_session_lock_key(workspace: Optional[str], conversation_id: Optional[str]) -> str:
+    cid = (conversation_id or "").strip()
+    if not cid:
+        return ""
+    project_id = clean_project_name(workspace or "agy")
+    with convo_id_mapping_lock:
+        resolved = convo_id_mapping.get(f"{project_id}:{cid}") or convo_id_mapping.get(cid) or cid
+    return f"{project_id}:{resolved}"
+
+
 def cancel_chat_task(task_id: str) -> dict:
+    session_key = ""
     with chat_tasks_lock:
         task = chat_tasks.get(task_id)
         if not task:
@@ -6048,6 +6284,7 @@ def cancel_chat_task(task_id: str) -> dict:
                 "message": f"Task already finished with status '{status}'"
             }
 
+        session_key = task.get("session_key", "")
         task["status"] = "cancelled"
         task["completed_at"] = datetime.datetime.now().timestamp()
         if not task.get("result"):
@@ -6056,6 +6293,10 @@ def cancel_chat_task(task_id: str) -> dict:
                 "reply": "⏹️ **Prompt cancelled by user**",
                 "conversation_id": task.get("conversation_id")
             }
+
+    if session_key:
+        release_session_lock(session_key, task_id=task_id)
+    release_session_lock_by_task(task_id)
 
     # Signal cancellation event
     cancel_event = chat_task_cancel_events.get(task_id)
@@ -6090,12 +6331,52 @@ def cancel_chat_task(task_id: str) -> dict:
     }
 
 
+def _acquire_worker_slot_with_cancel(task_id: str, cancel_event: threading.Event) -> bool:
+    """Acquire a bounded worker slot without blocking cancellation or starving other projects."""
+    if chat_task_semaphore.acquire(blocking=False):
+        return True
+
+    with chat_tasks_lock:
+        task = chat_tasks.get(task_id)
+        if task and task.get("status") == "running":
+            task["status"] = "queued"
+    append_chat_task_event(
+        task_id,
+        "progress",
+        "⏳ Queued — waiting for an available parallel worker slot...",
+    )
+
+    while not cancel_event.is_set():
+        if chat_task_semaphore.acquire(timeout=0.15):
+            if cancel_event.is_set():
+                chat_task_semaphore.release()
+                return False
+            with chat_tasks_lock:
+                task = chat_tasks.get(task_id)
+                if task and task.get("status") == "queued":
+                    task["status"] = "running"
+            return True
+    return False
+
+
 def run_chat_task(task_id: str, request_data: dict):
     token = current_task_id_var.set(task_id)
-    cancel_event = threading.Event()
-    chat_task_cancel_events[task_id] = cancel_event
+    cancel_event = chat_task_cancel_events.get(task_id)
+    if cancel_event is None:
+        cancel_event = threading.Event()
+        chat_task_cancel_events[task_id] = cancel_event
+    slot_acquired = False
     try:
         if cancel_event.is_set():
+            finish_chat_task(task_id, "cancelled", {
+                "status": "cancelled",
+                "reply": "⏹️ **Prompt cancelled by user**",
+                "conversation_id": request_data.get("conversation_id")
+            })
+            return
+
+        slot_acquired = _acquire_worker_slot_with_cancel(task_id, cancel_event)
+        if not slot_acquired or cancel_event.is_set():
             finish_chat_task(task_id, "cancelled", {
                 "status": "cancelled",
                 "reply": "⏹️ **Prompt cancelled by user**",
@@ -6111,6 +6392,11 @@ def run_chat_task(task_id: str, request_data: dict):
             cancel_event=cancel_event,
             task_id=task_id,
         )
+        if isinstance(result, dict) and result.get("conversation_id"):
+            with chat_tasks_lock:
+                task_rec = chat_tasks.get(task_id)
+                if task_rec and result["conversation_id"] != task_rec.get("conversation_id"):
+                    task_rec["resolved_conversation_id"] = result["conversation_id"]
         finish_chat_task(task_id, "success", result)
     except AgentCommandCancelled as e:
         logging.info(f"Chat task {task_id} was cancelled: {e}")
@@ -6118,18 +6404,21 @@ def run_chat_task(task_id: str, request_data: dict):
         convo_id = request_data.get("conversation_id")
         user_msg = request_data.get("message", "")
         if convo_id:
-            actual_cid = convo_id_mapping.get(convo_id, convo_id)
-            if actual_cid not in in_memory_chats:
-                in_memory_chats[actual_cid] = []
-            in_memory_chats[actual_cid].append({"role": "user", "content": user_msg})
-            in_memory_chats[actual_cid].append({"role": "assistant", "content": "⏹️ **Prompt cancelled by user**"})
+            with convo_id_mapping_lock:
+                actual_cid = convo_id_mapping.get(convo_id, convo_id)
+            with in_memory_chats_lock:
+                if actual_cid not in in_memory_chats:
+                    in_memory_chats[actual_cid] = []
+                in_memory_chats[actual_cid].append({"role": "user", "content": user_msg})
+                in_memory_chats[actual_cid].append({"role": "assistant", "content": "⏹️ **Prompt cancelled by user**"})
+                cancelled_snapshot = list(in_memory_chats[actual_cid])
             project_id = clean_project_name(request_data.get("workspace") or "agy")
             persist_canonical_conversation(
                 actual_cid,
                 project_id,
                 request_data.get("model", ""),
                 request_data.get("provider", "agy"),
-                in_memory_chats[actual_cid]
+                cancelled_snapshot
             )
         finish_chat_task(task_id, "cancelled", {
             "status": "cancelled",
@@ -6153,10 +6442,86 @@ def run_chat_task(task_id: str, request_data: dict):
             "conversation_id": request_data.get("conversation_id")
         })
     finally:
+        if slot_acquired:
+            chat_task_semaphore.release()
+        with chat_tasks_lock:
+            task_rec = chat_tasks.get(task_id)
+            session_key = task_rec.get("session_key", "") if task_rec else ""
+        if session_key:
+            release_session_lock(session_key, task_id=task_id)
+        release_session_lock_by_task(task_id)
         chat_task_cancel_events.pop(task_id, None)
         with chat_task_active_procs_lock:
             chat_task_active_procs.pop(task_id, None)
         current_task_id_var.reset(token)
+
+
+def _create_and_start_chat_task(
+    request: ChatRequest,
+    *,
+    batch_id: Optional[str] = None,
+    owner_label: str = "client",
+) -> dict:
+    task_id = uuid.uuid4().hex
+    project_id = clean_project_name(request.workspace or "agy")
+    session_key = _build_session_lock_key(project_id, request.conversation_id)
+    if session_key:
+        acquired = acquire_session_lock(
+            session_key,
+            workspace=project_id,
+            conversation_id=request.conversation_id,
+            task_id=task_id,
+            owner=owner_label,
+        )
+        if not acquired:
+            holder = get_session_lock_info(session_key) or {}
+            holder_owner = holder.get("owner") or "another client"
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Session '{request.conversation_id}' in project '{project_id}' is "
+                    f"currently busy processing a command ({holder_owner})."
+                ),
+            )
+
+    cancel_event = threading.Event()
+    chat_task_cancel_events[task_id] = cancel_event
+    now_ts = datetime.datetime.now().timestamp()
+    task_entry = {
+        "task_id": task_id,
+        "batch_id": batch_id,
+        "session_key": session_key,
+        "status": "running",
+        "conversation_id": request.conversation_id,
+        "message": request.message,
+        "workspace": project_id,
+        "model": request.model,
+        "provider": request.provider,
+        "effort": request.effort,
+        "speed": request.speed,
+        "thinking": request.thinking,
+        "profile_id": request.profile_id,
+        "events": [],
+        "next_seq": 0,
+        "result": None,
+        "created_at": now_ts,
+        "completed_at": None,
+    }
+    with chat_tasks_lock:
+        chat_tasks[task_id] = task_entry
+    thread = threading.Thread(
+        target=run_chat_task,
+        args=(task_id, request.model_dump() if hasattr(request, "model_dump") else request.dict()),
+        daemon=True,
+    )
+    thread.start()
+    return {
+        "status": task_entry["status"],
+        "task_id": task_id,
+        "batch_id": batch_id,
+        "workspace": project_id,
+        "conversation_id": request.conversation_id,
+    }
 
 
 @app.post("/api/chat")
@@ -6170,29 +6535,94 @@ async def chat_endpoint(request: ChatRequest, req_raw: Request):
 async def start_chat_task_endpoint(request: ChatRequest, req_raw: Request):
     verify_authorization(req_raw)
     verify_chat_model_request(request)
-    task_id = uuid.uuid4().hex
-    with chat_tasks_lock:
-        chat_tasks[task_id] = {
-            "task_id": task_id,
+    owner = req_raw.headers.get("X-Device-Alias") or (req_raw.client.host if req_raw.client else "client")
+    started = _create_and_start_chat_task(request, owner_label=owner)
+    return JSONResponse(content={"status": started["status"], "task_id": started["task_id"], "workspace": started["workspace"], "conversation_id": started["conversation_id"]})
+
+
+@app.post("/api/chat-tasks/batch")
+async def start_batch_chat_tasks_endpoint(request: BatchChatTaskRequest, req_raw: Request):
+    verify_authorization(req_raw)
+    if not (request.message or "").strip():
+        raise HTTPException(status_code=422, detail="Prompt message cannot be empty")
+    raw_workspaces = request.workspaces if isinstance(request.workspaces, list) else []
+    deduped_projects: list[str] = []
+    seen_casefold: set[str] = set()
+    for raw_ws in raw_workspaces:
+        if not isinstance(raw_ws, str) or not raw_ws.strip():
+            continue
+        cleaned = clean_project_name(raw_ws.strip())
+        if not cleaned or cleaned.casefold() in seen_casefold:
+            continue
+        try:
+            resolve_project_directory(cleaned)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        seen_casefold.add(cleaned.casefold())
+        deduped_projects.append(cleaned)
+
+    if not deduped_projects:
+        raise HTTPException(status_code=422, detail="Select at least one valid project workspace")
+
+    # Validate model & parameter capabilities once before spawning tasks
+    probe_req = ChatRequest(
+        message=request.message,
+        model=request.model,
+        workspace=deduped_projects[0],
+        target=request.target,
+        conversation_id="batch_probe",
+        provider=request.provider,
+        effort=request.effort,
+        speed=request.speed,
+        thinking=request.thinking,
+        profile_id=request.profile_id,
+    )
+    verify_chat_model_request(probe_req)
+
+    owner = req_raw.headers.get("X-Device-Alias") or (req_raw.client.host if req_raw.client else "client")
+    batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+    convo_map = request.conversation_ids if isinstance(request.conversation_ids, dict) else {}
+
+    # Pre-check that none of the explicitly requested conversations are already locked
+    prepared_requests: list[ChatRequest] = []
+    for proj in deduped_projects:
+        safe_slug = re.sub(r"[^a-zA-Z0-9_-]", "", proj)[:30] or "proj"
+        supplied_cid = (convo_map.get(proj) or "").strip()
+        convo_id = supplied_cid or f"temp_{safe_slug}_{uuid.uuid4().hex[:8]}"
+        if supplied_cid:
+            s_key = _build_session_lock_key(proj, supplied_cid)
+            if s_key and get_session_lock_info(s_key):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Conversation '{supplied_cid}' in project '{proj}' is currently busy.",
+                )
+        prepared_requests.append(
+            ChatRequest(
+                message=request.message,
+                model=request.model,
+                workspace=proj,
+                target=request.target,
+                conversation_id=convo_id,
+                provider=request.provider,
+                effort=request.effort,
+                speed=request.speed,
+                thinking=request.thinking,
+                profile_id=request.profile_id,
+            )
+        )
+
+    started_tasks = [
+        _create_and_start_chat_task(item_req, batch_id=batch_id, owner_label=owner)
+        for item_req in prepared_requests
+    ]
+    return JSONResponse(
+        content={
             "status": "running",
-            "conversation_id": request.conversation_id,
-            "message": request.message,
-            "workspace": request.workspace,
-            "model": request.model,
-            "provider": request.provider,
-            "effort": request.effort,
-            "speed": request.speed,
-            "thinking": request.thinking,
-            "profile_id": request.profile_id,
-            "events": [],
-            "next_seq": 0,
-            "result": None,
-            "created_at": datetime.datetime.now().timestamp(),
-            "completed_at": None
+            "batch_id": batch_id,
+            "count": len(started_tasks),
+            "tasks": started_tasks,
         }
-    thread = threading.Thread(target=run_chat_task, args=(task_id, request.dict()), daemon=True)
-    thread.start()
-    return JSONResponse(content={"status": "running", "task_id": task_id})
+    )
 
 
 @app.get("/api/chat-tasks")
@@ -6200,27 +6630,33 @@ async def list_chat_tasks_endpoint(
     request: Request,
     conversation_id: Optional[str] = None,
     workspace: Optional[str] = None,
+    batch_id: Optional[str] = None,
     active_only: bool = True
 ):
     verify_authorization(request)
+    normalized_workspace = clean_project_name(workspace) if workspace else None
     with chat_tasks_lock:
         tasks_list = []
         for tid, task in chat_tasks.items():
-            if active_only and task.get("status") != "running":
+            if active_only and task.get("status") not in ("running", "queued"):
                 continue
-            if conversation_id and task.get("conversation_id") != conversation_id:
+            if conversation_id and task.get("conversation_id") != conversation_id and task.get("resolved_conversation_id") != conversation_id:
                 continue
-            if workspace and task.get("workspace") != workspace:
+            if normalized_workspace and clean_project_name(task.get("workspace") or "") != normalized_workspace and task.get("workspace") != workspace:
+                continue
+            if batch_id and task.get("batch_id") != batch_id:
                 continue
             tasks_list.append({
                 "task_id": tid,
+                "batch_id": task.get("batch_id"),
                 "status": task.get("status"),
-                "conversation_id": task.get("conversation_id"),
+                "conversation_id": task.get("resolved_conversation_id") or task.get("conversation_id"),
+                "original_conversation_id": task.get("conversation_id"),
                 "message": task.get("message"),
                 "workspace": task.get("workspace"),
                 "model": task.get("model"),
                 "provider": task.get("provider"),
-                "events": task.get("events", []),
+                "events": list(task.get("events", [])),
                 "created_at": task.get("created_at"),
                 "completed_at": task.get("completed_at"),
                 "result": task.get("result")
@@ -6238,8 +6674,13 @@ async def get_chat_task_endpoint(task_id: str, request: Request, after: int = -1
         events = [event for event in task["events"] if event["seq"] > after]
         return JSONResponse(content={
             "task_id": task_id,
+            "batch_id": task.get("batch_id"),
             "status": task["status"],
-            "conversation_id": task.get("conversation_id"),
+            "workspace": task.get("workspace"),
+            "model": task.get("model"),
+            "provider": task.get("provider"),
+            "conversation_id": task.get("resolved_conversation_id") or task.get("conversation_id"),
+            "original_conversation_id": task.get("conversation_id"),
             "message": task.get("message"),
             "events": events,
             "result": task["result"]
@@ -6260,6 +6701,8 @@ async def cancel_chat_task_by_body_endpoint(request: Request, body: Optional[Can
     verify_authorization(request)
     tid = body.task_id if body else None
     cid = body.conversation_id if body else None
+    ws = body.workspace if body else None
+    bid = body.batch_id if body else None
 
     if tid:
         result = cancel_chat_task(tid)
@@ -6267,11 +6710,23 @@ async def cancel_chat_task_by_body_endpoint(request: Request, body: Optional[Can
             raise HTTPException(status_code=404, detail="Task not found")
         return JSONResponse(content=result)
 
+    if bid:
+        with chat_tasks_lock:
+            running_tids = [
+                t_id for t_id, t in chat_tasks.items()
+                if t.get("status") in ("running", "queued") and t.get("batch_id") == bid
+            ]
+        if not running_tids:
+            return JSONResponse(content={"status": "not_running", "message": "No active running task for batch"})
+        cancelled_tasks = [cancel_chat_task(t_id) for t_id in running_tids]
+        return JSONResponse(content={"status": "cancelled", "cancelled_tasks": cancelled_tasks})
+
     if cid:
         with chat_tasks_lock:
             running_tids = [
                 t_id for t_id, t in chat_tasks.items()
-                if t.get("status") == "running" and t.get("conversation_id") == cid
+                if t.get("status") in ("running", "queued")
+                and (t.get("conversation_id") == cid or t.get("resolved_conversation_id") == cid)
             ]
         if not running_tids:
             return JSONResponse(content={"status": "not_running", "message": "No active running task for conversation"})
@@ -6279,15 +6734,29 @@ async def cancel_chat_task_by_body_endpoint(request: Request, body: Optional[Can
         cancelled_tasks = [cancel_chat_task(t_id) for t_id in running_tids]
         return JSONResponse(content={"status": "cancelled", "cancelled_tasks": cancelled_tasks})
 
+    if ws:
+        norm_ws = clean_project_name(ws)
+        with chat_tasks_lock:
+            running_tids = [
+                t_id for t_id, t in chat_tasks.items()
+                if t.get("status") in ("running", "queued")
+                and (clean_project_name(t.get("workspace") or "") == norm_ws or t.get("workspace") == ws)
+            ]
+        if not running_tids:
+            return JSONResponse(content={"status": "not_running", "message": f"No active running task for workspace '{ws}'"})
+        cancelled_tasks = [cancel_chat_task(t_id) for t_id in running_tids]
+        return JSONResponse(content={"status": "cancelled", "cancelled_tasks": cancelled_tasks})
+
     with chat_tasks_lock:
-        running_tids = [t_id for t_id, t in chat_tasks.items() if t.get("status") == "running"]
+        running_tids = [t_id for t_id, t in chat_tasks.items() if t.get("status") in ("running", "queued")]
     cancelled_tasks = [cancel_chat_task(t_id) for t_id in running_tids]
     return JSONResponse(content={"status": "cancelled", "cancelled_tasks": cancelled_tasks})
 
 
 @app.post("/api/upload-media")
 async def upload_media_endpoint(conversation_id: str, filename: str, request: Request):
-    actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
+    with convo_id_mapping_lock:
+        actual_cid = convo_id_mapping.get(conversation_id, conversation_id)
     actual_cid = sanitize_conversation_id(actual_cid)
     # Default to antigravity brain folder, fallback to kookai / kookai-cli
     folder = os.path.join(ANTIGRAVITY_CLI_DIR, f"brain/{actual_cid}")
@@ -6317,9 +6786,10 @@ async def upload_media_endpoint(conversation_id: str, filename: str, request: Re
         logging.info(f"Successfully uploaded media file: {target_path}")
         
         # Add to pending media list
-        if actual_cid not in pending_media:
-            pending_media[actual_cid] = []
-        pending_media[actual_cid].append(target_path)
+        with pending_media_lock:
+            if actual_cid not in pending_media:
+                pending_media[actual_cid] = []
+            pending_media[actual_cid].append(target_path)
         
         return JSONResponse(content={"status": "success", "filename": target_filename, "path": target_path})
     except Exception as e:

@@ -1382,3 +1382,127 @@ def get_provider_health_metrics() -> dict[str, Any]:
 
 def reset_provider_health_metrics() -> None:
     HEALTH_TRACKER.reset()
+
+
+class SessionExecutionRegistry:
+    """Thread-safe per-session atomic mutex registry (ADR 0005 First-Write-Wins).
+
+    Locks are scoped per normalized session key (``<project_id>:<conversation_id>``)
+    so independent projects and conversations execute concurrently while duplicate
+    concurrent writes to the exact same active conversation are rejected cleanly.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active: dict[str, dict[str, Any]] = {}
+
+    def acquire(
+        self,
+        session_key: str,
+        *,
+        workspace: str = "",
+        conversation_id: str = "",
+        task_id: str = "",
+        owner: str = "",
+    ) -> bool:
+        key = (session_key or "").strip()
+        if not key:
+            return True
+        with self._lock:
+            if key in self._active:
+                return False
+            self._active[key] = {
+                "session_key": key,
+                "workspace": workspace,
+                "conversation_id": conversation_id,
+                "task_id": task_id,
+                "owner": owner or "client",
+                "acquired_at": time.time(),
+            }
+            return True
+
+    def release(self, session_key: str, *, task_id: str = "") -> None:
+        key = (session_key or "").strip()
+        if not key:
+            return
+        with self._lock:
+            existing = self._active.get(key)
+            if not existing:
+                return
+            if task_id and existing.get("task_id") and existing["task_id"] != task_id:
+                return
+            self._active.pop(key, None)
+
+    def release_by_task_id(self, task_id: str) -> None:
+        if not task_id:
+            return
+        with self._lock:
+            to_remove = [
+                k for k, v in self._active.items() if v.get("task_id") == task_id
+            ]
+            for k in to_remove:
+                self._active.pop(k, None)
+
+    def is_locked(self, session_key: str) -> bool:
+        key = (session_key or "").strip()
+        if not key:
+            return False
+        with self._lock:
+            return key in self._active
+
+    def get_info(self, session_key: str) -> Optional[dict[str, Any]]:
+        key = (session_key or "").strip()
+        if not key:
+            return None
+        with self._lock:
+            entry = self._active.get(key)
+            return dict(entry) if entry else None
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            return {k: dict(v) for k, v in self._active.items()}
+
+    def reset(self) -> None:
+        with self._lock:
+            self._active.clear()
+
+
+SESSION_REGISTRY = SessionExecutionRegistry()
+
+
+def acquire_session_lock(
+    session_key: str,
+    *,
+    workspace: str = "",
+    conversation_id: str = "",
+    task_id: str = "",
+    owner: str = "",
+) -> bool:
+    return SESSION_REGISTRY.acquire(
+        session_key,
+        workspace=workspace,
+        conversation_id=conversation_id,
+        task_id=task_id,
+        owner=owner,
+    )
+
+
+def release_session_lock(session_key: str, *, task_id: str = "") -> None:
+    SESSION_REGISTRY.release(session_key, task_id=task_id)
+
+
+def release_session_lock_by_task(task_id: str) -> None:
+    SESSION_REGISTRY.release_by_task_id(task_id)
+
+
+def get_session_lock_info(session_key: str) -> Optional[dict[str, Any]]:
+    return SESSION_REGISTRY.get_info(session_key)
+
+
+def get_active_session_locks() -> dict[str, dict[str, Any]]:
+    return SESSION_REGISTRY.snapshot()
+
+
+def reset_session_locks() -> None:
+    SESSION_REGISTRY.reset()
+

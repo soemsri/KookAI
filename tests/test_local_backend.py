@@ -51,6 +51,28 @@ class LocalBackendTests(unittest.TestCase):
             models = lb.discover_local_models(True)
         req.assert_called_once_with('models')
         self.assertFalse(models[0]['capabilities']['thinking'])
+        self.assertFalse(models[0]['capabilities']['vision'])
+
+    def test_discovers_vision_capability_from_name_ollama_and_env(self):
+        with patch.object(lb, '_request', return_value=iter([{'data': [{'id': 'deepseek-ai/DeepSeek-V4-Flash-Vision-Exp', 'owned_by': 'vllm'}]}])):
+            vllm_vision = lb.discover_local_models(True)
+        self.assertTrue(vllm_vision[0]['capabilities']['vision'])
+
+        ollama_models = {'data': [{'id': 'llava-phi:latest', 'owned_by': 'library'}]}
+        ollama_tags = {'models': [{'name': 'llava-phi:latest', 'capabilities': ['completion', 'vision']}]}
+        with patch.object(lb, '_request', side_effect=lambda p: iter([ollama_models if p == 'models' else ollama_tags])):
+            ollama_res = lb.discover_local_models(True)
+        self.assertTrue(ollama_res[0]['capabilities']['vision'])
+
+        with patch.dict(os.environ, {'KOOKAI_LOCAL_VISION': '1'}), \
+             patch.object(lb, '_request', return_value=iter([{'data': [{'id': 'plain-model', 'owned_by': 'vllm'}]}])):
+            forced_on = lb.discover_local_models(True)
+        self.assertTrue(forced_on[0]['capabilities']['vision'])
+
+        with patch.dict(os.environ, {'KOOKAI_LOCAL_VISION': '0'}), \
+             patch.object(lb, '_request', return_value=iter([{'data': [{'id': 'deepseek-ai/DeepSeek-V4-Flash-Vision-Exp', 'owned_by': 'vllm'}]}])):
+            forced_off = lb.discover_local_models(True)
+        self.assertFalse(forced_off[0]['capabilities']['vision'])
 
     def test_unreachable_server_has_no_models(self):
         with patch.object(lb, '_request', side_effect=OSError('offline')):
